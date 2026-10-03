@@ -399,6 +399,10 @@ Treat the following as a **feature catalogue**, not permission to violate the co
 
 ---
 
+> **Addendum (added 2026-10-03):** 250 further vanilla mechanics, numbered **222–471**, are catalogued in
+> [`MECHANICS_EXPANSION.md`](MECHANICS_EXPANSION.md). They are an extension of this section and are governed by
+> exactly the same rules. Total catalogue: **471 mechanics**.
+
 ## 7. MULTI-AGENT AI ENDPOINTS
 
 Implement four isolated OpenAI-compatible agent roles. All network work must be asynchronous, rate-limited, time-bounded, cancellable, and optional. A missing or unreachable endpoint must never stall the server or stop basic Null behavior.
