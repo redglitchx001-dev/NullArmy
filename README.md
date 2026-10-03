@@ -71,12 +71,13 @@ The design philosophy is blunt: **if a real survival player can't do it, a Null 
 
 | | |
 | --- | --- |
-| **Source code** | None yet |
-| **Build system** | None yet |
-| **Lines of Java written** | 0 |
-| **Mechanics implemented (of 221)** | 0 |
-| **Current phase** | **Phase 0 — COMPLETE** (repository & feasibility audit) · gated on two owner decisions |
-| **What exists** | [`NullArmy_Master_Prompt.md`](NullArmy_Master_Prompt.md) — the 537-line engineering brief, plus the Phase 0 planning set below |
+| **Source code** | **33 Java files, 4,423 lines** across 4 Gradle modules |
+| **Build system** | Gradle (Kotlin DSL), multi-module |
+| **Compiled?** | ❌ **Never.** No JDK or dev bundle available in the authoring environment |
+| **Lines of Java syntax-verified** | 4,423 / 4,423 (parser check only — not a compile) |
+| **Mechanics implemented (of 221)** | **0** — nothing counts as implemented until it is tested on a declared version |
+| **Current state** | Phase 0 complete · Phase 1 + partial Phase 2/3 **source authored but unverified** |
+| **Docs** | Master prompt + [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) · [`STATUS.md`](STATUS.md) · [`TRACEABILITY.md`](TRACEABILITY.md) · [`BUILD.md`](BUILD.md) |
 
 This README is the **public contract**: it describes what NullArmy will be, the invariants it will never break, and the bar it must clear before anything gets called "done." It is written from the master prompt so that the goalposts are visible before a single class is compiled.
 
@@ -91,8 +92,22 @@ The audit is done. These are its outputs:
 | [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | Environment audit, exact version compatibility table, NMS/packet feasibility notes, architecture diagram, module plan, ADRs, vanilla-impossibility register, documented assumptions, risk register |
 | [`STATUS.md`](STATUS.md) | Phase state, core-feature traceability, acceptance-criteria scoreboard, Phase 0 handoff |
 | [`TRACEABILITY.md`](TRACEABILITY.md) | All 221 mechanics, extracted from the spec — every item marked `not started` |
+| [`BUILD.md`](BUILD.md) | Exact build and verification commands, and what is/isn't proven |
 
-> **Two blockers surfaced in Phase 0 and both need an owner decision before code is written:** the entire 1.21.x target range is **end-of-life** (Paper 1.21.11 support ended 2026-06-15), and this build environment has **no JDK, no Gradle, and no access to `repo.papermc.io`**. See the plan's [§8 Owner decisions](IMPLEMENTATION_PLAN.md#8-owner-decisions-required).
+> **Two blockers surfaced in Phase 0 and both need an owner decision:** the entire 1.21.x target range is **end-of-life** (Paper 1.21.11 support ended 2026-06-15), and this build environment has **no JDK, no Gradle, and no access to `repo.papermc.io`**. See the plan's [§8 Owner decisions](IMPLEMENTATION_PLAN.md#8-owner-decisions-required).
+
+### ⚠️ Verification status of the code
+
+Source has been written for the build skeleton, the version adapter SPI, the 1.21.11 adapter, the plugin bootstrap, and the core logic (item ledger, boids, pathfinding, planner, block-plan validator, JSON codec, circuit breaker).
+
+| Proven | Not proven |
+| --- | --- |
+| All 33 files are syntactically valid Java | ❌ Compilation / type-checking |
+| Package layout matches directories | ❌ NMS signatures (every one is a **hypothesis**) |
+| No self-recursive methods | ❌ Gradle dependency resolution |
+| `core` is dependency-free pure Java | ❌ Any runtime behaviour at all |
+
+**The NMS adapter has never touched a Minecraft server.** Treat it as a starting point to verify, not as working code. [`BUILD.md`](BUILD.md) lists the five checks (V-01…V-05) that settle it.
 
 ---
 

@@ -1,0 +1,34 @@
+# NullArmy configuration. Copyright (c) RedGlitchX. All rights reserved.
+#
+# Security-relevant defaults are all OFF. Destructive behaviour is opt-in per
+# spec section 8.
+
+limits:
+  max-live-npcs: 64
+  summon-hard-cap: 24
+  path-max-expansions: 4096
+
+visuals:
+  # Spec 3 requires AT LEAST 15 portal effects per summon. Values below 15 are
+  # rejected at startup.
+  portal-effects-per-summon: 16
+
+summoning:
+  # Ticks before an unanswered "how many Nulls?" prompt expires (20 ticks = 1s).
+  prompt-timeout-ticks: 300
+
+chat:
+  enabled-by-default: false
+
+ai:
+  max-json-bytes: 8192
+  timeout-millis: 3000
+
+policy:
+  # All destructive behaviour defaults to false (spec 8).
+  griefing-enabled: false
+  explosives-enabled: false
+  wither-enabled: false
+  # Gates /null ban. Off by default; a ban is a human moderation action and is
+  # never reachable by an AI endpoint.
+  moderation-integration-enabled: false

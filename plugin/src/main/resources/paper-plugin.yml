@@ -1,0 +1,49 @@
+# NullArmy plugin descriptor. Copyright (c) RedGlitchX. All rights reserved.
+#
+# Declared as a *Paper* plugin on purpose (IMPLEMENTATION_PLAN.md A-14):
+# Paper assumes Paper plugins are Mojang-mapped and loads them directly,
+# whereas Spigot-mapped plugins are remapped at load - and Paper 1.21.11
+# build 17060+ REMOVED that runtime remapping. Shipping Mojang-mapped is the
+# only choice that works across the whole 1.21.x range.
+
+name: NullArmy
+version: ${version}
+main: redglitchx.nullarmy.plugin.NullArmyPlugin
+api-version: '1.21'
+loader: redglitchx.nullarmy.plugin.NullArmyPlugin
+authors: [RedGlitchX]
+description: Physically simulated, player-like Null NPCs using pure vanilla mechanics.
+
+dependencies:
+  server:
+    Paper:
+      required: true
+
+permissions:
+  nullarmy.summon:
+    description: Summon Nulls with a Call Horn or Totem Of Null
+    default: op
+  nullarmy.gui:
+    description: Open the loadout planning GUI
+    default: op
+  nullarmy.chat:
+    description: Toggle Null chat
+    default: op
+  nullarmy.attack:
+    description: Set a physical pursuit/combat objective
+    default: op
+  nullarmy.attackx:
+    description: Adaptive extreme-combat profile
+    default: op
+  nullarmy.follow:
+    description: Make Nulls follow you
+    default: op
+  nullarmy.build:
+    description: Command Nulls to build
+    default: op
+  nullarmy.admin:
+    description: Diagnostics, emergency stop, reload
+    default: op
+  nullarmy.moderation:
+    description: Moderation actions. NEVER usable by an AI agent.
+    default: false

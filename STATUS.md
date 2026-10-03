@@ -1,8 +1,8 @@
 # NullArmy — Status
 
-**Last updated:** 2026-10-03 · **Current phase:** Phase 0 — COMPLETE · **Gate:** awaiting `CONTINUE`
+**Last updated:** 2026-10-03 · **Current state:** Phase 0 complete · Phase 1 source authored **but UNVERIFIED** (blocked B-1) · Partial Phase 2/3 source authored, also unverified
 
-Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit + architecture) · [`TRACEABILITY.md`](TRACEABILITY.md) (221-item register)
+Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit + architecture) · [`TRACEABILITY.md`](TRACEABILITY.md) (221-item register) · [`BUILD.md`](BUILD.md) (build & verify commands)
 
 ---
 
@@ -11,9 +11,9 @@ Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit +
 | Phase | Focus | Status |
 | --- | :---: | --- |
 | **0** | Repository & feasibility audit | ✅ **COMPLETE** |
-| 1 | Build skeleton & version adapters | ⬜ Not started — **blocked** (see below) |
-| 2 | Authoritative NPC identity & lifecycle | ⬜ Not started |
-| 3 | Commands, summoning & visuals | ⬜ Not started |
+| 1 | Build skeleton & version adapters | 🟠 **Source authored — UNVERIFIED** (blocked B-1) |
+| 2 | Authoritative NPC identity & lifecycle | 🟠 Partial source authored — UNVERIFIED |
+| 3 | Commands, summoning & visuals | 🟠 Partial source authored — UNVERIFIED |
 | 4 | Perception, movement, collision & formations | ⬜ Not started |
 | 5 | Survival inventory & combat | ⬜ Not started |
 | 6 | Mobility extensions | ⬜ Not started |
@@ -27,6 +27,15 @@ Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit +
 
 ### B-1 — Build environment unavailable
 No JDK, no Gradle, and network access limited to `github.com`. `repo.papermc.io` (Paper dev bundle), Maven Central, Gradle distributions, and JDK downloads are all unreachable. **No Phase can be compiled or verified in this sandbox.** → Owner decision **D-2** in the plan.
+
+> **What this does and does not mean for the code that now exists.**
+> 33 Java files (4,423 lines) have been authored across all four modules. They are
+> **syntactically valid** (verified with the `javalang` Java parser: 33/33 parse, 0
+> package/directory mismatches, 0 self-recursive methods). They have **never been
+> compiled**, so type-checking, NMS signatures and every runtime behaviour remain
+> unproven. Every NMS class, method and constructor in `nms/v1_21_11` is a
+> **hypothesis**, and is labelled `STATUS: UNVERIFIED` in its Javadoc.
+> See [`BUILD.md`](BUILD.md) for the exact commands to prove or disprove it.
 
 ### B-2 — Target version range is end-of-life
 Paper 1.21.11 support ended **2026-06-15**; 1.21.10 ended **2026-01-17**. Every version from 1.21 → 1.21.11 is `UNSUPPORTED`. Current MC release is 26.3 (needs Java 25). → Owner decision **D-1** in the plan.
@@ -74,6 +83,18 @@ Status vocabulary per spec: `implemented` · `partial` · `experimental` · `blo
 | 33 | Debug rejection-reason reporting | 9 | `not started` | 1 |
 
 **0 of 33 core features implemented. 0 of 221 catalogue mechanics implemented.**
+
+> **Why nothing is marked `implemented` yet.** The spec defines `implemented` as
+> *"complete and tested on a declared target version"*. Source now exists for a
+> number of these, but **none has been compiled or executed**, so none qualifies.
+> Unverified source has been written for: **1, 2, 3, 4, 5** (summon triggers, chat
+> count flow, portal effects), **7** (name generation), **8** (commander
+> assignment + succession), **9** (`NullPlayer` entity), **10** (`ItemLedger`),
+> **11, 12, 13, 14, 15, 17, 18, 19, 20** (command tree), **21** (spawn ring
+> spacing), **22** (`BoidsSolver`, `SpatialHash`), **24** (`Pathfinder`).
+> Items **6** (skin), **16** and **21** (formations) are *not* functional yet in
+> any sense — the skin needs a real Mojang texture (A-05) and formations need
+> Phase 4.
 
 ---
 
