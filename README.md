@@ -93,6 +93,8 @@ The audit is done. These are its outputs:
 | [`STATUS.md`](STATUS.md) | Phase state, core-feature traceability, acceptance-criteria scoreboard, Phase 0 handoff |
 | [`TRACEABILITY.md`](TRACEABILITY.md) | All **471** mechanics (221 original + 250 added), extracted from the spec — every item marked `not started` |
 | [`BUILD.md`](BUILD.md) | Exact build and verification commands, and what is/isn't proven |
+| [`AGENTS.md`](AGENTS.md) | Endpoint & agent configuration: where to add endpoints, the 13 roles, authority model, security rules |
+| [`BUILD_TUTORIAL.md`](BUILD_TUTORIAL.md) | Step-by-step: from a fresh machine to a running `NullArmy.jar` |
 
 > **Two blockers surfaced in Phase 0 and both need an owner decision:** the entire 1.21.x target range is **end-of-life** (Paper 1.21.11 support ended 2026-06-15), and this build environment has **no JDK, no Gradle, and no access to `repo.papermc.io`**. See the plan's [§8 Owner decisions](IMPLEMENTATION_PLAN.md#8-owner-decisions-required).
 
@@ -309,7 +311,7 @@ Unsupported builds must **fail clearly**, not silently limp along.
 
 ## AI Endpoints
 
-Four isolated, **optional**, OpenAI-compatible agent roles. All network work is async, rate-limited, time-bounded, and cancellable.
+**Thirteen** isolated, **optional**, OpenAI-compatible agent roles. All network work is async, rate-limited, time-bounded, and cancellable.
 
 > **A missing or unreachable endpoint must never stall the server or stop basic Null behaviour.**
 
@@ -319,6 +321,20 @@ Four isolated, **optional**, OpenAI-compatible agent roles. All network work is 
 | **CombatTactician** | Recommend a high-level intent from a strict enum (`hold`, `approach`, `flank`, `retreat`, `shield`, `ranged volley`, `resupply`, `regroup`) | Deal damage directly, bypass the local combat validator |
 | **BuilderAgent** | Return a bounded block-plan JSON using an allowed palette and finite dimensions | Write blocks; skip inventory/support/protection/cost checks |
 | **PathfinderCore** | Suggest a destination/route preference from a **sanitized** snapshot | Move the NPC; supply hidden-world or through-wall data |
+| **ScoutObserver** | Summarise what the squad can actually see: contacts, terrain, hazards | Receive hidden entities, inventories, or through-wall data |
+| **ThreatAnalyst** | Rank threats from visible evidence (gear, position, numbers) | Read hidden health, inventories, or unobserved targets |
+| **LogisticsQuartermaster** | Propose loadout priorities, resupply requests, item allocation | Create, duplicate or delete items; mutate the ledger |
+| **MedicTriage** | Propose triage order and treatment type for reported ally state | Heal directly, grant effects, or know health it wasn't told |
+| **FormationTactician** | Propose formation type, spacing, orientation, anchor | Override collision, hitboxes, or hard separation |
+| **RedstoneAnalyst** | Interpret redstone from line-of-sight evidence only | Read hidden wiring, bypass visible-only perception |
+| **MiningForeman** | Propose which visible blocks to mine, in what order, with which tool | X-ray for ore, see through blocks |
+| **IdleBehaviourDirector** | Propose bounded idle behaviours so Nulls never freeze | Spam animations, override danger checks |
+| **GuardianAuditor** | Review *other agents'* proposals for rule violations | Approve its own output, override the validator |
+
+> **Where do I add endpoints?** `config.yml` → `ai.endpoints:`. Define **as many as you want** —
+> each needs a `base-url`, a `model` id, and an `auth-key-env` (the *name* of an environment
+> variable, never the key itself). Then bind roles under `ai.agents:`. Full guide:
+> **[`AGENTS.md`](AGENTS.md)**.
 
 ### Endpoint safety
 

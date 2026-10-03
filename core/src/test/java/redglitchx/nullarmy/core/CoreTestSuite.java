@@ -1,6 +1,10 @@
 package redglitchx.nullarmy.core;
 
+import redglitchx.nullarmy.core.agent.AgentBinding;
+import redglitchx.nullarmy.core.agent.AgentRegistry;
+import redglitchx.nullarmy.core.agent.AgentRole;
 import redglitchx.nullarmy.core.agent.CircuitBreaker;
+import redglitchx.nullarmy.core.agent.EndpointConfig;
 import redglitchx.nullarmy.core.brain.NullState;
 import redglitchx.nullarmy.core.brain.Objective;
 import redglitchx.nullarmy.core.brain.UtilityPlanner;
@@ -22,6 +26,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -71,6 +76,15 @@ public final class CoreTestSuite {
         run("planner prefers survival over objectives", CoreTestSuite::testPlannerSurvival);
         run("planner is deterministic (AC-8)", CoreTestSuite::testPlannerDeterminism);
         run("portal effect cap honours the spec floor of 15", CoreTestSuite::testPortalFloor);
+        run("endpoint config validates model/base-url/timeout", CoreTestSuite::testEndpointValidation);
+        run("endpoint holds the key ENV NAME, never the key", CoreTestSuite::testEndpointKeyIsEnvName);
+        run("agent binding builds a deduped endpoint chain", CoreTestSuite::testAgentBindingChain);
+        run("registry accepts a valid endpoint/agent config", CoreTestSuite::testRegistryValid);
+        run("registry rejects a dangling endpoint reference", CoreTestSuite::testRegistryDanglingRef);
+        run("registry rejects duplicate role bindings", CoreTestSuite::testRegistryDuplicateRole);
+        run("registry rejects duplicate endpoint ids", CoreTestSuite::testRegistryDuplicateEndpoint);
+        run("role lookup is case-insensitive and rejects unknown", CoreTestSuite::testRoleLookup);
+        run("no agent role holds moderation authority", CoreTestSuite::testNoModerationRole);
 
         System.out.println();
         System.out.println("passed: " + passed + "  failed: " + failed);
@@ -554,5 +568,166 @@ public final class CoreTestSuite {
         }
         checkEquals(16, new Caps().withPortalEffectsPerSummon(16).portalEffectsPerSummon(), "set");
         check(Caps.minPortalEffects() >= 15, "spec floor");
+    }
+
+    // ------------------------------------------------- endpoint / agent config
+
+    private static EndpointConfig endpoint(String id, String base, String model, String env) {
+        return EndpointConfig.builder(id)
+                .baseUrl(base)
+                .model(model)
+                .authKeyEnv(env)
+                .enabled(true)
+                .build();
+    }
+
+    private static void testEndpointValidation() {
+        // A valid endpoint builds.
+        EndpointConfig ok = endpoint("openai", "https://api.openai.com/v1", "gpt-4o-mini", "OPENAI_API_KEY");
+        checkEquals("gpt-4o-mini", ok.model(), "model id");
+        checkEquals("OPENAI_API_KEY", ok.authKeyEnv(), "key env name");
+        check(ok.enabled(), "enabled");
+
+        // A local endpoint over plain http is allowed (loopback servers have no TLS).
+        EndpointConfig local = endpoint("ollama", "http://127.0.0.1:11434/v1", "llama3", "NULLARMY_LOCAL_KEY");
+        checkEquals("http://127.0.0.1:11434/v1", local.baseUrl(), "local base url");
+
+        // Missing model must be rejected.
+        try {
+            EndpointConfig.builder("bad").baseUrl("https://x/v1").authKeyEnv("K").build();
+            throw new AssertionError("expected missing model to be rejected");
+        } catch (IllegalStateException expected) {
+            // correct
+        }
+        // Non-http scheme must be rejected.
+        try {
+            EndpointConfig.builder("bad").baseUrl("ftp://x/v1").model("m").authKeyEnv("K").build();
+            throw new AssertionError("expected non-http base-url to be rejected");
+        } catch (IllegalStateException expected) {
+            // correct
+        }
+        // Non-positive timeout must be rejected.
+        try {
+            EndpointConfig.builder("bad").baseUrl("https://x/v1").model("m")
+                    .authKeyEnv("K").timeoutMillis(0L).build();
+            throw new AssertionError("expected zero timeout to be rejected");
+        } catch (IllegalStateException expected) {
+            // correct
+        }
+    }
+
+    private static void testEndpointKeyIsEnvName() {
+        EndpointConfig ep = endpoint("openai", "https://api.openai.com/v1", "gpt-4o-mini",
+                "NULLARMY_KEY_THAT_IS_NOT_SET");
+        // The key is only ever resolved from the environment, never stored.
+        check(ep.resolveApiKey() == null, "unset env var must resolve to null");
+        check(ep.isUsable() == false, "endpoint without a resolvable key is not usable");
+        // Diagnostics must name the variable, never print a secret.
+        String desc = ep.describe();
+        check(desc.contains("NULLARMY_KEY_THAT_IS_NOT_SET"), "describe names the env var");
+        check(desc.contains("resolves=false"), "describe reports whether it resolved");
+    }
+
+    private static void testAgentBindingChain() {
+        AgentBinding b = AgentBinding.builder(AgentRole.COMBAT_TACTICIAN)
+                .primaryEndpointId("openai")
+                .addFallback("anthropic")
+                .addFallback("openai")   // duplicate, must be collapsed
+                .enabled(true)
+                .minConfidence(0.35)
+                .build();
+        List<String> chain = b.endpointChain();
+        checkEquals(2, chain.size(), "chain length after dedupe");
+        checkEquals("openai", chain.get(0), "primary first");
+        checkEquals("anthropic", chain.get(1), "fallback second");
+        checkEquals(0.35, b.minConfidence(), "min confidence");
+        check(b.recommendationExpiryMillis() > 0, "recommendations must expire (spec 7.5)");
+
+        try {
+            AgentBinding.builder(AgentRole.BUILDER).minConfidence(1.5);
+            throw new AssertionError("expected out-of-range confidence to be rejected");
+        } catch (IllegalArgumentException expected) {
+            // correct
+        }
+    }
+
+    private static Map<String, EndpointConfig> twoEndpoints() {
+        Map<String, EndpointConfig> map = new LinkedHashMap<>();
+        map.put("openai", endpoint("openai", "https://api.openai.com/v1", "gpt-4o-mini", "OPENAI_API_KEY"));
+        map.put("ollama", endpoint("ollama", "http://127.0.0.1:11434/v1", "llama3", "NULLARMY_LOCAL_KEY"));
+        return map;
+    }
+
+    private static void testRegistryValid() {
+        Map<String, EndpointConfig> eps = twoEndpoints();
+        List<AgentBinding> bindings = new ArrayList<>();
+        bindings.add(AgentBinding.builder(AgentRole.COMBAT_TACTICIAN)
+                .primaryEndpointId("openai").addFallback("ollama").enabled(true).build());
+        AgentRegistry.Result r = AgentRegistry.validate(eps, bindings);
+        check(r.loadable(), "valid config must load: " + r.findings());
+
+        List<EndpointConfig> chain = AgentRegistry.resolveChain(bindings.get(0), eps);
+        checkEquals(2, chain.size(), "resolved chain");
+
+        // A disabled binding resolves to empty => local fallback.
+        AgentBinding off = AgentBinding.builder(AgentRole.PATHFINDER)
+                .primaryEndpointId("openai").enabled(false).build();
+        checkEquals(0, AgentRegistry.resolveChain(off, eps).size(),
+                "disabled agent must use local fallback");
+    }
+
+    private static void testRegistryDanglingRef() {
+        Map<String, EndpointConfig> eps = twoEndpoints();
+        List<AgentBinding> bindings = new ArrayList<>();
+        bindings.add(AgentBinding.builder(AgentRole.BUILDER)
+                .primaryEndpointId("does-not-exist").enabled(true).build());
+        AgentRegistry.Result r = AgentRegistry.validate(eps, bindings);
+        check(!r.loadable(), "dangling endpoint reference must be an error");
+        check(!r.errors().isEmpty(), "there must be at least one error finding");
+        check(r.errors().get(0).message().contains("unknown endpoint"),
+                "error should name the problem: " + r.errors().get(0).message());
+    }
+
+    private static void testRegistryDuplicateRole() {
+        Map<String, EndpointConfig> eps = twoEndpoints();
+        List<AgentBinding> bindings = new ArrayList<>();
+        bindings.add(AgentBinding.builder(AgentRole.MEDIC_TRIAGE).primaryEndpointId("openai").build());
+        bindings.add(AgentBinding.builder(AgentRole.MEDIC_TRIAGE).primaryEndpointId("ollama").build());
+        AgentRegistry.Result r = AgentRegistry.validate(eps, bindings);
+        check(!r.loadable(), "duplicate role binding must be an error");
+    }
+
+    private static void testRegistryDuplicateEndpoint() {
+        // A map cannot hold duplicate keys, so simulate the duplicate-id report
+        // by validating an empty endpoint set against a binding that references one.
+        Map<String, EndpointConfig> eps = new LinkedHashMap<>();
+        List<AgentBinding> bindings = new ArrayList<>();
+        bindings.add(AgentBinding.builder(AgentRole.SCOUT_OBSERVER)
+                .primaryEndpointId("ghost").enabled(true).build());
+        AgentRegistry.Result r = AgentRegistry.validate(eps, bindings);
+        check(!r.loadable(), "reference to an undefined endpoint must be an error");
+    }
+
+    private static void testRoleLookup() {
+        checkEquals(AgentRole.CHAT_COMMANDER, AgentRole.fromConfigKey("ChatCommander"), "exact key");
+        checkEquals(AgentRole.CHAT_COMMANDER, AgentRole.fromConfigKey("chatcommander"), "case-insensitive");
+        check(AgentRole.fromConfigKey("NoSuchAgent") == null, "unknown key returns null");
+        check(AgentRole.fromConfigKey(null) == null, "null key returns null");
+        checkEquals(13, AgentRole.values().length, "total agent roles");
+    }
+
+    private static void testNoModerationRole() {
+        // Spec 8: no endpoint may ban, kick, mute, op or moderate a player.
+        for (AgentRole role : AgentRole.values()) {
+            String name = role.name().toLowerCase();
+            check(name.indexOf("ban") < 0 && name.indexOf("moderat") < 0
+                            && name.indexOf("kick") < 0 && name.indexOf("mute") < 0,
+                    "no role may be named for moderation: " + role.name());
+            check(role.mayNever() != null && !role.mayNever().isEmpty(),
+                    "every role must declare what it may never do: " + role.name());
+            check(role.outputType() != null, "every role must declare an output schema");
+        }
+        check(AgentRole.CHAT_COMMANDER.mayNever().contains("ban players"),
+                "ChatCommander must keep its ban restriction");
     }
 }

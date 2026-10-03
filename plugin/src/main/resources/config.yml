@@ -1,7 +1,22 @@
-# NullArmy configuration. Copyright (c) RedGlitchX. All rights reserved.
+# =====================================================================
+#  NullArmy configuration. Copyright (c) RedGlitchX. All rights reserved.
 #
-# Security-relevant defaults are all OFF. Destructive behaviour is opt-in per
-# spec section 8.
+#  QUICK ANSWER: where do I add endpoints?
+#
+#    1. Declare as many as you like under  ai.endpoints:
+#       each one needs an id, base-url, model, and auth-key-env.
+#    2. Bind agent roles to them under     ai.agents:
+#       each agent takes one `endpoint:` plus an optional `fallbacks:` list.
+#    3. Set  ai.enabled: true  and enable the endpoints/agents you want.
+#
+#  There is NO limit on how many endpoints you can define. Endpoints that are
+#  disabled, unreachable, rate-limited, or whose circuit breaker is open are
+#  skipped, and the agent falls back to deterministic local logic. The server
+#  tick is never blocked on a network call.
+#
+#  SECURITY: `auth-key-env` is the NAME of an environment variable, never the
+#  key itself. Keys are never written to config, chat, logs, or the jar.
+# =====================================================================
 
 limits:
   max-live-npcs: 64
@@ -20,15 +35,183 @@ summoning:
 chat:
   enabled-by-default: false
 
+# ---------------------------------------------------------------------
+#  AI ENDPOINTS  — add as many as you want
+# ---------------------------------------------------------------------
 ai:
-  max-json-bytes: 8192
-  timeout-millis: 3000
+  # Master switch. While false, every agent uses local deterministic logic and
+  # no network call is ever made.
+  enabled: false
 
+  # Defaults inherited by any endpoint that does not override them.
+  defaults:
+    timeout-millis: 3000
+    calls-per-minute: 20
+    max-json-bytes: 8192
+
+  endpoints:
+    # ---- OpenAI ------------------------------------------------------
+    openai:
+      base-url: "https://api.openai.com/v1"
+      model: "gpt-4o-mini"          # <-- model id
+      auth-key-env: "OPENAI_API_KEY" # <-- NAME of the env var holding the key
+      timeout-millis: 3000
+      calls-per-minute: 20
+      max-json-bytes: 8192
+      max-retries: 2
+      enabled: false
+
+    # ---- Local Ollama (no key needed, but the var must still be named) --
+    ollama-local:
+      base-url: "http://127.0.0.1:11434/v1"
+      model: "llama3"
+      auth-key-env: "NULLARMY_LOCAL_KEY"
+      timeout-millis: 2000
+      calls-per-minute: 60
+      max-json-bytes: 8192
+      max-retries: 1
+      enabled: false
+
+    # ---- OpenRouter --------------------------------------------------
+    openrouter:
+      base-url: "https://openrouter.ai/api/v1"
+      model: "meta-llama/llama-3.1-8b-instruct"
+      auth-key-env: "OPENROUTER_API_KEY"
+      timeout-millis: 4000
+      calls-per-minute: 20
+      max-json-bytes: 8192
+      max-retries: 2
+      enabled: false
+
+    # ---- Anthropic ---------------------------------------------------
+    anthropic:
+      base-url: "https://api.anthropic.com/v1"
+      model: "claude-3-5-sonnet-latest"
+      auth-key-env: "ANTHROPIC_API_KEY"
+      timeout-millis: 4000
+      calls-per-minute: 20
+      max-json-bytes: 8192
+      max-retries: 2
+      enabled: false
+
+    # ---- Add your own: copy a block above and change these three -----
+    #   model:        the model id sent with each request
+    #   base-url:     an OpenAI-compatible endpoint (must start with http(s)://)
+    #   auth-key-env: the NAME of the env var that holds your API key
+    #
+    # my-endpoint:
+    #   base-url: "https://my.provider/v1"
+    #   model: "my-model-id"
+    #   auth-key-env: "MY_API_KEY"
+    #   enabled: true
+
+  # -------------------------------------------------------------------
+  #  AGENT BINDINGS  — one entry per role; 13 roles available
+  #
+  #  endpoint:   the primary endpoint id (must exist under ai.endpoints)
+  #  fallbacks:  ordered list tried if the primary fails / is rate-limited
+  #  enabled:    false = local deterministic fallback only, no network
+  #  min-confidence: 0.0..1.0, discard weaker recommendations
+  #  expiry-millis:  a recommendation is ignored once this old
+  # -------------------------------------------------------------------
+  agents:
+    ChatCommander:
+      endpoint: "ollama-local"
+      fallbacks: ["openai"]
+      enabled: false
+      min-confidence: 0.0
+      expiry-millis: 5000
+
+    CombatTactician:
+      endpoint: "openai"
+      fallbacks: ["anthropic", "ollama-local"]
+      enabled: false
+      min-confidence: 0.35
+      expiry-millis: 2500
+
+    BuilderAgent:
+      endpoint: "openai"
+      fallbacks: ["ollama-local"]
+      enabled: false
+      min-confidence: 0.5
+      expiry-millis: 10000
+
+    PathfinderCore:
+      endpoint: "ollama-local"
+      fallbacks: []
+      enabled: false
+      min-confidence: 0.2
+      expiry-millis: 3000
+
+    ScoutObserver:
+      endpoint: "ollama-local"
+      fallbacks: ["openai"]
+      enabled: false
+      min-confidence: 0.3
+      expiry-millis: 4000
+
+    ThreatAnalyst:
+      endpoint: "openai"
+      fallbacks: ["ollama-local"]
+      enabled: false
+      min-confidence: 0.4
+      expiry-millis: 2500
+
+    LogisticsQuartermaster:
+      endpoint: "openai"
+      fallbacks: []
+      enabled: false
+      min-confidence: 0.4
+      expiry-millis: 10000
+
+    MedicTriage:
+      endpoint: "ollama-local"
+      fallbacks: ["openai"]
+      enabled: false
+      min-confidence: 0.3
+      expiry-millis: 3000
+
+    FormationTactician:
+      endpoint: "ollama-local"
+      fallbacks: []
+      enabled: false
+      min-confidence: 0.2
+      expiry-millis: 3000
+
+    RedstoneAnalyst:
+      endpoint: "openai"
+      fallbacks: ["ollama-local"]
+      enabled: false
+      min-confidence: 0.5
+      expiry-millis: 10000
+
+    MiningForeman:
+      endpoint: "ollama-local"
+      fallbacks: []
+      enabled: false
+      min-confidence: 0.4
+      expiry-millis: 8000
+
+    IdleBehaviourDirector:
+      endpoint: "ollama-local"
+      fallbacks: []
+      enabled: false
+      min-confidence: 0.0
+      expiry-millis: 5000
+
+    GuardianAuditor:
+      endpoint: "openai"
+      fallbacks: ["ollama-local"]
+      enabled: false
+      min-confidence: 0.6
+      expiry-millis: 4000
+
+# ---------------------------------------------------------------------
 policy:
   # All destructive behaviour defaults to false (spec 8).
   griefing-enabled: false
   explosives-enabled: false
   wither-enabled: false
   # Gates /null ban. Off by default; a ban is a human moderation action and is
-  # never reachable by an AI endpoint.
+  # NEVER reachable by an AI endpoint.
   moderation-integration-enabled: false

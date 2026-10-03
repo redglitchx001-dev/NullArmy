@@ -77,12 +77,21 @@ Status vocabulary per spec: `implemented` · `partial` · `experimental` · `blo
 | 27 | CombatTactician | 7 | `not started` | 8 |
 | 28 | BuilderAgent | 7 | `not started` | 8 |
 | 29 | PathfinderCore | 7 | `not started` | 8 |
+| 29a | ScoutObserver | 7 | `not started` | 8 |
+| 29b | ThreatAnalyst | 7 | `not started` | 8 |
+| 29c | LogisticsQuartermaster | 7 | `not started` | 8 |
+| 29d | MedicTriage | 7 | `not started` | 8 |
+| 29e | FormationTactician | 7 | `not started` | 8 |
+| 29f | RedstoneAnalyst | 7 | `not started` | 8 |
+| 29g | MiningForeman | 7 | `not started` | 8 |
+| 29h | IdleBehaviourDirector | 7 | `not started` | 8 |
+| 29i | GuardianAuditor | 7 | `not started` | 8 |
 | 30 | Circuit breaker + deterministic fallback | 7 | `not started` | 8 |
 | 31 | Griefing/explosives **off by default** | 8 | `not started` | 7 |
 | 32 | `/schematics` parser | 4 | `not started` | 7 |
 | 33 | Debug rejection-reason reporting | 9 | `not started` | 1 |
 
-**0 of 33 core features implemented. 0 of 471 catalogue mechanics implemented.**
+**0 of 42 core features implemented. 0 of 471 catalogue mechanics implemented.**
 
 > **Why nothing is marked `implemented` yet.** The spec defines `implemented` as
 > *"complete and tested on a declared target version"*. Source now exists for a
@@ -158,7 +167,7 @@ $ curl repo1.maven.org → 000 (blocked)
 - Spigot NMS revision cells for 1.21.3–1.21.11 unverified — left blank rather than guessed.
 
 ### (e) Remaining traceability items
-33 core features + 471 mechanics, **all `not started`**. Statuses move only when implemented and tested on a declared target version.
+42 core features + 471 mechanics, **all `not started`**. Statuses move only when implemented and tested on a declared target version.
 
 ### (f) Next phase
 **Phase 1 — Build skeleton and version adapters**, gated on owner decisions **D-1** (version range) and **D-2** (build environment).
