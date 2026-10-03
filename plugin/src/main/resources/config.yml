@@ -157,6 +157,13 @@ ai:
   #     fallbacks: ["gemini"]
   #     enabled: false
 
+commander:
+  # The Commander's in-game username (player names cannot contain spaces).
+  name: "NullCommander"
+
+  # Reserved for future tuning; the Commander always enters through a portal.
+  spawn-with-portal: true
+
 policy:
   # All destructive behaviour defaults to false (spec 8).
   griefing-enabled: false

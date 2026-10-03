@@ -36,14 +36,33 @@ public interface VersionAdapter {
         private final String worldName;
         private final Vec3d position;
         private final int inventoryCapacity;
+        private final String skinValue;
+        private final String skinSignature;
 
+        /**
+         * Full form, carrying the skin this Null must wear.
+         *
+         * <p>Every Null and the Commander wear the skin of one configured
+         * Minecraft account. Pass empty strings when no skin has been
+         * resolved yet - the Null then keeps the default skin rather than
+         * the plugin pretending it applied one.</p>
+         */
         public SpawnRequest(UUID owner, String profileName, String worldName,
-                            Vec3d position, int inventoryCapacity) {
+                            Vec3d position, int inventoryCapacity,
+                            String skinValue, String skinSignature) {
             this.owner = owner;
             this.profileName = profileName;
             this.worldName = worldName;
             this.position = position;
             this.inventoryCapacity = inventoryCapacity;
+            this.skinValue = skinValue == null ? "" : skinValue;
+            this.skinSignature = skinSignature == null ? "" : skinSignature;
+        }
+
+        /** Convenience form with no skin - existing call sites keep working. */
+        public SpawnRequest(UUID owner, String profileName, String worldName,
+                            Vec3d position, int inventoryCapacity) {
+            this(owner, profileName, worldName, position, inventoryCapacity, "", "");
         }
 
         public UUID owner() { return owner; }
@@ -51,6 +70,12 @@ public interface VersionAdapter {
         public String worldName() { return worldName; }
         public Vec3d position() { return position; }
         public int inventoryCapacity() { return inventoryCapacity; }
+
+        /** Base64 texture value, or "" when no skin is available. */
+        public String skinValue() { return skinValue; }
+
+        /** Mojang signature for {@link #skinValue()}, or "" when absent. */
+        public String skinSignature() { return skinSignature; }
     }
 
     /**

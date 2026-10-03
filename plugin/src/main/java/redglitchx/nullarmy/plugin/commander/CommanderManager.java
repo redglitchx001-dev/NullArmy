@@ -1,0 +1,304 @@
+package redglitchx.nullarmy.plugin.commander;
+
+import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.inventory.ItemStack;
+
+import redglitchx.nullarmy.core.combat.CombatSituation;
+import redglitchx.nullarmy.core.combat.PvpArsenal;
+import redglitchx.nullarmy.core.config.Caps;
+import redglitchx.nullarmy.core.math.Vec3d;
+import redglitchx.nullarmy.nms.LoadoutSlot;
+import redglitchx.nullarmy.nms.NullBody;
+import redglitchx.nullarmy.nms.VersionAdapter;
+import redglitchx.nullarmy.plugin.NullArmyPlugin;
+import redglitchx.nullarmy.plugin.skin.SkinData;
+import redglitchx.nullarmy.plugin.skin.SkinResolver;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Level;
+
+/**
+ * The Null Commander: one named Null that spawns from a portal, wears the
+ * configured skin, carries an owner-edited loadout, and fights using the
+ * mace/elytra technique library in {@link PvpArsenal}.
+ *
+ * <p><b>No dependencies.</b> The GUI is a plain chest inventory, persistence is
+ * Bukkit's own {@link YamlConfiguration}, and the skin lookup uses the JDK's
+ * HTTP client. Nothing is downloaded at build time and no other plugin is
+ * required at runtime.</p>
+ *
+ * <p><b>STATUS: UNVERIFIED</b> - never compiled (BUILD.md blocker B-1).</p>
+ *
+ * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
+ */
+public final class CommanderManager implements Listener {
+
+    /** 36 storage + 4 armour + 1 offhand, matching a player inventory. */
+    public static final int LOADOUT_SLOTS = 41;
+
+    private static final String FILE_NAME = "commander.yml";
+    private static final String DEFAULT_NAME = "NullCommander";
+
+    private final NullArmyPlugin plugin;
+    private final SkinResolver skins;
+    private final ItemStack[] loadout = new ItemStack[LOADOUT_SLOTS];
+    private final File file;
+
+    private NullBody commander;
+    private SkinData skin;
+    private String name = DEFAULT_NAME;
+
+    public CommanderManager(NullArmyPlugin plugin, SkinResolver skins) {
+        this.plugin = plugin;
+        this.skins = skins;
+        this.file = new File(plugin.getDataFolder(), FILE_NAME);
+    }
+
+    /** Reads the saved name and loadout. Safe to call when the file is absent. */
+    public void load() {
+        name = plugin.getConfig().getString("commander.name", DEFAULT_NAME);
+        if (name == null || name.trim().isEmpty()) {
+            name = DEFAULT_NAME;
+        }
+        if (!file.isFile()) {
+            return;
+        }
+        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file);
+        for (int i = 0; i < LOADOUT_SLOTS; i++) {
+            Object raw = yaml.get("loadout." + i);
+            if (raw instanceof ItemStack) {
+                loadout[i] = (ItemStack) raw;
+            }
+        }
+    }
+
+    /**
+     * Warms the skin cache in the background so the first spawn already has it.
+     *
+     * <p>Everything else works even if this never completes - a Null without a
+     * skin is still a Null.</p>
+     */
+    public void preloadSkin() {
+        skins.resolveAsync(skins.skinOwner(), data -> {
+            if (data != null && data.complete()) {
+                this.skin = data;
+                plugin.getLogger().info("[NullArmy] Commander skin ready from "
+                        + data.source() + " (" + skins.skinOwner() + ").");
+            } else {
+                plugin.getLogger().warning("[NullArmy] Could not resolve the skin for '"
+                        + skins.skinOwner() + "'. Nulls will use the default skin."
+                        + " The plugin still works - this is cosmetic only.");
+            }
+        });
+    }
+
+    public SkinData skin() { return skin; }
+    public String commanderName() { return name; }
+    public ItemStack[] loadout() { return loadout; }
+
+    public boolean isSpawned() {
+        return commander != null && commander.isAlive();
+    }
+
+    /**
+     * Spawns the Commander in front of the player, out of a portal.
+     *
+     * <p>Returns false and explains why when it cannot, rather than failing
+     * silently.</p>
+     */
+    public boolean spawn(Player owner) {
+        VersionAdapter adapter = plugin.adapter();
+        if (adapter == null) {
+            owner.sendMessage("The Commander needs a version adapter; none is loaded.");
+            return false;
+        }
+        if (isSpawned()) {
+            owner.sendMessage("The Commander is already here. Use /null dismiss first.");
+            return false;
+        }
+
+        Location origin = owner.getLocation();
+        String world = origin.getWorld() == null ? null : origin.getWorld().getName();
+        if (world == null) {
+            owner.sendMessage("Could not determine your world.");
+            return false;
+        }
+
+        Vec3d spot = findSafeSpot(adapter, world, origin);
+        if (spot == null) {
+            owner.sendMessage("No safe ground nearby for the Commander to step onto.");
+            return false;
+        }
+
+        String value = (skin != null && skin.complete()) ? skin.value() : "";
+        String signature = (skin != null && skin.complete()) ? skin.signature() : "";
+
+        try {
+            commander = adapter.spawnNull(new VersionAdapter.SpawnRequest(
+                    owner.getUniqueId(), name, world, spot, 36 * 64, value, signature));
+        } catch (RuntimeException e) {
+            owner.sendMessage("The Commander could not be summoned: " + e.getMessage());
+            return false;
+        }
+
+        // The portal is the whole point of the entrance: effects first, then the body.
+        adapter.playPortalEffects(world, spot,
+                Math.max(Caps.minPortalEffects(), plugin.pluginConfig().caps().portalEffectsPerSummon()));
+
+        applyLoadout();
+        owner.sendMessage("The Commander steps out of the portal.");
+        return true;
+    }
+
+    /** Sends the saved loadout to the spawned Commander. */
+    private void applyLoadout() {
+        if (commander == null) {
+            return;
+        }
+        List<LoadoutSlot> slots = new ArrayList<>();
+        for (int i = 0; i < loadout.length; i++) {
+            ItemStack stack = loadout[i];
+            if (stack == null || stack.getType() == null || stack.getType().isAir()) {
+                continue;
+            }
+            String material = stack.getType().name();
+            slots.add(new LoadoutSlot(i, material, stack.getAmount()));
+        }
+        commander.setLoadout(slots);
+    }
+
+    public boolean despawn() {
+        if (!isSpawned()) {
+            return false;
+        }
+        commander.destroy();
+        commander = null;
+        return true;
+    }
+
+    /** Opens the loadout editor for a player. */
+    public void openLoadout(Player viewer) {
+        CommanderInventoryGui gui = new CommanderInventoryGui("Commander loadout", loadout);
+        gui.open(viewer);
+    }
+
+    /** Persists the loadout to commander.yml. */
+    public void save() {
+        YamlConfiguration yaml = new YamlConfiguration();
+        for (int i = 0; i < loadout.length; i++) {
+            if (loadout[i] != null) {
+                yaml.set("loadout." + i, loadout[i]);
+            }
+        }
+        try {
+            if (!plugin.getDataFolder().isDirectory()) {
+                plugin.getDataFolder().mkdirs();
+            }
+            yaml.save(file);
+        } catch (IOException e) {
+            plugin.getLogger().log(Level.WARNING,
+                    "[NullArmy] Could not save the Commander loadout: " + e.getMessage());
+        }
+    }
+
+    /** Picks the technique the Commander uses for a situation. */
+    public PvpArsenal.Technique plan(CombatSituation situation) {
+        return PvpArsenal.select(situation);
+    }
+
+    /**
+     * Finds a collision-safe spot near the player. Tries a small outward
+     * spiral rather than teleporting the NPC out of a bad position later -
+     * spec 3 forbids spawning through terrain.
+     */
+    private static Vec3d findSafeSpot(VersionAdapter adapter, String world, Location origin) {
+        double baseX = origin.getX();
+        double baseY = Math.floor(origin.getY());
+        double baseZ = origin.getZ();
+        int[][] offsets = {
+                {1, 0}, {0, 1}, {-1, 0}, {0, -1},
+                {2, 0}, {0, 2}, {-2, 0}, {0, -2},
+                {2, 2}, {-2, 2}, {2, -2}, {-2, -2},
+                {0, 0},
+        };
+        for (int[] offset : offsets) {
+            for (int dy = 0; dy <= 2; dy++) {
+                Vec3d candidate = new Vec3d(baseX + offset[0], baseY + dy, baseZ + offset[1]);
+                if (adapter.isSpawnSafe(world, candidate)) {
+                    return candidate;
+                }
+            }
+        }
+        return null;
+    }
+
+    // ------------------------------------------------------------ GUI events
+
+    @EventHandler
+    public void onInventoryClick(InventoryClickEvent event) {
+        if (!(event.getInventory().getHolder() instanceof CommanderInventoryGui)) {
+            return;
+        }
+        int slot = event.getRawSlot();
+
+        // Clicks in the player's own inventory must behave normally.
+        if (slot >= CommanderInventoryGui.SIZE) {
+            return;
+        }
+
+        if (CommanderInventoryGui.isButton(slot)) {
+            event.setCancelled(true);
+            CommanderInventoryGui gui = (CommanderInventoryGui) event.getInventory().getHolder();
+            if (!(event.getWhoClicked() instanceof Player)) {
+                return;
+            }
+            Player player = (Player) event.getWhoClicked();
+            if (slot == CommanderInventoryGui.BUTTON_CLEAR) {
+                gui.clearWorking();
+                player.sendMessage("Loadout cleared. Press Save to keep it empty.");
+            } else if (slot == CommanderInventoryGui.BUTTON_CANCEL) {
+                player.closeInventory();
+            } else if (slot == CommanderInventoryGui.BUTTON_SAVE) {
+                gui.commitFromView();
+                ItemStack[] edited = gui.working();
+                System.arraycopy(edited, 0, loadout, 0, Math.min(edited.length, LOADOUT_SLOTS));
+                save();
+                applyLoadout();
+                player.sendMessage("Commander loadout saved.");
+                player.closeInventory();
+            }
+            return;
+        }
+
+        if (!CommanderInventoryGui.isEditable(slot)) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler
+    public void onInventoryClose(InventoryCloseEvent event) {
+        if (!(event.getInventory().getHolder() instanceof CommanderInventoryGui)) {
+            return;
+        }
+        // Closing without pressing Save discards the edit, so a mis-click can
+        // never silently overwrite a loadout the owner was happy with.
+        if (event.getPlayer() instanceof Player) {
+            ((Player) event.getPlayer()).sendMessage("Loadout editor closed without saving.");
+        }
+    }
+
+    /** True when the material is one we refuse to store (purely defensive). */
+    static boolean isBanned(ItemStack stack) {
+        return stack != null && stack.getType() == Material.AIR;
+    }
+}

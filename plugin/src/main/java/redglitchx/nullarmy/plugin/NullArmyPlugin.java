@@ -1,4 +1,6 @@
 package redglitchx.nullarmy.plugin;
+import redglitchx.nullarmy.plugin.commander.CommanderManager;
+import redglitchx.nullarmy.plugin.skin.SkinResolver;
 
 import org.bukkit.plugin.java.JavaPlugin;
 import redglitchx.nullarmy.core.config.Caps;
@@ -25,6 +27,8 @@ public final class NullArmyPlugin extends JavaPlugin {
     private VersionAdapter adapter;
     private SquadManager squads;
     private SummonFlow summonFlow;
+    private SkinResolver skinResolver;
+    private CommanderManager commander;
 
     private TickBudget pathBudget;
     private TickBudget blockInspectionBudget;
@@ -54,6 +58,14 @@ public final class NullArmyPlugin extends JavaPlugin {
         this.squads = new SquadManager(this, adapter, caps, pluginConfig);
         this.summonFlow = new SummonFlow(this, pluginConfig, squads);
 
+        this.skinResolver = new SkinResolver(this);
+        this.commander = new CommanderManager(this, skinResolver);
+        this.commander.load();
+        getServer().getPluginManager().registerEvents(this.commander, this);
+        // Warm the skin cache now so the first Commander already has it. A
+        // failure here is cosmetic only and never blocks startup.
+        this.commander.preloadSkin();
+
         NullCommand command = new NullCommand(this, squads, pluginConfig);
         Objects.requireNonNull(getCommand("null"), "command 'null' missing from paper-plugin.yml")
                 .setExecutor(command);
@@ -72,6 +84,9 @@ public final class NullArmyPlugin extends JavaPlugin {
         if (squads != null) {
             // Spec 5: SAFE_SHUTDOWN is a real state, not an instant delete.
             squads.requestSafeShutdown();
+        }
+        if (commander != null) {
+            commander.despawn();
         }
         getLogger().info(shutdownClean
                 ? "NullArmy disabled (safe shutdown requested)"
@@ -96,6 +111,8 @@ public final class NullArmyPlugin extends JavaPlugin {
     public VersionAdapter adapter() { return adapter; }
     public SquadManager squads() { return squads; }
     public SummonFlow summonFlow() { return summonFlow; }
+    public SkinResolver skins() { return skinResolver; }
+    public CommanderManager commander() { return commander; }
     public TickBudget pathBudget() { return pathBudget; }
     public TickBudget blockInspectionBudget() { return blockInspectionBudget; }
     public long currentTick() { return tickCounter; }

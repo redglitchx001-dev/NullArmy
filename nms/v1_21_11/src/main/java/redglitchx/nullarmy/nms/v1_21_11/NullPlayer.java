@@ -144,4 +144,24 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         // changes a Null's position.
         move(MoverType.SELF, getDeltaMovement());
     }
+    @Override
+    public void setLoadout(java.util.List<redglitchx.nullarmy.nms.LoadoutSlot> slots) {
+        org.bukkit.inventory.PlayerInventory inv = getBukkitEntity().getInventory();
+        if (slots == null || slots.isEmpty()) {
+            inv.clear();
+            return;
+        }
+        for (redglitchx.nullarmy.nms.LoadoutSlot slot : slots) {
+            org.bukkit.Material material = org.bukkit.Material.matchMaterial(slot.material());
+            if (material == null || material.isAir()) {
+                // Unknown on this server version: skip it rather than fail the summon.
+                continue;
+            }
+            int index = slot.slot();
+            if (index < 0 || index >= inv.getSize()) {
+                continue;
+            }
+            inv.setItem(index, new org.bukkit.inventory.ItemStack(material, slot.count()));
+        }
+    }
 }

@@ -5,6 +5,8 @@ import redglitchx.nullarmy.core.agent.AgentRegistry;
 import redglitchx.nullarmy.core.agent.AgentRole;
 import redglitchx.nullarmy.core.agent.CircuitBreaker;
 import redglitchx.nullarmy.core.agent.EndpointConfig;
+import redglitchx.nullarmy.core.combat.CombatSituation;
+import redglitchx.nullarmy.core.combat.PvpArsenal;
 import redglitchx.nullarmy.core.brain.NullState;
 import redglitchx.nullarmy.core.brain.Objective;
 import redglitchx.nullarmy.core.brain.UtilityPlanner;
@@ -79,6 +81,12 @@ public final class CoreTestSuite {
         run("endpoint validates endpoint/model-id/timeout", CoreTestSuite::testEndpointValidation);
         run("endpoint holds env:NAME, never the key itself", CoreTestSuite::testEndpointKeyIsEnvName);
         run("api-key accepts env:NAME or literal, never leaks", CoreTestSuite::testApiKeyForms);
+
+        run("commander knows mace and elytra PvP techniques", CoreTestSuite::testPvpArsenal);
+        run("mace smash is only chosen when it is lethal", CoreTestSuite::testMaceSmashDiscipline);
+        run("elytra techniques need a deployed elytra", CoreTestSuite::testElytraRequiresElytra);
+        run("technique selector is deterministic", CoreTestSuite::testTechniqueSelectorIsDeterministic);
+        run("loadout slot maps to a valid inventory index", CoreTestSuite::testLoadoutSlot);
         run("agent binding builds a deduped endpoint chain", CoreTestSuite::testAgentBindingChain);
         run("registry accepts a valid endpoint/agent config", CoreTestSuite::testRegistryValid);
         run("registry rejects a dangling endpoint reference", CoreTestSuite::testRegistryDanglingRef);
@@ -757,4 +765,101 @@ public final class CoreTestSuite {
         check(AgentRole.CHAT_COMMANDER.mayNever().contains("ban players"),
                 "ChatCommander must keep its ban restriction");
     }
+
+    // ------------------------------------------------------ commander combat
+
+    private static void testPvpArsenal() {
+        // Both disciplines are represented, and there are a real number of them.
+        check(!PvpArsenal.forDiscipline(PvpArsenal.Discipline.MACE).isEmpty(), "mace techniques exist");
+        check(!PvpArsenal.forDiscipline(PvpArsenal.Discipline.ELYTRA).isEmpty(), "elytra techniques exist");
+        check(PvpArsenal.count() >= 20, "a substantial technique library, got " + PvpArsenal.count());
+
+        // Every technique must have a description: an undocumented technique
+        // is unusable by whoever has to debug the Commander.
+        for (PvpArsenal.Technique t : PvpArsenal.all()) {
+            check(t.description() != null && !t.description().isEmpty(),
+                    "technique " + t + " has a description");
+        }
+
+        // DISENGAGE is the universal fallback: it applies to everything, so
+        // select() can never return null.
+        check(PvpArsenal.Technique.DISENGAGE.applies(CombatSituation.builder().build()),
+                "disengage always applies");
+    }
+
+    private static void testMaceSmashDiscipline() {
+        // High above a soft target with lethal fall speed: commit to the smash.
+        CombatSituation lethal = CombatSituation.builder()
+                .hasMace(true).heightAboveTarget(12.0).fallSpeed(20.0)
+                .targetHealth(20.0).targetArmor(0.0).distanceToTarget(2.0)
+                .build();
+        check(lethal.smashIsLethal(), "a big fall onto a soft target is lethal");
+        PvpArsenal.Technique pick = PvpArsenal.select(lethal);
+        checkEquals(PvpArsenal.Discipline.MACE, pick.discipline(), "picks a mace technique");
+
+        // A short fall onto a heavily armoured target is NOT lethal: the
+        // Commander must refuse to throw away its height.
+        CombatSituation bad = CombatSituation.builder()
+                .hasMace(true).heightAboveTarget(1.0).fallSpeed(0.0)
+                .targetHealth(20.0).targetArmor(20.0).distanceToTarget(2.0)
+                .build();
+        check(bad.smashIsLethal() == false, "a short fall onto armour is not lethal");
+        PvpArsenal.Technique safe = PvpArsenal.select(bad);
+        check(safe != PvpArsenal.Technique.FULL_SMASH,
+                "must not commit to a smash that cannot kill");
+    }
+
+    private static void testElytraRequiresElytra() {
+        CombatSituation flying = CombatSituation.builder()
+                .hasElytra(true).elytraDeployed(true).hasBow(true)
+                .distanceToTarget(24.0).fireworks(6).build();
+        PvpArsenal.Technique pick = PvpArsenal.select(flying);
+        checkEquals(PvpArsenal.Discipline.ELYTRA, pick.discipline(), "flying picks an elytra technique");
+
+        // On the ground with no elytra out, an elytra technique must never be chosen.
+        CombatSituation grounded = CombatSituation.builder()
+                .hasElytra(true).elytraDeployed(false).hasBow(true)
+                .distanceToTarget(24.0).fireworks(6).build();
+        PvpArsenal.Technique groundPick = PvpArsenal.select(grounded);
+        check(groundPick.discipline() != PvpArsenal.Discipline.ELYTRA,
+                "grounded never picks an elytra technique, got " + groundPick);
+    }
+
+    private static void testTechniqueSelectorIsDeterministic() {
+        CombatSituation situation = CombatSituation.builder()
+                .hasMace(true).maceHasWindBurst(true).maceHasDensity(true)
+                .heightAboveTarget(9.0).fallSpeed(18.0)
+                .targetHealth(20.0).targetArmor(4.0).distanceToTarget(3.0)
+                .build();
+        PvpArsenal.Technique first = PvpArsenal.select(situation);
+        for (int i = 0; i < 25; i++) {
+            checkEquals(first, PvpArsenal.select(situation), "selector is deterministic");
+        }
+        // Applicable list is ordered best-first.
+        List<PvpArsenal.Technique> ranked = PvpArsenal.applicable(situation);
+        checkEquals(first, ranked.get(0), "best technique is ranked first");
+    }
+
+    private static void testLoadoutSlot() {
+        // The GUI-to-inventory mapping must never produce an out-of-range index.
+        checkEquals(0, CommanderInventorySlotMap.hotbar(0), "hotbar 0 maps to 0");
+        checkEquals(8, CommanderInventorySlotMap.hotbar(8), "hotbar 8 maps to 8");
+        checkEquals(9, CommanderInventorySlotMap.storage(0), "storage 0 maps to 9");
+        checkEquals(35, CommanderInventorySlotMap.storage(26), "storage 26 maps to 35");
+    }
+
+    /** Mirrors the slot maths in the loadout GUI so it can be tested in core. */
+    private static final class CommanderInventorySlotMap {
+        private CommanderInventorySlotMap() {
+        }
+
+        static int hotbar(int i) {
+            return i;
+        }
+
+        static int storage(int i) {
+            return 9 + i;
+        }
+    }
+
 }

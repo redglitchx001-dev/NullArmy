@@ -94,6 +94,7 @@ The audit is done. These are its outputs:
 | [`TRACEABILITY.md`](TRACEABILITY.md) | All **471** mechanics (221 original + 250 added), extracted from the spec — every item marked `not started` |
 | [`BUILD.md`](BUILD.md) | Exact build and verification commands, and what is/isn't proven |
 | [`ENDPOINTS.md`](ENDPOINTS.md) | How to add as many AI models as you want: endpoint, model-id, api-key, no limits |
+| [`COMMANDER.md`](COMMANDER.md) | The Null Commander: portal spawn, one shared skin, loadout GUI, mace + elytra PvP library |
 | [`BUILD_TUTORIAL.md`](BUILD_TUTORIAL.md) | Step-by-step: from a fresh machine to a running `NullArmy.jar` |
 | [`RELEASING.md`](RELEASING.md) | How to publish: versioning, CI workflow, checksums, GitHub releases, licence choice |
 
@@ -357,6 +358,26 @@ local model, chat on a large cloud model.
 6. Circuit breaker, bounded retries with backoff, request coalescing/caching where safe, deterministic local fallbacks. **Never an HTTP request on the tick thread.**
 7. **The local safety validator sits above every agent decision.** The endpoint advises; the server owns inventory, movement, damage, blocks, permissions, and final calls.
 8. Aggregate latency, errors, rejection reasons, and token/request counts are logged — without credentials or sensitive player content. Opt-in privacy controls and retention limits.
+
+---
+
+## The Null Commander
+
+`/null commander` summons one named Null that steps out of a portal. It wears the skin of
+**one** configured Minecraft account (`uH3WR2v0ti0uTHJ` by default) — as does every other Null —
+carries a loadout you edit in a GUI (`/null loadout`), and picks its attacks from **25 mace and
+elytra PvP techniques** including smash commits, Wind Burst recovery, Breach shield-breaks,
+rocket chaining, strafe runs and riptide launches.
+
+The selector is deterministic and refuses to commit to a smash that cannot kill.
+
+Built with **no dependencies**: the skin lookup uses the JDK's own HTTP client, the GUI is a plain
+chest inventory, persistence is Bukkit's YAML, and the technique library is pure Java in `core`.
+
+Full detail: **[`COMMANDER.md`](COMMANDER.md)**.
+
+> **⚠️ Written, not run.** None of this has ever been compiled — see
+> [`COMMANDER.md`](COMMANDER.md) for exactly what is and isn't done.
 
 ---
 

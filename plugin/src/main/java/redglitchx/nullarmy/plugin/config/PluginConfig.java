@@ -166,7 +166,7 @@ public final class PluginConfig {
             }
             if (!unknownRoles.isEmpty()) {
                 logger.warning("[NullArmy] Unknown agent role(s) in config.yml: " + unknownRoles
-                        + " — ignored. Valid keys: " + validRoleKeys());
+                        + " - ignored. Valid keys: " + validRoleKeys());
             }
             if (aiEnabled) {
                 logger.info("[NullArmy] AI enabled with " + endpoints.size()

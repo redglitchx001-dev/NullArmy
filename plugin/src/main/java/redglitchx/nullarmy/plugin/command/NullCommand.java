@@ -39,6 +39,7 @@ public final class NullCommand implements CommandExecutor, TabCompleter {
 
     private static final List<String> SUBCOMMANDS = Arrays.asList(
             "gui", "chat", "attack", "attackx", "follow", "build",
+            "commander", "loadout", "skin",
             "status", "stop", "dismiss", "ban", "kill");
 
     private final NullArmyPlugin plugin;
@@ -54,12 +55,15 @@ public final class NullCommand implements CommandExecutor, TabCompleter {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0) {
-            sender.sendMessage("NullArmy. Usage: /null <gui|chat|attack|attackx|follow|build|status|stop|dismiss|ban|kill>");
+            sender.sendMessage("NullArmy. Usage: /null <gui|commander|loadout|skin|chat|attack|attackx|follow|build|status|stop|dismiss|ban|kill>");
             return true;
         }
 
         String sub = args[0].toLowerCase();
         switch (sub) {
+            case "commander": return commander(sender);
+            case "loadout": return loadoutGui(sender);
+            case "skin": return skinStatus(sender);
             case "status": return status(sender);
             case "stop":
             case "dismiss": return dismiss(sender);
@@ -99,6 +103,48 @@ public final class NullCommand implements CommandExecutor, TabCompleter {
     }
 
     // ------------------------------------------------------------- subcommands
+
+    /**
+     * Spawns the Null Commander out of a portal.
+     *
+     * <p>The entrance is deliberately the portal: the Commander steps out of
+     * it rather than blinking into existence.</p>
+     */
+    private boolean commander(CommandSender sender) {
+        if (!require(sender, "nullarmy.commander")) {
+            return true;
+        }
+        if (!(sender instanceof Player)) {
+            sender.sendMessage("Only a player can summon the Commander - it spawns where you stand.");
+            return true;
+        }
+        plugin.commander().spawn((Player) sender);
+        return true;
+    }
+
+    /** Opens the Commander loadout editor. */
+    private boolean loadoutGui(CommandSender sender) {
+        if (!require(sender, "nullarmy.gui")) {
+            return true;
+        }
+        if (!(sender instanceof Player)) {
+            sender.sendMessage("The loadout editor is a GUI, so it needs a player.");
+            return true;
+        }
+        plugin.commander().openLoadout((Player) sender);
+        return true;
+    }
+
+    /** Reports skin resolution state. Never prints a texture blob in full. */
+    private boolean skinStatus(CommandSender sender) {
+        if (!require(sender, "nullarmy.admin")) {
+            return true;
+        }
+        for (String line : plugin.skins().diagnostics()) {
+            sender.sendMessage(line);
+        }
+        return true;
+    }
 
     private boolean status(CommandSender sender) {
         if (!require(sender, "nullarmy.admin")) {

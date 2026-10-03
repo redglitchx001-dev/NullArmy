@@ -1,4 +1,5 @@
 package redglitchx.nullarmy.plugin;
+import redglitchx.nullarmy.plugin.skin.SkinData;
 
 import redglitchx.nullarmy.core.config.Caps;
 import redglitchx.nullarmy.core.math.Vec3d;
@@ -108,8 +109,22 @@ public final class SquadManager {
         Squad squad = new Squad(owner);
         try {
             for (int i = 0; i < positions.size(); i++) {
+                // EVERY Null wears the skin of the one configured account,
+                // not just the Commander. Resolved from cache so a summon
+                // never waits on a network call.
+                String skinValue = "";
+                String skinSignature = "";
+                if (plugin != null && plugin.skins() != null) {
+                    SkinData skin = plugin.skins().resolveCached(plugin.skins().skinOwner());
+                    if (skin != null && skin.complete()) {
+                        skinValue = skin.value();
+                        skinSignature = skin.signature();
+                    }
+                }
+
                 NullBody body = adapter.spawnNull(new VersionAdapter.SpawnRequest(
-                        owner, NameGenerator.next(), worldName, positions.get(i), 36 * 64));
+                        owner, NameGenerator.next(), worldName, positions.get(i), 36 * 64,
+                        skinValue, skinSignature));
                 squad.members.add(body);
                 liveCount++;
             }

@@ -84,7 +84,11 @@ public final class V1_21_11Adapter implements VersionAdapter {
         // A pure black skin needs a REAL Mojang-hosted texture plus its signature.
         // If none is configured the Null keeps the default skin rather than
         // pretending (IMPLEMENTATION_PLAN.md A-05).
-        SkinApplicator.apply(profile);
+        // Every Null and the Commander wear one configured skin. The request
+        // carries it; if it is absent we fall back to whatever SkinConfig has,
+        // and if that is empty too the profile is left alone rather than faked
+        // (IMPLEMENTATION_PLAN.md A-05).
+        SkinApplicator.apply(profile, request.skinValue(), request.skinSignature());
 
         ServerPlayer npc = new NullPlayer(server, level, profile, request, this);
 

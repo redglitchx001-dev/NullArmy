@@ -52,7 +52,7 @@ public final class AgentRegistry {
             this.findings = Collections.unmodifiableList(new ArrayList<>(findings));
         }
 
-        /** False when an ERROR finding exists — the config must not be used as-is. */
+        /** False when an ERROR finding exists - the config must not be used as-is. */
         public boolean loadable() { return loadable; }
 
         public List<Finding> findings() { return findings; }
@@ -131,11 +131,11 @@ public final class AgentRegistry {
                 if (!b.endpointChain().isEmpty() && !anyUsable) {
                     findings.add(new Finding(Severity.WARNING,
                             "agent '" + key + "' is enabled but all its endpoints are disabled"
-                                    + " — it will use local fallback only"));
+                                    + " - it will use local fallback only"));
                 }
                 if (b.endpointChain().isEmpty()) {
                     findings.add(new Finding(Severity.WARNING,
-                            "agent '" + key + "' has no endpoint — local fallback only"));
+                            "agent '" + key + "' has no endpoint - local fallback only"));
                 }
             }
         }
@@ -146,7 +146,7 @@ public final class AgentRegistry {
             String never = role.mayNever().toLowerCase();
             if (never.contains("ban players") == false && role == AgentRole.CHAT_COMMANDER) {
                 findings.add(new Finding(Severity.ERROR,
-                        "ChatCommander lost its ban restriction — spec 7 violation"));
+                        "ChatCommander lost its ban restriction - spec 7 violation"));
             }
         }
 

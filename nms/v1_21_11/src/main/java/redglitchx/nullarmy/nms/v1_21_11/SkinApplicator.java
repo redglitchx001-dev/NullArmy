@@ -29,11 +29,25 @@ final class SkinApplicator {
      * a value without a valid signature is rejected by the client.</p>
      */
     static void apply(GameProfile profile) {
-        String value = redglitchx.nullarmy.nms.v1_21_11.SkinConfig.textureValue();
-        String signature = redglitchx.nullarmy.nms.v1_21_11.SkinConfig.textureSignature();
+        apply(profile, "", "");
+    }
+
+    /**
+     * Attaches the requested skin, falling back to the configured one.
+     *
+     * <p>Both halves are required. A value without a signature is rejected by
+     * the client, so we would only be pretending to have set a skin.</p>
+     */
+    static void apply(GameProfile profile, String requestedValue, String requestedSignature) {
+        String value = requestedValue;
+        String signature = requestedSignature;
 
         if (value == null || value.isEmpty() || signature == null || signature.isEmpty()) {
-            // No configured skin. Keep the default rather than pretending.
+            value = SkinConfig.textureValue();
+            signature = SkinConfig.textureSignature();
+        }
+        if (value == null || value.isEmpty() || signature == null || signature.isEmpty()) {
+            // No skin available. Keep the default rather than pretending.
             return;
         }
         profile.getProperties().put("textures", new Property("textures", value, signature));

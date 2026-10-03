@@ -44,4 +44,13 @@ public interface NullBody {
 
     /** Removes the Null from the world. Does not drop items implicitly. */
     void destroy();
+
+    /**
+     * Equips this Null with a loadout.
+     *
+     * <p>Slots not listed are left untouched. An unrecognised material is
+     * skipped, never fatal. This is how the Commander gets the kit the owner
+     * arranged in the loadout GUI.</p>
+     */
+    void setLoadout(java.util.List<LoadoutSlot> slots);
 }

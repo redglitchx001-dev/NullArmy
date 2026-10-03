@@ -24,7 +24,13 @@ permissions:
     description: Summon Nulls with a Call Horn or Totem Of Null
     default: op
   nullarmy.gui:
-    description: Open the loadout planning GUI
+    description: Open the Commander loadout editor
+    default: op
+  nullarmy.commander:
+    description: Summon the Null Commander out of a portal
+    default: op
+  nullarmy.admin:
+    description: View NullArmy status, endpoints and skin diagnostics
     default: op
   nullarmy.chat:
     description: Toggle Null chat
