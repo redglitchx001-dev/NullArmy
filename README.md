@@ -37,7 +37,7 @@ They are **not** invulnerable mobs. They are **not** client-side illusions. Ever
 - takes real damage, gets hungry, burns, drowns, freezes, and dies permanently
 - respects attack cooldowns, shields, line of sight, enchantment rules, and block hardness
 - keeps personal space — Nulls queue at doorways instead of stacking inside each other
-- can be built to do 221 specific, individually testable vanilla things (see [the catalogue](#the-221))
+- can be built to do 471 specific, individually testable vanilla things (see [the catalogue](#the-471))
 
 The design philosophy is blunt: **if a real survival player can't do it, a Null can't do it either.** When a requested idea is impossible in vanilla, NullArmy says so out loud and implements the nearest honest alternative. It never fakes success.
 
@@ -51,7 +51,7 @@ The design philosophy is blunt: **if a real survival player can't do it, a Null 
 - [How Summoning Works](#how-summoning-works)
 - [Commands](#commands)
 - [Formations](#formations)
-- [The 221](#the-221)
+- [The 471](#the-471)
 - [Architecture](#architecture)
 - [Version Support](#version-support)
 - [AI Endpoints](#ai-endpoints)
@@ -75,7 +75,7 @@ The design philosophy is blunt: **if a real survival player can't do it, a Null 
 | **Build system** | Gradle (Kotlin DSL), multi-module |
 | **Compiled?** | ❌ **Never.** No JDK or dev bundle available in the authoring environment |
 | **Lines of Java syntax-verified** | 4,423 / 4,423 (parser check only — not a compile) |
-| **Mechanics implemented (of 221)** | **0** — nothing counts as implemented until it is tested on a declared version |
+| **Mechanics implemented (of 471)** | **0** — nothing counts as implemented until it is tested on a declared version |
 | **Current state** | Phase 0 complete · Phase 1 + partial Phase 2/3 **source authored but unverified** |
 | **Docs** | Master prompt + [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) · [`STATUS.md`](STATUS.md) · [`TRACEABILITY.md`](TRACEABILITY.md) · [`BUILD.md`](BUILD.md) |
 
@@ -91,7 +91,7 @@ The audit is done. These are its outputs:
 | --- | --- |
 | [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | Environment audit, exact version compatibility table, NMS/packet feasibility notes, architecture diagram, module plan, ADRs, vanilla-impossibility register, documented assumptions, risk register |
 | [`STATUS.md`](STATUS.md) | Phase state, core-feature traceability, acceptance-criteria scoreboard, Phase 0 handoff |
-| [`TRACEABILITY.md`](TRACEABILITY.md) | All 221 mechanics, extracted from the spec — every item marked `not started` |
+| [`TRACEABILITY.md`](TRACEABILITY.md) | All **471** mechanics (221 original + 250 added), extracted from the spec — every item marked `not started` |
 | [`BUILD.md`](BUILD.md) | Exact build and verification commands, and what is/isn't proven |
 
 > **Two blockers surfaced in Phase 0 and both need an owner decision:** the entire 1.21.x target range is **end-of-life** (Paper 1.21.11 support ended 2026-06-15), and this build environment has **no JDK, no Gradle, and no access to `repo.papermc.io`**. See the plan's [§8 Owner decisions](IMPLEMENTATION_PLAN.md#8-owner-decisions-required).
@@ -229,9 +229,9 @@ No instant paste. No mass `setType`. No invisible worker. If supplies run out, t
 
 ---
 
-## The 221
+## The 471
 
-The master prompt catalogues **221 additional vanilla mechanics** across six groups. This is a feature *catalogue*, not permission to break the core rules — every item requires genuine inventory, legal perception, and authoritative server validation.
+The spec catalogues **471 vanilla mechanics** across twelve groups: the original 221 in `NullArmy_Master_Prompt.md` §6, plus 250 more in [`MECHANICS_EXPANSION.md`](MECHANICS_EXPANSION.md). This is a feature *catalogue*, not permission to break the core rules — every item requires genuine inventory, legal perception, and authoritative server validation.
 
 | Group | # | Range | Summary |
 | --- | :-: | :-: | --- |
@@ -241,6 +241,12 @@ The master prompt catalogues **221 additional vanilla mechanics** across six gro
 | **D. Survival, inventory & SMP life** | 50 | 111–160 | Hunger monitoring, food selection, raw-vs-cooked, real cooking, health triage, potion inventory, real brewing, self/splash/ally potion timing, debuff safety, effect sequencing, fire resistance, water breathing, milk removal, drowning/freezing/fire/lava responses, water supply, light awareness, torch placement, shelter seeking, beds, armor choice/wear, shield and tool wear, repairing, enchantments, offhand policy, inventory sorting, **stack conservation**, loot pickup and priorities, dead-ally recovery, arrow/potion sharing, equipment handoff, commander resupply, summoner delivery, storage use, trapped-container caution, villager trading, crop planting/harvesting, fishing, wolf taming, animal care, breeding |
 | **E. Mining, construction, redstone & traps** | 40 | 161–200 | Correct mining tool, obsidian mining, bedrock/unbreakables (**never** bypassed), visible-resource mining (**no x-ray ore search**), staircase mining, tunneling, gravity-block awareness, torch markers, placement physics, material cost planning, temporary scaffold, defensive walls, trenches, water control, lava casting, Frost Walker, firebreaks, TNT placement/ignition, cannon assembly/calibration, misfire handling, blast-resistance awareness, Wither gates, skull-item correctness, **visible-only** redstone reconnaissance, tripwire disarming, shears, pressure plates, buttons/levers, redstone-dust tracing, repeater timing, comparator logic, observer awareness, piston hazards, dispensers/droppers, hopper logistics, doors, breach choices |
 | **F. Stealth, deception & lifelike behaviour** | 21 | 201–221 | Crouch approach, tall-grass concealment, darkness discipline, armor-removal tradeoff, potion invisibility, honest identity tells (**no packet hacks to hide name tags or particles**), sound discipline, line-of-sight breaking, cover scouting, light discipline, armor-stand decoys, banner/sign signaling, campfire smoke, feigned retreat, bait discipline, terrain ambush, watch rotation, shift-signal vocabulary, natural gaze/posture, chat psychology, organic idle loop |
+| **G. Advanced combat, damage & equipment depth** | 50 | 222–271 | Enchantment matchups (Smite/Bane/Impaling/Density/Breach), armour-value targeting, Thorns recoil, curse handling, Spectral Arrow marking, Lingering clouds, Slow Falling, Turtle Master, **Spears + Lunge (1.21.11)**, Warden withdrawal, hostile-projectile dodging |
+| **H. Squad command, coordination & logistics** | 40 | 272–311 | Bounding overwatch, sentry rotation, chokepoint control, buddy pairs, medic/ammo/engineer roles, fall-back staging, time-of-day & weather planning, cargo triage, dead-drop caching, pursuit abort |
+| **I. Mounts, traversal & mobility** | 45 | 312–356 | **Nautilus + Zombie Nautilus + Nautilus Armour (1.21.11)**, **Zombie Horse & Camel Husk (1.21.11)**, mounted water crossing, Soul Speed, Swift Sneak, honey-block sliding, ice friction, kelp elevators, rail switching, minecart spacing |
+| **J. Survival, crafting, economy & SMP life** | 50 | 357–406 | XP/Mending allocation, anvil prior-work cost, grindstone, netherite smithing, armour trims, Bundles, Shulker Boxes, **Crafter**, **Shelf / Copper Chest / Copper Golem (1.21.9)**, fuel economy, full farm & food chains |
+| **K. Mining, building, redstone & automation** | 40 | 407–446 | Ancient debris, Piglin aggro on nether gold, **Sculk Sensor noise discipline**, Shrieker avoidance, trial chambers & vaults, **Copper Bulb (1.21.9)**, cobble/basalt generators, dripstone lava farms, sorting arrays, item lifts, spawn-proofing |
+| **L. Stealth, perception, scouting & lifelike behaviour** | 25 | 447–471 | Vibration-aware movement, wool-dampened routes, sound-cue interpretation, spyglass scouting, cartography, dead reckoning, counter-scouting, particle/glint tells, signal fires, rest rotation |
 
 ### Idle behaviour
 
@@ -478,3 +484,5 @@ The design brief lives in [`NullArmy_Master_Prompt.md`](NullArmy_Master_Prompt.m
 **Never fake success.**
 
 </div>
+
+

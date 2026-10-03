@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-10-03 · **Current state:** Phase 0 complete · Phase 1 source authored **but UNVERIFIED** (blocked B-1) · Partial Phase 2/3 source authored, also unverified
 
-Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit + architecture) · [`TRACEABILITY.md`](TRACEABILITY.md) (221-item register) · [`BUILD.md`](BUILD.md) (build & verify commands)
+Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit + architecture) · [`TRACEABILITY.md`](TRACEABILITY.md) (471-item register) · [`MECHANICS_EXPANSION.md`](MECHANICS_EXPANSION.md) (250 added mechanics) · [`BUILD.md`](BUILD.md) (build & verify commands)
 
 ---
 
@@ -82,7 +82,7 @@ Status vocabulary per spec: `implemented` · `partial` · `experimental` · `blo
 | 32 | `/schematics` parser | 4 | `not started` | 7 |
 | 33 | Debug rejection-reason reporting | 9 | `not started` | 1 |
 
-**0 of 33 core features implemented. 0 of 221 catalogue mechanics implemented.**
+**0 of 33 core features implemented. 0 of 471 catalogue mechanics implemented.**
 
 > **Why nothing is marked `implemented` yet.** The spec defines `implemented` as
 > *"complete and tested on a declared target version"*. Source now exists for a
@@ -134,7 +134,7 @@ Per §11 *"Required handoff at every phase"* — all six items:
 | --- | --- |
 | `IMPLEMENTATION_PLAN.md` | **new** — audit, version table, NMS feasibility, architecture, ADRs, impossibilities, assumptions, risk register |
 | `STATUS.md` | **new** — this file |
-| `TRACEABILITY.md` | **new** — all 221 mechanics, generated from spec |
+| `TRACEABILITY.md` | **new** — all 471 mechanics (221 original + 250 added), generated from spec |
 | `README.md` | updated — links to the three new docs |
 
 ### (b) Behaviour now working
@@ -158,7 +158,7 @@ $ curl repo1.maven.org → 000 (blocked)
 - Spigot NMS revision cells for 1.21.3–1.21.11 unverified — left blank rather than guessed.
 
 ### (e) Remaining traceability items
-33 core features + 221 mechanics, **all `not started`**. Statuses move only when implemented and tested on a declared target version.
+33 core features + 471 mechanics, **all `not started`**. Statuses move only when implemented and tested on a declared target version.
 
 ### (f) Next phase
 **Phase 1 — Build skeleton and version adapters**, gated on owner decisions **D-1** (version range) and **D-2** (build environment).

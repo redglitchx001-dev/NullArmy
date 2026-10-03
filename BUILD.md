@@ -162,4 +162,4 @@ These are **not** bugs — they are phases that have not been written yet, and t
 | AI endpoint clients | 8 | Not started |
 | Persistence of squads/inventories | 2 | `ItemLedger.restore()` exists and is tested, but no file IO yet |
 
-See [`TRACEABILITY.md`](TRACEABILITY.md) for the status of all 221 mechanics and [`STATUS.md`](STATUS.md) for phase state.
+See [`TRACEABILITY.md`](TRACEABILITY.md) for the status of all 471 mechanics and [`STATUS.md`](STATUS.md) for phase state.
