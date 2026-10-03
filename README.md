@@ -93,7 +93,7 @@ The audit is done. These are its outputs:
 | [`STATUS.md`](STATUS.md) | Phase state, core-feature traceability, acceptance-criteria scoreboard, Phase 0 handoff |
 | [`TRACEABILITY.md`](TRACEABILITY.md) | All **471** mechanics (221 original + 250 added), extracted from the spec — every item marked `not started` |
 | [`BUILD.md`](BUILD.md) | Exact build and verification commands, and what is/isn't proven |
-| [`AGENTS.md`](AGENTS.md) | Endpoint & agent configuration: where to add endpoints, the 13 roles, authority model, security rules |
+| [`ENDPOINTS.md`](ENDPOINTS.md) | How to add as many AI models as you want: endpoint, model-id, api-key, no limits |
 | [`BUILD_TUTORIAL.md`](BUILD_TUTORIAL.md) | Step-by-step: from a fresh machine to a running `NullArmy.jar` |
 | [`RELEASING.md`](RELEASING.md) | How to publish: versioning, CI workflow, checksums, GitHub releases, licence choice |
 
@@ -312,11 +312,21 @@ Unsupported builds must **fail clearly**, not silently limp along.
 
 ## AI Endpoints
 
-**Thirteen** isolated, **optional**, OpenAI-compatible agent roles. All network work is async, rate-limited, time-bounded, and cancellable.
+You can add **as many AI models as you want** — each one is three lines: an `endpoint`
+(base URL), a `model-id`, and an `api-key`. There is no limit. Copy the block, rename it, repeat.
+See **[`ENDPOINTS.md`](ENDPOINTS.md)**.
+
+All network work is async, rate-limited, time-bounded, and cancellable.
 
 > **A missing or unreachable endpoint must never stall the server or stop basic Null behaviour.**
 
-| Agent | May do | May **never** do |
+### Optional: routing different jobs to different models
+
+**You can ignore the table below entirely.** If you just add endpoints, every decision uses your
+`default-endpoint`. The table is only for splitting jobs across models — e.g. combat on a fast
+local model, chat on a large cloud model.
+
+| Role | May do | May **never** do |
 | --- | --- | :-: |
 | **ChatCommander** | Produce short chat text | Issue commands, change targets, alter inventories, ban players, authorize actions |
 | **CombatTactician** | Recommend a high-level intent from a strict enum (`hold`, `approach`, `flank`, `retreat`, `shield`, `ranged volley`, `resupply`, `regroup`) | Deal damage directly, bypass the local combat validator |
@@ -333,9 +343,9 @@ Unsupported builds must **fail clearly**, not silently limp along.
 | **GuardianAuditor** | Review *other agents'* proposals for rule violations | Approve its own output, override the validator |
 
 > **Where do I add endpoints?** `config.yml` → `ai.endpoints:`. Define **as many as you want** —
-> each needs a `base-url`, a `model` id, and an `auth-key-env` (the *name* of an environment
-> variable, never the key itself). Then bind roles under `ai.agents:`. Full guide:
-> **[`AGENTS.md`](AGENTS.md)**.
+> each needs an `endpoint` (base URL), a `model-id`, and an `api-key`. Write the key as
+> `env:VARNAME` and only the variable *name* is stored; the real key is read from the server
+> process at call time. Full guide: **[`ENDPOINTS.md`](ENDPOINTS.md)**.
 
 ### Endpoint safety
 

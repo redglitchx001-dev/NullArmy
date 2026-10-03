@@ -76,8 +76,9 @@ public final class CoreTestSuite {
         run("planner prefers survival over objectives", CoreTestSuite::testPlannerSurvival);
         run("planner is deterministic (AC-8)", CoreTestSuite::testPlannerDeterminism);
         run("portal effect cap honours the spec floor of 15", CoreTestSuite::testPortalFloor);
-        run("endpoint config validates model/base-url/timeout", CoreTestSuite::testEndpointValidation);
-        run("endpoint holds the key ENV NAME, never the key", CoreTestSuite::testEndpointKeyIsEnvName);
+        run("endpoint validates endpoint/model-id/timeout", CoreTestSuite::testEndpointValidation);
+        run("endpoint holds env:NAME, never the key itself", CoreTestSuite::testEndpointKeyIsEnvName);
+        run("api-key accepts env:NAME or literal, never leaks", CoreTestSuite::testApiKeyForms);
         run("agent binding builds a deduped endpoint chain", CoreTestSuite::testAgentBindingChain);
         run("registry accepts a valid endpoint/agent config", CoreTestSuite::testRegistryValid);
         run("registry rejects a dangling endpoint reference", CoreTestSuite::testRegistryDanglingRef);
@@ -572,60 +573,86 @@ public final class CoreTestSuite {
 
     // ------------------------------------------------- endpoint / agent config
 
-    private static EndpointConfig endpoint(String id, String base, String model, String env) {
-        return EndpointConfig.builder(id)
-                .baseUrl(base)
-                .model(model)
-                .authKeyEnv(env)
+    private static EndpointConfig endpoint(String id, String url, String modelId, String key) {
+        return EndpointConfig.builder(id, url, modelId)
+                .withApiKey(key)
                 .enabled(true)
                 .build();
     }
 
     private static void testEndpointValidation() {
-        // A valid endpoint builds.
-        EndpointConfig ok = endpoint("openai", "https://api.openai.com/v1", "gpt-4o-mini", "OPENAI_API_KEY");
-        checkEquals("gpt-4o-mini", ok.model(), "model id");
-        checkEquals("OPENAI_API_KEY", ok.authKeyEnv(), "key env name");
+        EndpointConfig ok = endpoint("openai", "https://api.openai.com/v1", "gpt-4o-mini",
+                "env:OPENAI_API_KEY");
+        checkEquals("gpt-4o-mini", ok.modelId(), "model id");
+        checkEquals("https://api.openai.com/v1", ok.endpoint(), "endpoint url");
+        checkEquals("OPENAI_API_KEY", ok.apiKeyEnvName(), "key env name");
+        check(ok.usesEnvVar(), "env: prefix means the key comes from the environment");
         check(ok.enabled(), "enabled");
 
-        // A local endpoint over plain http is allowed (loopback servers have no TLS).
-        EndpointConfig local = endpoint("ollama", "http://127.0.0.1:11434/v1", "llama3", "NULLARMY_LOCAL_KEY");
-        checkEquals("http://127.0.0.1:11434/v1", local.baseUrl(), "local base url");
+        // A local endpoint over plain http is allowed, with no key at all.
+        EndpointConfig local = endpoint("ollama", "http://127.0.0.1:11434/v1", "llama3", "");
+        checkEquals("http://127.0.0.1:11434/v1", local.endpoint(), "local base url");
+        check(local.resolveApiKey() == null, "no key configured resolves to null");
+        check(local.isUsable(), "a keyless local endpoint is still usable");
 
-        // Missing model must be rejected.
         try {
-            EndpointConfig.builder("bad").baseUrl("https://x/v1").authKeyEnv("K").build();
-            throw new AssertionError("expected missing model to be rejected");
-        } catch (IllegalStateException expected) {
+            EndpointConfig.builder("bad", "https://x/v1", "").build();
+            throw new AssertionError("expected missing model-id to be rejected");
+        } catch (IllegalArgumentException expected) {
             // correct
         }
-        // Non-http scheme must be rejected.
         try {
-            EndpointConfig.builder("bad").baseUrl("ftp://x/v1").model("m").authKeyEnv("K").build();
-            throw new AssertionError("expected non-http base-url to be rejected");
-        } catch (IllegalStateException expected) {
+            EndpointConfig.builder("bad", "ftp://x/v1", "m").build();
+            throw new AssertionError("expected non-http endpoint to be rejected");
+        } catch (IllegalArgumentException expected) {
             // correct
         }
-        // Non-positive timeout must be rejected.
         try {
-            EndpointConfig.builder("bad").baseUrl("https://x/v1").model("m")
-                    .authKeyEnv("K").timeoutMillis(0L).build();
+            EndpointConfig.builder("bad", "https://x/v1", "m").timeoutMillis(0L).build();
             throw new AssertionError("expected zero timeout to be rejected");
-        } catch (IllegalStateException expected) {
+        } catch (IllegalArgumentException expected) {
             // correct
         }
     }
 
     private static void testEndpointKeyIsEnvName() {
         EndpointConfig ep = endpoint("openai", "https://api.openai.com/v1", "gpt-4o-mini",
-                "NULLARMY_KEY_THAT_IS_NOT_SET");
-        // The key is only ever resolved from the environment, never stored.
+                "env:NULLARMY_KEY_THAT_IS_NOT_SET");
         check(ep.resolveApiKey() == null, "unset env var must resolve to null");
         check(ep.isUsable() == false, "endpoint without a resolvable key is not usable");
-        // Diagnostics must name the variable, never print a secret.
         String desc = ep.describe();
         check(desc.contains("NULLARMY_KEY_THAT_IS_NOT_SET"), "describe names the env var");
         check(desc.contains("resolves=false"), "describe reports whether it resolved");
+    }
+
+    /**
+     * The api-key field accepts two forms: {@code env:NAME} (recommended) and
+     * a literal key. Neither may ever leak into describe().
+     */
+    private static void testApiKeyForms() {
+        EndpointConfig envForm = endpoint("a", "https://x/v1", "m", "env:MY_VAR");
+        check(envForm.usesEnvVar(), "env: prefix detected");
+        check(!envForm.hasInlineKey(), "env form is not an inline key");
+        checkEquals("MY_VAR", envForm.apiKeyEnvName(), "env var name parsed");
+        check(envForm.describe().contains("env:MY_VAR"), "describe shows the env form");
+
+        EndpointConfig inline = endpoint("b", "https://x/v1", "m", "sk-jeurjwiejbfbfEXAMPLE");
+        check(!inline.usesEnvVar(), "literal key is not an env var");
+        check(inline.hasInlineKey(), "literal key flagged as inline");
+        checkEquals("sk-jeurjwiejbfbfEXAMPLE", inline.resolveApiKey(), "literal key resolves verbatim");
+
+        // describe() must mask, never echo, an inline key.
+        String desc = inline.describe();
+        check(!desc.contains("jeurjwiejbfbf"), "describe must never contain the key body");
+        check(desc.contains("inline("), "describe marks an inline key");
+
+        checkEquals("*****", EndpointConfig.mask("abc"), "short keys fully masked");
+        checkEquals("*****", EndpointConfig.mask(null), "null key fully masked");
+        checkEquals("sk-...LE", EndpointConfig.mask("sk-jeurjwiejbfbfEXAMPLE"), "mask shape");
+
+        EndpointConfig none = endpoint("c", "https://x/v1", "m", "");
+        check(!none.usesEnvVar() && !none.hasInlineKey(), "empty key is neither form");
+        check(none.describe().contains("no-key"), "describe reports no-key");
     }
 
     private static void testAgentBindingChain() {

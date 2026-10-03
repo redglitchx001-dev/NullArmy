@@ -3,19 +3,28 @@
 #
 #  QUICK ANSWER: where do I add endpoints?
 #
-#    1. Declare as many as you like under  ai.endpoints:
-#       each one needs an id, base-url, model, and auth-key-env.
-#    2. Bind agent roles to them under     ai.agents:
-#       each agent takes one `endpoint:` plus an optional `fallbacks:` list.
-#    3. Set  ai.enabled: true  and enable the endpoints/agents you want.
+#    1. Add as many as you like under  ai.endpoints:  — each one is three lines:
 #
-#  There is NO limit on how many endpoints you can define. Endpoints that are
-#  disabled, unreachable, rate-limited, or whose circuit breaker is open are
-#  skipped, and the agent falls back to deterministic local logic. The server
-#  tick is never blocked on a network call.
+#         my-model:
+#           endpoint: "https://api.example.com/v1"   # base URL, http or https
+#           model-id: "example-flash"                # the model id
+#           api-key:  "env:MY_API_KEY"               # key, or env:VARNAME
 #
-#  SECURITY: `auth-key-env` is the NAME of an environment variable, never the
-#  key itself. Keys are never written to config, chat, logs, or the jar.
+#    2. Repeat that block for every model you want. NO LIMIT — add 1, 5 or 50.
+#    3. Set  ai.enabled: true  and set  enabled: true  on the endpoints you want.
+#
+#  That is all. The optional  ai.agents:  section at the bottom is NOT required;
+#  ignore it unless you want different models for different jobs.
+#
+#  Endpoints that are disabled, unreachable, rate-limited, or whose circuit
+#  breaker is open are skipped, and the next one is tried. If none answer, the
+#  plugin falls back to deterministic local logic. The server tick is never
+#  blocked on a network call.
+#
+#  SECURITY: `api-key: "env:NAME"` stores only the NAME of an environment
+#  variable. The real key is read from the server process at call time, so it
+#  is never written to config, chat, logs, git, or the jar. Writing the key
+#  inline works too, but a warning is logged because it sits in plain text.
 # =====================================================================
 
 limits:
@@ -39,9 +48,14 @@ chat:
 #  AI ENDPOINTS  — add as many as you want
 # ---------------------------------------------------------------------
 ai:
-  # Master switch. While false, every agent uses local deterministic logic and
-  # no network call is ever made.
+  # Master switch. While false, nothing calls the network at all and every
+  # decision comes from local deterministic logic.
   enabled: false
+
+  # Which endpoint a role uses when it has no explicit binding below.
+  # Set it to the id of any endpoint defined under ai.endpoints.
+  # Leave it empty ("") to auto-pick the first enabled endpoint.
+  default-endpoint: ""
 
   # Defaults inherited by any endpoint that does not override them.
   defaults:
@@ -49,164 +63,100 @@ ai:
     calls-per-minute: 20
     max-json-bytes: 8192
 
+  # ===================================================================
+  #  ENDPOINTS  -  ADD AS MANY AS YOU WANT. THERE IS NO LIMIT.
+  #
+  #  Every entry is exactly three lines you care about:
+  #
+  #    <name>:        any unique name you like
+  #      endpoint:    the base URL  (must start with http:// or https://)
+  #      model-id:    the model id  (sent with every request)
+  #      api-key:     the key       (env:VARNAME recommended, or the literal key)
+  #
+  #  To add another model: copy any block below, rename it, change those
+  #  three lines. Repeat as many times as you want.
+  #
+  #  More endpoints = better performance for players and for the Null
+  #  Commander: when one model is slow, rate-limited or down, the next
+  #  one in the list is tried instead of the Commander going silent.
+  #
+  #  api-key forms:
+  #    api-key: "env:OPENAI_API_KEY"  <- RECOMMENDED. Only the NAME is
+  #                                      stored here; the real key is read
+  #                                      from the server process environment
+  #                                      at call time, so it never sits in
+  #                                      config.yml, the jar, git or backups.
+  #    api-key: "sk-xxxxx"            <- works, but is plain text on disk.
+  #                                      Can leak through a paste, a
+  #                                      screenshot or a git commit. A
+  #                                      warning is logged at startup.
+  #    api-key: ""                    <- no auth (local models like Ollama)
+  # ===================================================================
   endpoints:
-    # ---- OpenAI ------------------------------------------------------
+    # ---- OpenAI -----------------------------------------------------
     openai:
-      base-url: "https://api.openai.com/v1"
-      model: "gpt-4o-mini"          # <-- model id
-      auth-key-env: "OPENAI_API_KEY" # <-- NAME of the env var holding the key
-      timeout-millis: 3000
-      calls-per-minute: 20
-      max-json-bytes: 8192
-      max-retries: 2
+      endpoint: "https://api.openai.com/v1"
+      model-id: "gpt-4o-mini"
+      api-key: "env:OPENAI_API_KEY"
       enabled: false
 
-    # ---- Local Ollama (no key needed, but the var must still be named) --
-    ollama-local:
-      base-url: "http://127.0.0.1:11434/v1"
-      model: "llama3"
-      auth-key-env: "NULLARMY_LOCAL_KEY"
-      timeout-millis: 2000
-      calls-per-minute: 60
-      max-json-bytes: 8192
-      max-retries: 1
-      enabled: false
-
-    # ---- OpenRouter --------------------------------------------------
-    openrouter:
-      base-url: "https://openrouter.ai/api/v1"
-      model: "meta-llama/llama-3.1-8b-instruct"
-      auth-key-env: "OPENROUTER_API_KEY"
-      timeout-millis: 4000
-      calls-per-minute: 20
-      max-json-bytes: 8192
-      max-retries: 2
-      enabled: false
-
-    # ---- Anthropic ---------------------------------------------------
+    # ---- Anthropic --------------------------------------------------
     anthropic:
-      base-url: "https://api.anthropic.com/v1"
-      model: "claude-3-5-sonnet-latest"
-      auth-key-env: "ANTHROPIC_API_KEY"
-      timeout-millis: 4000
-      calls-per-minute: 20
-      max-json-bytes: 8192
-      max-retries: 2
+      endpoint: "https://api.anthropic.com/v1"
+      model-id: "claude-3-5-sonnet-latest"
+      api-key: "env:ANTHROPIC_API_KEY"
       enabled: false
 
-    # ---- Add your own: copy a block above and change these three -----
-    #   model:        the model id sent with each request
-    #   base-url:     an OpenAI-compatible endpoint (must start with http(s)://)
-    #   auth-key-env: the NAME of the env var that holds your API key
-    #
-    # my-endpoint:
-    #   base-url: "https://my.provider/v1"
-    #   model: "my-model-id"
-    #   auth-key-env: "MY_API_KEY"
+    # ---- OpenRouter (hundreds of models, one key) --------------------
+    openrouter:
+      endpoint: "https://openrouter.ai/api/v1"
+      model-id: "meta-llama/llama-3.1-8b-instruct"
+      api-key: "env:OPENROUTER_API_KEY"
+      enabled: false
+
+    # ---- Google Gemini (OpenAI-compatible endpoint) -------------------
+    gemini:
+      endpoint: "https://generativelanguage.googleapis.com/v1beta/openai"
+      model-id: "gemini-2.0-flash"
+      api-key: "env:GEMINI_API_KEY"
+      enabled: false
+
+    # ---- Local Ollama (no key needed) ---------------------------------
+    ollama-local:
+      endpoint: "http://127.0.0.1:11434/v1"
+      model-id: "llama3"
+      api-key: ""
+      enabled: false
+
+    # ---- COPY THIS BLOCK TO ADD YOUR OWN ------------------------------
+    # my-model:
+    #   endpoint: "https://my.provider/v1"
+    #   model-id: "my-model-id"
+    #   api-key: "env:MY_API_KEY"
     #   enabled: true
 
-  # -------------------------------------------------------------------
-  #  AGENT BINDINGS  — one entry per role; 13 roles available
+  # ===================================================================
+  #  OPTIONAL - per-role routing. YOU DO NOT NEED THIS.
   #
-  #  endpoint:   the primary endpoint id (must exist under ai.endpoints)
-  #  fallbacks:  ordered list tried if the primary fails / is rate-limited
-  #  enabled:    false = local deterministic fallback only, no network
-  #  min-confidence: 0.0..1.0, discard weaker recommendations
-  #  expiry-millis:  a recommendation is ignored once this old
-  # -------------------------------------------------------------------
-  agents:
-    ChatCommander:
-      endpoint: "ollama-local"
-      fallbacks: ["openai"]
-      enabled: false
-      min-confidence: 0.0
-      expiry-millis: 5000
+  #  Omit it entirely and every role uses ai.default-endpoint (or the
+  #  first enabled endpoint). It only exists if you want, say, combat
+  #  decisions on a fast local model and chat on a large cloud model.
+  #
+  #  Valid role names: ChatCommander, CombatTactician, BuilderAgent,
+  #  PathfinderCore, ScoutObserver, ThreatAnalyst, LogisticsQuartermaster,
+  #  MedicTriage, FormationTactician, RedstoneAnalyst, MiningForeman,
+  #  IdleBehaviourDirector, GuardianAuditor
+  # ===================================================================
+  # agents:
+  #   CombatTactician:
+  #     endpoint: "ollama-local"
+  #     fallbacks: ["openai"]
+  #     enabled: false
+  #   ChatCommander:
+  #     endpoint: "openai"
+  #     fallbacks: ["gemini"]
+  #     enabled: false
 
-    CombatTactician:
-      endpoint: "openai"
-      fallbacks: ["anthropic", "ollama-local"]
-      enabled: false
-      min-confidence: 0.35
-      expiry-millis: 2500
-
-    BuilderAgent:
-      endpoint: "openai"
-      fallbacks: ["ollama-local"]
-      enabled: false
-      min-confidence: 0.5
-      expiry-millis: 10000
-
-    PathfinderCore:
-      endpoint: "ollama-local"
-      fallbacks: []
-      enabled: false
-      min-confidence: 0.2
-      expiry-millis: 3000
-
-    ScoutObserver:
-      endpoint: "ollama-local"
-      fallbacks: ["openai"]
-      enabled: false
-      min-confidence: 0.3
-      expiry-millis: 4000
-
-    ThreatAnalyst:
-      endpoint: "openai"
-      fallbacks: ["ollama-local"]
-      enabled: false
-      min-confidence: 0.4
-      expiry-millis: 2500
-
-    LogisticsQuartermaster:
-      endpoint: "openai"
-      fallbacks: []
-      enabled: false
-      min-confidence: 0.4
-      expiry-millis: 10000
-
-    MedicTriage:
-      endpoint: "ollama-local"
-      fallbacks: ["openai"]
-      enabled: false
-      min-confidence: 0.3
-      expiry-millis: 3000
-
-    FormationTactician:
-      endpoint: "ollama-local"
-      fallbacks: []
-      enabled: false
-      min-confidence: 0.2
-      expiry-millis: 3000
-
-    RedstoneAnalyst:
-      endpoint: "openai"
-      fallbacks: ["ollama-local"]
-      enabled: false
-      min-confidence: 0.5
-      expiry-millis: 10000
-
-    MiningForeman:
-      endpoint: "ollama-local"
-      fallbacks: []
-      enabled: false
-      min-confidence: 0.4
-      expiry-millis: 8000
-
-    IdleBehaviourDirector:
-      endpoint: "ollama-local"
-      fallbacks: []
-      enabled: false
-      min-confidence: 0.0
-      expiry-millis: 5000
-
-    GuardianAuditor:
-      endpoint: "openai"
-      fallbacks: ["ollama-local"]
-      enabled: false
-      min-confidence: 0.6
-      expiry-millis: 4000
-
-# ---------------------------------------------------------------------
 policy:
   # All destructive behaviour defaults to false (spec 8).
   griefing-enabled: false

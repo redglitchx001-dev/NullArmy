@@ -103,7 +103,7 @@ Confirm you have the source:
 ```bash
 ls
 # BUILD.md  IMPLEMENTATION_PLAN.md  MECHANICS_EXPANSION.md  NullArmy_Master_Prompt.md
-# README.md  STATUS.md  TRACEABILITY.md  AGENTS.md  BUILD_TUTORIAL.md
+# README.md  STATUS.md  TRACEABILITY.md  ENDPOINTS.md  BUILD_TUTORIAL.md
 # build.gradle.kts  core/  gradle.properties  nms/  plugin/  settings.gradle.kts
 ```
 

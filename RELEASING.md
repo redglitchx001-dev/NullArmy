@@ -236,7 +236,7 @@ Type a number in chat to choose how many Nulls to summon.
 
 ### AI (optional)
 NullArmy works fully offline. To add an AI endpoint, see
-[AGENTS.md](https://github.com/redglitchx001-dev/NullArmy/blob/main/AGENTS.md).
+[ENDPOINTS.md](https://github.com/redglitchx001-dev/NullArmy/blob/main/ENDPOINTS.md).
 
 ### ⚠️ Experimental
 This is the first public build. Please report bugs at

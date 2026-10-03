@@ -87,10 +87,15 @@ public final class PluginConfig {
                 if (s == null) {
                     continue;
                 }
-                EndpointConfig ep = EndpointConfig.builder(id)
-                        .baseUrl(s.getString("base-url", ""))
-                        .model(s.getString("model", ""))
-                        .authKeyEnv(s.getString("auth-key-env", ""))
+                // Accepted spellings: the current three-field form, plus the
+                // older base-url/model/auth-key-env names so existing configs
+                // keep working.
+                String url = firstNonEmpty(s, "endpoint", "base-url");
+                String model = firstNonEmpty(s, "model-id", "model");
+                String key = firstNonEmpty(s, "api-key", "api-key-env", "auth-key-env");
+
+                EndpointConfig ep = EndpointConfig.builder(id, url, model)
+                        .withApiKey(key)
                         .timeoutMillis(s.getLong("timeout-millis",
                                 config.getLong("ai.defaults.timeout-millis", 3000L)))
                         .callsPerMinute(s.getInt("calls-per-minute",
@@ -101,13 +106,27 @@ public final class PluginConfig {
                         .enabled(s.getBoolean("enabled", false))
                         .build();
                 endpoints.put(id, ep);
+                if (logger != null && ep.hasInlineKey()) {
+                    logger.warning("[NullArmy] Endpoint '" + id
+                            + "' has its API key written inline in config.yml. It is plain text on"
+                            + " disk and can leak through a paste, a backup or a git commit."
+                            + " Prefer  api-key: \"env:YOUR_VAR_NAME\"  instead.");
+                }
             }
         }
 
         // --------------------------------------------------------------- agents
-        // Start from every known role, disabled, then apply overrides.
+        // The ai.agents: section is OPTIONAL. When absent, every role simply
+        // uses the default endpoint, so an owner who only cares about adding
+        // models never has to think about roles at all.
+        String defaultEndpointId = resolveDefaultEndpointId(config);
+        boolean autoEnableRoles = aiEnabled && !defaultEndpointId.isEmpty();
+
         for (AgentRole role : AgentRole.values()) {
-            bindings.put(role, AgentBinding.builder(role).enabled(false).build());
+            bindings.put(role, AgentBinding.builder(role)
+                    .primaryEndpointId(defaultEndpointId)
+                    .enabled(autoEnableRoles)
+                    .build());
         }
 
         ConfigurationSection agSection = config.getConfigurationSection("ai.agents");
@@ -154,6 +173,35 @@ public final class PluginConfig {
                         + " endpoint(s) across " + AgentRole.values().length + " agent role(s).");
             }
         }
+    }
+
+    /**
+     * Picks the endpoint every role uses when it has no explicit binding:
+     * {@code ai.default-endpoint} if set, otherwise the first enabled
+     * endpoint, otherwise none (which means local deterministic logic only).
+     */
+    private String resolveDefaultEndpointId(FileConfiguration config) {
+        String configured = config.getString("ai.default-endpoint", "");
+        if (configured != null && !configured.trim().isEmpty()) {
+            return configured.trim();
+        }
+        for (EndpointConfig ep : endpoints.values()) {
+            if (ep.enabled()) {
+                return ep.id();
+            }
+        }
+        return "";
+    }
+
+    /** First non-empty value among the given config keys, or "". */
+    private static String firstNonEmpty(ConfigurationSection section, String... keys) {
+        for (String key : keys) {
+            String value = section.getString(key, "");
+            if (value != null && !value.trim().isEmpty()) {
+                return value.trim();
+            }
+        }
+        return "";
     }
 
     public Caps caps() { return caps; }
