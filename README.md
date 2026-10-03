@@ -75,12 +75,24 @@ The design philosophy is blunt: **if a real survival player can't do it, a Null 
 | **Build system** | None yet |
 | **Lines of Java written** | 0 |
 | **Mechanics implemented (of 221)** | 0 |
-| **Current phase** | [Phase 0 — Repository & feasibility audit](#roadmap) |
-| **What exists** | [`NullArmy_Master_Prompt.md`](NullArmy_Master_Prompt.md) — a 537-line engineering brief |
+| **Current phase** | **Phase 0 — COMPLETE** (repository & feasibility audit) · gated on two owner decisions |
+| **What exists** | [`NullArmy_Master_Prompt.md`](NullArmy_Master_Prompt.md) — the 537-line engineering brief, plus the Phase 0 planning set below |
 
 This README is the **public contract**: it describes what NullArmy will be, the invariants it will never break, and the bar it must clear before anything gets called "done." It is written from the master prompt so that the goalposts are visible before a single class is compiled.
 
 Everything below is a **commitment**, not a boast. As phases land, the traceability tables get filled in — and per the project's own rules, anything not yet implemented stays marked as such. **Nothing gets labelled "complete" that isn't.**
+
+### Phase 0 documents
+
+The audit is done. These are its outputs:
+
+| Document | Contents |
+| --- | --- |
+| [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | Environment audit, exact version compatibility table, NMS/packet feasibility notes, architecture diagram, module plan, ADRs, vanilla-impossibility register, documented assumptions, risk register |
+| [`STATUS.md`](STATUS.md) | Phase state, core-feature traceability, acceptance-criteria scoreboard, Phase 0 handoff |
+| [`TRACEABILITY.md`](TRACEABILITY.md) | All 221 mechanics, extracted from the spec — every item marked `not started` |
+
+> **Two blockers surfaced in Phase 0 and both need an owner decision before code is written:** the entire 1.21.x target range is **end-of-life** (Paper 1.21.11 support ended 2026-06-15), and this build environment has **no JDK, no Gradle, and no access to `repo.papermc.io`**. See the plan's [§8 Owner decisions](IMPLEMENTATION_PLAN.md#8-owner-decisions-required).
 
 ---
 
@@ -376,8 +388,8 @@ Implementation runs in gated phases. Each phase ends with a handoff stating file
 
 | Phase | Focus | Status |
 | --- | :-: | --- |
-| **0** | Repository & feasibility audit — architecture diagram, module plan, exact version compatibility table, NMS/packet feasibility notes, list of vanilla impossibilities, resolved assumptions | 🟡 **Current** |
-| **1** | Build skeleton & version adapters — build, plugin metadata, config, permissions, adapter boundaries, lifecycle. Compiles on the first declared target | ⬜ |
+| **0** | Repository & feasibility audit — architecture diagram, module plan, exact version compatibility table, NMS/packet feasibility notes, list of vanilla impossibilities, resolved assumptions | ✅ **Complete** |
+| **1** | Build skeleton & version adapters — build, plugin metadata, config, permissions, adapter boundaries, lifecycle. Compiles on the first declared target | ⬜ **Gated** — needs owner decisions D-1 + D-2 |
 | **2** | Authoritative NPC identity & lifecycle — server-side gameplay entity, packet/profile/skin, unique names, persistence, two commanders, health/equipment/inventory, death/drops, safe spawn validation | ⬜ |
 | **3** | Commands, summoning & visuals — Call Horn/Totem validation, chat amount flow, count caps, 15 portal effects, physical emergence, permissions, `/null gui` blueprint | ⬜ |
 | **4** | Perception, movement, collision & formations — legal perception, incremental pathing, Boids separation, no-clumping, follow, all four formations, door/terrain traversal, stuck recovery | ⬜ |
@@ -393,7 +405,12 @@ Implementation runs in gated phases. Each phase ends with a handoff stating file
 
 ## Building
 
-**There is nothing to build yet.** Build instructions land with **Phase 1**.
+**There is nothing to build yet.** Build instructions land with **Phase 1**, which is currently gated on two owner decisions (see [`IMPLEMENTATION_PLAN.md` §8](IMPLEMENTATION_PLAN.md#8-owner-decisions-required)).
+
+Two Phase 0 findings affect anyone about to try:
+
+- **The declared target range is end-of-life.** Paper 1.21.11 support ended 2026-06-15 and 1.21.10 ended 2026-01-17; every version from 1.21 → 1.21.11 is `UNSUPPORTED`. The current Minecraft release is 26.3.
+- **The reference sandbox cannot build this project.** No JDK, no Gradle, and network access limited to `github.com` — `repo.papermc.io` (which hosts the mandatory Paper dev bundle), Maven Central, Gradle distributions, and JDK downloads are all unreachable. Build/verify must happen on a properly provisioned machine.
 
 Expected shape once Phase 1 completes:
 
