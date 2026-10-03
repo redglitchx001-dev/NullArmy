@@ -95,6 +95,7 @@ The audit is done. These are its outputs:
 | [`BUILD.md`](BUILD.md) | Exact build and verification commands, and what is/isn't proven |
 | [`AGENTS.md`](AGENTS.md) | Endpoint & agent configuration: where to add endpoints, the 13 roles, authority model, security rules |
 | [`BUILD_TUTORIAL.md`](BUILD_TUTORIAL.md) | Step-by-step: from a fresh machine to a running `NullArmy.jar` |
+| [`RELEASING.md`](RELEASING.md) | How to publish: versioning, CI workflow, checksums, GitHub releases, licence choice |
 
 > **Two blockers surfaced in Phase 0 and both need an owner decision:** the entire 1.21.x target range is **end-of-life** (Paper 1.21.11 support ended 2026-06-15), and this build environment has **no JDK, no Gradle, and no access to `repo.papermc.io`**. See the plan's [§8 Owner decisions](IMPLEMENTATION_PLAN.md#8-owner-decisions-required).
 
