@@ -157,11 +157,36 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
                 // Unknown on this server version: skip it rather than fail the summon.
                 continue;
             }
-            int index = slot.slot();
-            if (index < 0 || index >= inv.getSize()) {
-                continue;
+            org.bukkit.inventory.ItemStack stack =
+                    new org.bukkit.inventory.ItemStack(material, slot.count());
+
+            // A real player inventory is 41 slots: 0-35 storage and hotbar,
+            // then 36-40 are NOT part of the main inventory - Bukkit exposes
+            // them as dedicated armour/offhand slots. Writing 36-40 with
+            // setItem() would silently do nothing, so map them explicitly.
+            switch (slot.slot()) {
+                case redglitchx.nullarmy.nms.LoadoutSlot.SLOT_BOOTS:
+                    inv.setBoots(stack);
+                    break;
+                case redglitchx.nullarmy.nms.LoadoutSlot.SLOT_LEGGINGS:
+                    inv.setLeggings(stack);
+                    break;
+                case redglitchx.nullarmy.nms.LoadoutSlot.SLOT_CHESTPLATE:
+                    inv.setChestplate(stack);
+                    break;
+                case redglitchx.nullarmy.nms.LoadoutSlot.SLOT_HELMET:
+                    inv.setHelmet(stack);
+                    break;
+                case redglitchx.nullarmy.nms.LoadoutSlot.SLOT_OFFHAND:
+                    inv.setItemInOffHand(stack);
+                    break;
+                default:
+                    int index = slot.slot();
+                    if (index >= 0 && index < 36) {
+                        inv.setItem(index, stack);
+                    }
+                    break;
             }
-            inv.setItem(index, new org.bukkit.inventory.ItemStack(material, slot.count()));
         }
     }
 }

@@ -114,8 +114,8 @@ public final class SquadManager {
                 // never waits on a network call.
                 String skinValue = "";
                 String skinSignature = "";
-                if (plugin != null && plugin.skins() != null) {
-                    SkinData skin = plugin.skins().resolveCached(plugin.skins().skinOwner());
+                if (plugin != null && plugin.skins() != null && plugin.pluginConfig() != null) {
+                    SkinData skin = plugin.skins().resolveCached(plugin.pluginConfig().nullSkinName());
                     if (skin != null && skin.complete()) {
                         skinValue = skin.value();
                         skinSignature = skin.signature();

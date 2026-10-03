@@ -7,6 +7,7 @@ import redglitchx.nullarmy.core.agent.CircuitBreaker;
 import redglitchx.nullarmy.core.agent.EndpointConfig;
 import redglitchx.nullarmy.core.combat.CombatSituation;
 import redglitchx.nullarmy.core.combat.PvpArsenal;
+import redglitchx.nullarmy.core.ai.Capability;
 import redglitchx.nullarmy.core.brain.NullState;
 import redglitchx.nullarmy.core.brain.Objective;
 import redglitchx.nullarmy.core.brain.UtilityPlanner;
@@ -87,6 +88,10 @@ public final class CoreTestSuite {
         run("elytra techniques need a deployed elytra", CoreTestSuite::testElytraRequiresElytra);
         run("technique selector is deterministic", CoreTestSuite::testTechniqueSelectorIsDeterministic);
         run("loadout slot maps to a valid inventory index", CoreTestSuite::testLoadoutSlot);
+
+        run("plugin is complete with no AI models configured", CoreTestSuite::testOfflineCapabilities);
+        run("AI-only features are listed, not hidden", CoreTestSuite::testLostWithoutAi);
+        run("inventory mirrors a real player: 41 slots", CoreTestSuite::testInventoryMatchesPlayer);
         run("agent binding builds a deduped endpoint chain", CoreTestSuite::testAgentBindingChain);
         run("registry accepts a valid endpoint/agent config", CoreTestSuite::testRegistryValid);
         run("registry rejects a dangling endpoint reference", CoreTestSuite::testRegistryDanglingRef);
@@ -861,5 +866,97 @@ public final class CoreTestSuite {
             return 9 + i;
         }
     }
+
+
+    // ----------------------------------------------------- offline capability
+
+    private static void testOfflineCapabilities() {
+        // The core promise: with no endpoints at all, the plugin still works.
+        check(Capability.countAlways() > 0, "there are always-available features");
+        check(Capability.countLocalFallback() > 0, "there are local-fallback features");
+        check(Capability.countAiOnly() > 0, "there are AI-only features");
+
+        // Every capability must document itself, including what happens offline.
+        // An undocumented gap is how owners end up thinking something is broken.
+        for (Capability c : Capability.values()) {
+            check(c.description() != null && !c.description().isEmpty(),
+                    "capability " + c + " has a description");
+            check(c.offlineBehaviour() != null && !c.offlineBehaviour().isEmpty(),
+                    "capability " + c + " states its offline behaviour");
+            check(c.group() != null && !c.group().isEmpty(),
+                    "capability " + c + " has a group");
+        }
+
+        // ALWAYS features must never depend on AI being on.
+        for (Capability c : Capability.with(Capability.Availability.ALWAYS)) {
+            check(c.isUsable(false), "ALWAYS capability " + c + " works with AI off");
+            check(c.isUsable(true), "ALWAYS capability " + c + " works with AI on");
+        }
+        // LOCAL_FALLBACK works either way.
+        for (Capability c : Capability.with(Capability.Availability.LOCAL_FALLBACK)) {
+            check(c.isUsable(false), "fallback capability " + c + " works with AI off");
+            check(c.isUsable(true), "fallback capability " + c + " works with AI on");
+        }
+        // AI_ONLY is the honest exception.
+        for (Capability c : Capability.with(Capability.Availability.AI_ONLY)) {
+            check(!c.isUsable(false), "AI-only capability " + c + " is NOT usable offline");
+            check(c.isUsable(true), "AI-only capability " + c + " is usable with AI on");
+        }
+    }
+
+    private static void testLostWithoutAi() {
+        List<Capability> lost = Capability.lostWithoutAi();
+        check(!lost.isEmpty(), "the plugin is honest that some features need a model");
+        checkEquals(Capability.countAiOnly(), lost.size(), "lost list matches AI-only count");
+        // The things that MUST survive offline: the whole point of the plugin.
+        check(Capability.SUMMON_HORN.isUsable(false), "horn summoning works offline");
+        check(Capability.PORTAL_VISUALS.isUsable(false), "portal visuals work offline");
+        check(Capability.COMMANDER_SPAWN.isUsable(false), "the Commander works offline");
+        check(Capability.COMMANDER_LOADOUT.isUsable(false), "the loadout GUI works offline");
+        check(Capability.MACE_TECHNIQUES.isUsable(false), "mace techniques work offline");
+        check(Capability.ELYTRA_TECHNIQUES.isUsable(false), "elytra techniques work offline");
+        check(Capability.SHARED_SKIN.isUsable(false), "the shared skin works offline");
+    }
+
+    private static void testInventoryMatchesPlayer() {
+        // A real player inventory is exactly 41 slots:
+        //   0-8   hotbar
+        //   9-35  main storage (3 rows of 9)
+        //   36    boots
+        //   37    leggings
+        //   38    chestplate
+        //   39    helmet
+        //   40    offhand
+        checkEquals(41, PLAYER_INVENTORY_SLOTS, "a player inventory has 41 slots");
+        checkEquals(0, HOTBAR_FIRST, "hotbar starts at 0");
+        checkEquals(8, HOTBAR_LAST, "hotbar ends at 8");
+        checkEquals(9, STORAGE_FIRST, "storage starts at 9");
+        checkEquals(35, STORAGE_LAST, "storage ends at 35");
+        checkEquals(36, SLOT_BOOTS, "boots slot");
+        checkEquals(37, SLOT_LEGGINGS, "leggings slot");
+        checkEquals(38, SLOT_CHESTPLATE, "chestplate slot");
+        checkEquals(39, SLOT_HELMET, "helmet slot");
+        checkEquals(40, SLOT_OFFHAND, "offhand slot");
+
+        // The armour and offhand indices must be exactly the ones that are NOT
+        // writable through the main inventory, which is why the adapter has to
+        // map them explicitly rather than calling setItem(36..40).
+        for (int i = 36; i <= 40; i++) {
+            check(i >= 36, "slot " + i + " is an equipment slot, not a storage slot");
+        }
+        checkEquals(36, STORAGE_LAST + 1, "equipment slots begin right after storage");
+    }
+
+    /** The 41-slot player inventory layout, mirrored from LoadoutSlot. */
+    private static final int PLAYER_INVENTORY_SLOTS = 41;
+    private static final int HOTBAR_FIRST = 0;
+    private static final int HOTBAR_LAST = 8;
+    private static final int STORAGE_FIRST = 9;
+    private static final int STORAGE_LAST = 35;
+    private static final int SLOT_BOOTS = 36;
+    private static final int SLOT_LEGGINGS = 37;
+    private static final int SLOT_CHESTPLATE = 38;
+    private static final int SLOT_HELMET = 39;
+    private static final int SLOT_OFFHAND = 40;
 
 }

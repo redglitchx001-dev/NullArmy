@@ -43,29 +43,39 @@ silently doing nothing.
 
 ---
 
-## The skin: one account, every Null
+## The skin: configurable, for Nulls and the Commander
 
-**Every Null and the Commander wear the skin of one Minecraft account.**
+Every Null and the Commander wear the skin of a Minecraft account **you choose**. Set it in
+`config.yml`:
 
-```java
-public static final String DEFAULT_SKIN_OWNER = "uH3WR2v0ti0uTHJ";
+```yaml
+skins:
+  # Skin for ordinary Nulls.
+  nulls: "uH3WR2v0ti0uTHJ"
+
+  # Skin for the Commander. Empty = same as the Null skin above.
+  commander: ""
 ```
 
-That is `SkinResolver.DEFAULT_SKIN_OWNER`. One lookup, cached once, reused for every NPC — so a
-hundred Nulls cost **one** HTTP request, not a hundred, and they all look identical.
+Two independent values. Leave `commander` empty and it inherits `nulls`, so setting one line
+changes every NPC.
 
-> ### ⚠️ Check that this account actually exists
-> Heads up: `uH3WR2v0ti0uTHJ` first appears in `NullArmy_Master_Prompt.md` §3 as an **example of
-> the random name format** Nulls are given — not as a verified Minecraft account. If no account
-> with that name exists, the lookup returns nothing and **every Null falls back to the default
-> Steve/Alex skin**. Nothing breaks; you just won't see the skin you expected.
->
-> To use a skin you actually want, point it at a real account:
-> ```
-> -Dnullarmy.skin.owner=YourRealAccountName
-> ```
-> or change `DEFAULT_SKIN_OWNER`. This is the single most likely reason the skin "doesn't work"
-> on the first run, and it is a config value, not a bug.
+You can also override without editing any file, which is handy when the name turns out to be
+wrong and the server is already running:
+
+```
+-Dnullarmy.skin.null=SomeName
+-Dnullarmy.skin.commander=SomeOtherName
+```
+
+`/null skin` shows what is configured, what inherited from what, and whether each resolved.
+
+> ### ⚠️ If the name isn't a real account, nothing breaks — you just won't see that skin
+> `uH3WR2v0ti0uTHJ` first appears in `NullArmy_Master_Prompt.md` §3 as an **example of the random
+> name format** Nulls are given, not as a verified Minecraft account. If no such account exists,
+> the lookup returns nothing and those NPCs keep the default Steve/Alex skin. The plugin logs a
+> warning naming exactly which value failed and how to change it. **Cosmetic only — a missing
+> skin never blocks a spawn.**
 
 ### How the skin is resolved
 
@@ -148,6 +158,30 @@ The loadout crosses into the version-neutral NMS layer as `{slot, material name,
 **material and count survive; enchantments, custom names and NBT do not.** Adding NBT support
 means either giving `nms:api` a server dependency or serialising item NBT as a string — both are
 reasonable, neither is done.
+
+---
+
+## Inventory: the same 41 slots a real player has
+
+The Commander's inventory is **exactly** a real player's — 41 slots, same indices, same meaning:
+
+| Slots | What |
+| --- | --- |
+| `0-8` | hotbar |
+| `9-35` | main storage (3 rows of 9) |
+| `36` | boots |
+| `37` | leggings |
+| `38` | chestplate |
+| `39` | helmet |
+| `40` | offhand |
+
+The GUI mirrors that layout, so what you see is what the Commander actually carries.
+
+> **Why this is called out:** Bukkit's `PlayerInventory` exposes only slots `0-35` through
+> `setItem()`. The armour and offhand slots are separate methods (`setBoots`, `setLeggings`,
+> `setChestplate`, `setHelmet`, `setItemInOffHand`). Writing indices `36-40` with `setItem()`
+> **silently does nothing** — the classic way a loadout "just doesn't work". The adapter maps
+> them explicitly, and a test pins the layout.
 
 ---
 

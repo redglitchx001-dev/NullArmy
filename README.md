@@ -361,6 +361,21 @@ local model, chat on a large cloud model.
 
 ---
 
+## Works with zero AI models
+
+**NullArmy is complete with no endpoints configured.** Summoning, the portal, movement, flocking,
+pathfinding, the item ledger, every safety policy, the Commander, its loadout GUI, its skin and
+all mace/elytra combat techniques work fully offline.
+
+Only five extras genuinely need a model — free-form Null chat, builds described in a sentence,
+redstone interpretation, mining plans, and model-audits-model. Run `/null features` for the exact
+list on your server. Everything else either never used a model or has a deterministic local
+fallback.
+
+Endpoints are an upgrade, not a requirement: **[`ENDPOINTS.md`](ENDPOINTS.md)**.
+
+---
+
 ## The Null Commander
 
 `/null commander` summons one named Null that steps out of a portal. It wears the skin of

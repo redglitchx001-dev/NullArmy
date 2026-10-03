@@ -7,6 +7,7 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 
+import redglitchx.nullarmy.core.ai.Capability;
 import redglitchx.nullarmy.core.config.Caps;
 import redglitchx.nullarmy.nms.VersionAdapter;
 import redglitchx.nullarmy.plugin.NullArmyPlugin;
@@ -39,7 +40,7 @@ public final class NullCommand implements CommandExecutor, TabCompleter {
 
     private static final List<String> SUBCOMMANDS = Arrays.asList(
             "gui", "chat", "attack", "attackx", "follow", "build",
-            "commander", "loadout", "skin",
+            "commander", "loadout", "skin", "features",
             "status", "stop", "dismiss", "ban", "kill");
 
     private final NullArmyPlugin plugin;
@@ -55,7 +56,7 @@ public final class NullCommand implements CommandExecutor, TabCompleter {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0) {
-            sender.sendMessage("NullArmy. Usage: /null <gui|commander|loadout|skin|chat|attack|attackx|follow|build|status|stop|dismiss|ban|kill>");
+            sender.sendMessage("NullArmy. Usage: /null <gui|commander|loadout|skin|features|chat|attack|attackx|follow|build|status|stop|dismiss|ban|kill>");
             return true;
         }
 
@@ -64,6 +65,7 @@ public final class NullCommand implements CommandExecutor, TabCompleter {
             case "commander": return commander(sender);
             case "loadout": return loadoutGui(sender);
             case "skin": return skinStatus(sender);
+            case "features": return features(sender);
             case "status": return status(sender);
             case "stop":
             case "dismiss": return dismiss(sender);
@@ -135,13 +137,48 @@ public final class NullCommand implements CommandExecutor, TabCompleter {
         return true;
     }
 
-    /** Reports skin resolution state. Never prints a texture blob in full. */
+    /** Reports which skins are configured and whether they resolved. */
     private boolean skinStatus(CommandSender sender) {
         if (!require(sender, "nullarmy.admin")) {
             return true;
         }
+        sender.sendMessage("Null skin:      " + config.nullSkinName());
+        sender.sendMessage("Commander skin: " + config.commanderSkinName()
+                + (config.commanderSkinName().equalsIgnoreCase(config.nullSkinName())
+                   ? " (inherited)" : ""));
+        sender.sendMessage("Change them under  skins:  in config.yml, or start the"
+                + " server with -Dnullarmy.skin.null=Name");
         for (String line : plugin.skins().diagnostics()) {
-            sender.sendMessage(line);
+            sender.sendMessage("  " + line);
+        }
+        return true;
+    }
+
+    /**
+     * Tells the owner exactly what works right now and what an AI model would
+     * add. Deliberately honest: with no endpoints the plugin is complete, and
+     * the few things that need a model are listed rather than glossed over.
+     */
+    private boolean features(CommandSender sender) {
+        if (!require(sender, "nullarmy.admin")) {
+            return true;
+        }
+        boolean ai = config.aiUsable();
+        sender.sendMessage("NullArmy features - AI " + (ai ? "ENABLED" : "OFF (running fully offline)"));
+        sender.sendMessage("  always available:   " + Capability.countAlways());
+        sender.sendMessage("  local fallback:     " + Capability.countLocalFallback()
+                + " (work offline; a model only refines them)");
+        sender.sendMessage("  need an AI model:   " + Capability.countAiOnly());
+
+        if (!ai) {
+            sender.sendMessage("");
+            sender.sendMessage("Without an AI endpoint these are unavailable:");
+            for (Capability c : Capability.lostWithoutAi()) {
+                sender.sendMessage("  - " + c.description());
+                sender.sendMessage("      offline: " + c.offlineBehaviour());
+            }
+            sender.sendMessage("");
+            sender.sendMessage("Everything else works. To add a model see ENDPOINTS.md.");
         }
         return true;
     }

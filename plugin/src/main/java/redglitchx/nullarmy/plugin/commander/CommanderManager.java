@@ -89,17 +89,39 @@ public final class CommanderManager implements Listener {
      * skin is still a Null.</p>
      */
     public void preloadSkin() {
-        skins.resolveAsync(skins.skinOwner(), data -> {
+        // Warm both skins: the Commander's, and the one ordinary Nulls share.
+        // A failure is cosmetic and is reported, never fatal.
+        preloadOne(plugin.pluginConfig().commanderSkinName(), true);
+        String nullSkin = plugin.pluginConfig().nullSkinName();
+        if (!nullSkin.equalsIgnoreCase(plugin.pluginConfig().commanderSkinName())) {
+            preloadOne(nullSkin, false);
+        }
+    }
+
+    private void preloadOne(String username, boolean forCommander) {
+        if (username == null || username.trim().isEmpty()) {
+            return;
+        }
+        skins.resolveAsync(username, data -> {
             if (data != null && data.complete()) {
-                this.skin = data;
-                plugin.getLogger().info("[NullArmy] Commander skin ready from "
-                        + data.source() + " (" + skins.skinOwner() + ").");
+                if (forCommander) {
+                    this.skin = data;
+                }
+                plugin.getLogger().info("[NullArmy] Skin ready for '" + username
+                        + "' from " + data.source() + ".");
             } else {
                 plugin.getLogger().warning("[NullArmy] Could not resolve the skin for '"
-                        + skins.skinOwner() + "'. Nulls will use the default skin."
-                        + " The plugin still works - this is cosmetic only.");
+                        + username + "'. Those NPCs will use the default skin."
+                        + " Set skins.nulls / skins.commander in config.yml, or pass"
+                        + " -Dnullarmy.skin.null=Name. The plugin still works -"
+                        + " a missing skin is cosmetic only.");
             }
         });
+    }
+
+    /** The username whose skin the Commander uses, after config resolution. */
+    public String skinName() {
+        return plugin.pluginConfig().commanderSkinName();
     }
 
     public SkinData skin() { return skin; }

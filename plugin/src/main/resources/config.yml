@@ -48,8 +48,15 @@ chat:
 #  AI ENDPOINTS  — add as many as you want
 # ---------------------------------------------------------------------
 ai:
-  # Master switch. While false, nothing calls the network at all and every
-  # decision comes from local deterministic logic.
+  # Master switch.
+  #
+  # FALSE (default) = the plugin is COMPLETE and FULLY FUNCTIONAL with no AI
+  # at all. Every structural feature works: summoning, portal, movement,
+  # flocking, pathfinding, the Commander, its loadout, the shared skin, and
+  # all mace/elytra combat techniques. A few extras need a model - run
+  # /null features to see exactly which.
+  #
+  # TRUE = additionally use the endpoints below to enrich decisions.
   enabled: false
 
   # Which endpoint a role uses when it has no explicit binding below.
@@ -156,6 +163,33 @@ ai:
   #     endpoint: "openai"
   #     fallbacks: ["gemini"]
   #     enabled: false
+
+skins:
+  # -------------------------------------------------------------------
+  #  The skin every Null wears, and the skin the Commander wears.
+  #
+  #  Put the Mojang username of ANY account whose skin you want.
+  #  The plugin looks the skin up once and reuses it for every NPC.
+  #
+  #  If the name does not exist, or the lookup fails, the plugin logs a
+  #  warning and Nulls keep the default skin. NOTHING BREAKS - a missing
+  #  skin is purely cosmetic and never blocks a spawn.
+  #
+  #  Leave "commander" empty to make the Commander use the same skin as
+  #  ordinary Nulls.
+  #
+  #  You can also override without editing this file:
+  #    -Dnullarmy.skin.null=SomeName
+  #    -Dnullarmy.skin.commander=SomeOtherName
+  # -------------------------------------------------------------------
+
+  # Skin for ordinary Nulls.
+  # NOTE: the key is "nulls", not "null" - in YAML an unquoted `null` is the
+  # null value, not the word, and it would silently become an empty key.
+  nulls: "uH3WR2v0ti0uTHJ"
+
+  # Skin for the Commander. Empty = same as the Null skin above.
+  commander: ""
 
 commander:
   # The Commander's in-game username (player names cannot contain spaces).

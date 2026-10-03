@@ -1,4 +1,5 @@
 package redglitchx.nullarmy.plugin.config;
+import redglitchx.nullarmy.plugin.skin.SkinResolver;
 
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
@@ -225,6 +226,61 @@ public final class PluginConfig {
     // ------------------------------------------------------------------- AI model
 
     public boolean aiEnabled() { return aiEnabled; }
+
+    /**
+     * True when AI is switched on <i>and</i> at least one configured endpoint
+     * actually resolves. Used to decide whether AI-only features are live.
+     */
+    public boolean aiUsable() {
+        if (!aiEnabled) {
+            return false;
+        }
+        for (EndpointConfig ep : endpoints.values()) {
+            if (ep.isUsable()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The Minecraft username whose skin ordinary Nulls wear.
+     *
+     * <p>Config wins over nothing; the system property wins over config, so an
+     * owner can override without editing a file. Falls back to
+     * {@link SkinResolver#DEFAULT_SKIN_OWNER}.</p>
+     */
+    public String nullSkinName() {
+        String override = System.getProperty("nullarmy.skin.null");
+        if (override != null && !override.trim().isEmpty()) {
+            return override.trim();
+        }
+        // The key is "nulls": an unquoted YAML `null` is the null value, not
+        // the word, so using it as a key would silently resolve to nothing.
+        String configured = config.getString("skins.nulls", "");
+        if (configured != null && !configured.trim().isEmpty()) {
+            return configured.trim();
+        }
+        return SkinResolver.DEFAULT_SKIN_OWNER;
+    }
+
+    /**
+     * The Minecraft username whose skin the Commander wears.
+     *
+     * <p>Defaults to whatever {@link #nullSkinName()} is, so setting one
+     * value changes every NPC, but the two can be set independently.</p>
+     */
+    public String commanderSkinName() {
+        String override = System.getProperty("nullarmy.skin.commander");
+        if (override != null && !override.trim().isEmpty()) {
+            return override.trim();
+        }
+        String configured = config.getString("skins.commander", "");
+        if (configured != null && !configured.trim().isEmpty()) {
+            return configured.trim();
+        }
+        return nullSkinName();
+    }
 
     public Map<String, EndpointConfig> endpoints() {
         return Collections.unmodifiableMap(endpoints);

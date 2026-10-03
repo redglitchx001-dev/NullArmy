@@ -1,213 +1,324 @@
-# NullArmy — Endpoints & Agents
+# Endpoints — add as many AI models as you want
 
 **Where do I add endpoints? How many? How do I wire in a model id and an API key?**
 
-Short answer: **`config.yml`, under `ai.endpoints`.** Add as many as you want — there is no limit.
+Short answer: **`config.yml`, under `ai.endpoints`.** Each entry is three lines, and you can add
+as many as you want — there is no limit.
 
 ---
 
-## TL;DR
+## You do not need any of this
+
+**NullArmy is complete with zero endpoints.** With `ai.enabled: false` (the default) the plugin is
+fully functional:
+
+- ✅ summoning with the Call Horn or a Totem Of Null
+- ✅ the portal, and Nulls walking out of it
+- ✅ movement, flocking, collision-safe spawning, local A* pathfinding
+- ✅ item ledger and every safety/griefing policy
+- ✅ **the Commander**, its portal entrance, its loadout GUI and its skin
+- ✅ **all 23 mace and elytra PvP techniques** — the selector is pure local logic, not a model
+- ✅ safe shutdown
+
+Run `/null features` to see the exact breakdown on your server.
+
+### What actually needs a model
+
+Only five extras, and the plugin tells you rather than pretending:
+
+| Needs a model | What happens offline |
+| --- | --- |
+| Free-form chat replies from Nulls | Nulls stay quiet instead of emitting canned filler |
+| Turning a sentence like "build a small bridge" into a block plan | Existing and manual plans still work |
+| Interpreting a redstone circuit from line-of-sight | Nulls simply don't attempt redstone analysis |
+| Choosing which visible blocks to mine, in what order | Nulls don't mine without a plan source |
+| A second model auditing the first model's proposals | Unnecessary — no model is running |
+
+Everything else either never used a model, or has a **deterministic local fallback** that runs
+either way: combat decisions, target priority, route choice, formation, idle behaviour,
+logistics, triage and scouting all work offline; a model only refines them.
+
+> **A model never has authority regardless.** The local validator sits above every model
+> decision, and no endpoint can ban, kick or mute a player.
+
+---
+
+## The whole thing in six lines
 
 ```yaml
 ai:
-  enabled: true                      # master switch
-
+  enabled: true
   endpoints:
-    my-endpoint:                     # any id you like
-      base-url: "https://api.openai.com/v1"
-      model: "gpt-4o-mini"           # <-- model id
-      auth-key-env: "OPENAI_API_KEY" # <-- NAME of env var, never the key
-      enabled: true
-
-  agents:
-    CombatTactician:
-      endpoint: "my-endpoint"
-      fallbacks: ["my-backup"]
+    my-model:                                  # any name you like, unique in this list
+      endpoint: "https://api.example.com/v1"   # base URL — http:// or https://
+      model-id: "example-flash"                # the model id sent with every request
+      api-key:  "env:MY_API_KEY"               # the key — env:VARNAME recommended
       enabled: true
 ```
 
-Three steps: define endpoints → bind agent roles to them → enable. Anything disabled,
-unreachable or rate-limited falls back to deterministic local logic. **The server tick is
-never blocked on a network call.**
+**To add another model, copy that block, rename it, change the three fields. Repeat as many
+times as you want. There is no limit.**
+
+```yaml
+    my-model:
+      endpoint: "https://api.example.com/v1"
+      model-id: "example-flash"
+      api-key:  "env:MY_API_KEY"
+      enabled: true
+
+    another-one:
+      endpoint: "https://api.other.com/v1"
+      model-id: "other-model-large"
+      api-key:  "env:OTHER_API_KEY"
+      enabled: true
+
+    fast-local:
+      endpoint: "http://127.0.0.1:11434/v1"
+      model-id: "llama3"
+      api-key:  ""
+      enabled: true
+```
 
 ---
 
 ## 1. Endpoint reference
 
-Each entry under `ai.endpoints` needs a unique id. Fields:
+### The three fields
 
-| Field | Required | Default | Meaning |
-| --- | :---: | --- | --- |
-| `base-url` | ✅ | — | OpenAI-compatible endpoint. Must start with `http://` or `https://`. |
-| `model` | ✅ | — | The **model id** sent with every request. |
-| `auth-key-env` | ✅ | — | The **name** of the environment variable holding your API key. Not the key itself. |
-| `timeout-millis` | ❌ | `3000` | Hard timeout. A slow endpoint is abandoned, never awaited. |
-| `calls-per-minute` | ❌ | `20` | Rate limit for this endpoint. |
-| `max-json-bytes` | ❌ | `8192` | Responses larger than this are rejected outright. |
-| `max-retries` | ❌ | `2` | Bounded retries with backoff. |
-| `enabled` | ❌ | `false` | Disabled endpoints are skipped silently. |
+| Field | Required | What it is |
+| --- | --- | --- |
+| `endpoint` | ✅ | Base URL of an OpenAI-compatible API. **Must** start with `http://` or `https://`, or startup fails with a clear message. |
+| `model-id` | ✅ | The model identifier sent with each request — `gpt-4o-mini`, `llama3`, `claude-3-5-sonnet-latest`, `gemini-2.0-flash`, whatever your provider calls it. |
+| `api-key` | optional | Your key. Two forms — see below. Leave it as `""` for local models that need no auth. |
 
-### 🔒 Why `auth-key-env` and not the key
+### Optional extra fields
 
-Spec §7.2: *"Never write API keys into commands, AI prompts, chat, debug logs, exception
-traces, or persisted gameplay data."*
+| Field | Default | What it does |
+| --- | --- | --- |
+| `enabled` | `false` | Per-endpoint switch. Disabled endpoints are skipped. |
+| `timeout-millis` | `3000` | Give up and try the next endpoint after this long. |
+| `calls-per-minute` | `20` | Rate limit per endpoint. |
+| `max-json-bytes` | `8192` | Reject any response larger than this. |
+| `max-retries` | `2` | Bounded retries with backoff, then move on. |
 
-So you put the **variable name** in `config.yml`, and the secret in your environment:
+### The `api-key` field
 
-```bash
-export OPENAI_API_KEY="sk-…"      # Linux / macOS
-setx OPENAI_API_KEY "sk-…"        # Windows
+**✅ Recommended — `env:VARNAME`**
+
+```yaml
+api-key: "env:OPENAI_API_KEY"
 ```
 
-Consequences: the key never lands in the config file, the git repo, the jar, a chat message,
-or a log line. `/null status` prints the **variable name** and whether it resolved — never the value.
+Only the **name** of an environment variable is stored. The real key is read from the server
+process environment at the moment it is needed, so it is never in `config.yml`, the jar, git, a
+backup, a paste, or the log.
 
-An endpoint whose key does not resolve is simply treated as unusable and skipped.
+```bash
+# Linux / macOS
+export OPENAI_API_KEY="sk-your-real-key"
+java -jar paper.jar
+```
+
+```bat
+:: Windows
+set OPENAI_API_KEY=sk-your-real-key
+java -jar paper.jar
+```
+
+**⚠️ Works, but not recommended — the literal key**
+
+```yaml
+api-key: "sk-jeurjwiejbfbf"
+```
+
+This works. Be aware the key is **plain text on disk**, and can leak through a config paste, a
+screenshot, a support ticket or an accidental `git commit`. A startup warning is logged, and
+diagnostics only ever print the first three characters.
+
+**No key at all**
+
+```yaml
+api-key: ""
+```
+
+Correct for local models (Ollama, llama.cpp, LM Studio) that need no authentication.
 
 ---
 
 ## 2. How many endpoints can I add?
 
-**As many as you want.** Idiomatic setups:
+**As many as you want. There is no limit and no fixed list.**
 
-| Setup | How |
-| --- | --- |
-| **One endpoint, all agents** | Define one, point every agent at it. |
-| **Cheap/fast split** | Local Ollama for chatty/low-stakes roles, a hosted model for planning roles. |
-| **Redundancy** | Each agent gets a primary plus a `fallbacks:` list, tried in order. |
-| **Per-role specialisation** | A coding-strong model for `BuilderAgent`, a fast one for `CombatTactician`. |
-| **Zero endpoints** | Leave `ai.enabled: false`. Everything runs on local deterministic logic — the plugin is fully functional. |
+Adding more isn't only for redundancy — it's how you make the plugin feel faster for players and
+for the Commander. Endpoints are tried in the order you list them: when one is slow, rate-limited,
+down, or its circuit breaker is open, the next is used instead.
 
-### Add your own (copy-paste)
+### Five setups that make sense
 
+**1. Nothing at all** (the default) — fully offline, everything works.
 ```yaml
+ai:
+  enabled: false
+```
+
+**2. One cloud model**
+```yaml
+ai:
+  enabled: true
   endpoints:
-    my-endpoint:
-      base-url: "https://my.provider/v1"
-      model: "my-model-id"
-      auth-key-env: "MY_API_KEY"
-      timeout-millis: 3000
-      calls-per-minute: 20
-      max-json-bytes: 8192
-      max-retries: 2
+    openai:
+      endpoint: "https://api.openai.com/v1"
+      model-id: "gpt-4o-mini"
+      api-key: "env:OPENAI_API_KEY"
       enabled: true
 ```
 
-Any OpenAI-compatible API works — OpenAI, Anthropic (via a compatible gateway), OpenRouter,
-Ollama, LM Studio, vLLM, llama.cpp server, or your own proxy.
+**3. Local only** — zero cost, nothing leaves your machine
+```yaml
+ai:
+  enabled: true
+  endpoints:
+    ollama-local:
+      endpoint: "http://127.0.0.1:11434/v1"
+      model-id: "llama3"
+      api-key: ""
+      enabled: true
+```
+
+**4. Fast local first, cloud as backup**
+```yaml
+ai:
+  enabled: true
+  endpoints:
+    ollama-local:
+      endpoint: "http://127.0.0.1:11434/v1"
+      model-id: "llama3"
+      api-key: ""
+      enabled: true
+    openai:
+      endpoint: "https://api.openai.com/v1"
+      model-id: "gpt-4o-mini"
+      api-key: "env:OPENAI_API_KEY"
+      enabled: true
+```
+
+**5. A big pile of models** — add ten, add fifty. Each is another thing that has to fail before
+the Commander falls back to local logic.
+
+### Which endpoint gets used?
+
+- With only `ai.endpoints` defined (the normal case), every decision uses `ai.default-endpoint`,
+  or if that's empty, the **first enabled endpoint** in your list.
+- Pin it explicitly:
+  ```yaml
+  ai:
+    default-endpoint: "ollama-local"
+  ```
+- Disabled, unreachable, rate-limited or open-circuit endpoints are skipped in favour of the next.
+- If **no** endpoint answers, the plugin silently uses local deterministic logic. **The server
+  tick is never blocked on a network call.**
 
 ---
 
-## 3. The 13 agent roles
+## 3. Optional: per-role routing
 
-The original spec defined **4**. NullArmy now ships **13**.
+**You can skip this entirely.** It exists only if you want, say, combat decisions on a fast local
+model and chat on a large cloud model.
 
-| # | Agent | Output schema | Purpose | May **never** |
-| ---: | --- | :---: | --- | --- |
-| 1 | **ChatCommander** | `TEXT` | Short in-character chat | issue commands, change targets, alter inventories, **ban players**, authorize actions |
-| 2 | **CombatTactician** | `INTENT` | Tactical intent from a strict enum | deal damage, move an NPC, bypass the combat validator |
-| 3 | **BuilderAgent** | `BLOCK_PLAN` | Bounded block-plan JSON | place blocks, skip inventory/support/protection/cost checks |
-| 4 | **PathfinderCore** | `ROUTE` | Route preference from a sanitized snapshot | move an NPC, expose hidden or through-wall data |
-| 5 | **ScoutObserver** | `OBSERVATIONS` | Summarise what the squad can actually see | receive hidden entities, inventories, through-wall data |
-| 6 | **ThreatAnalyst** | `THREAT_RANKING` | Rank threats from visible evidence | read hidden health, inventories, unobserved targets |
-| 7 | **LogisticsQuartermaster** | `ALLOCATION` | Loadout priorities, resupply, allocation | create/duplicate/delete items, mutate the ledger |
-| 8 | **MedicTriage** | `TRIAGE` | Triage order and treatment type | heal directly, grant effects, know health it wasn't told |
-| 9 | **FormationTactician** | `FORMATION` | Formation type, spacing, orientation, anchor | override collision, hitboxes, or hard separation |
-| 10 | **RedstoneAnalyst** | `CIRCUIT` | Interpret redstone from line-of-sight only | read hidden wiring, bypass visible-only perception |
-| 11 | **MiningForeman** | `MINING_PLAN` | Which visible blocks to mine, order, tool | x-ray for ore, see through blocks |
-| 12 | **IdleBehaviourDirector** | `IDLE_ACTION` | Bounded idle behaviours so Nulls never freeze | spam animations, override danger checks |
-| 13 | **GuardianAuditor** | `AUDIT_VERDICT` | Review *other agents'* proposals before validation | approve its own output, override the validator |
+```yaml
+ai:
+  enabled: true
+  default-endpoint: "ollama-local"
+  agents:
+    CombatTactician:
+      endpoint: "ollama-local"
+      fallbacks: ["openai"]
+      enabled: true
+    ChatCommander:
+      endpoint: "openai"
+      fallbacks: ["gemini"]
+      enabled: true
+```
 
-The `config.yml` key is the agent name exactly as written above (case-insensitive when parsed).
+Valid role names: `ChatCommander`, `CombatTactician`, `BuilderAgent`, `PathfinderCore`,
+`ScoutObserver`, `ThreatAnalyst`, `LogisticsQuartermaster`, `MedicTriage`, `FormationTactician`,
+`RedstoneAnalyst`, `MiningForeman`, `IdleBehaviourDirector`, `GuardianAuditor`.
+
+An unknown role name is logged as a warning with the valid list — never silently ignored.
 
 ---
 
 ## 4. Authority model
 
 ```
-   Agent (any)  ──recommendation──▶  GuardianAuditor  ──verdict──▶  LOCAL VALIDATOR  ──▶ world
-                                                                          │
-                                                          rejects: illegal items,
-                                                          no safe path, protection,
-                                                          stale target, cooldown, bad JSON
+   player / world state
+          |
+          v
+   +--------------+      advice only      +------------------+
+   |  AI model    | --------------------> | LOCAL VALIDATOR  |
+   +--------------+                       +------------------+
+                                                  |
+                                                  v
+                                            the world
 ```
 
-- An agent **advises**. The local validator **decides**. Spec §7.7.
-- Every recommendation carries an **expiry**, request id, scope and confidence. A stale reply
-  is discarded, not executed. Spec §7.5.
-- **GuardianAuditor is a second pair of eyes, not a bypass.** It can only reject; it can never
-  approve its own output or override the validator.
+A model **advises**. The server owns inventory, movement, damage, blocks, permissions and every
+final call. A model response is untrusted input: schema-validated, size-capped, clamped, expiry-
+checked, and rejected if it is malformed, stale, out-of-range or unsafe.
 
-### Hard limits that configuration cannot lift
-
-| Rule | Source |
-| --- | --- |
-| No agent can **ban, kick, mute, op** or moderate a player | Spec §8 |
-| No agent can execute console/server commands | Spec §7 |
-| No agent can move an NPC or place a block directly | Spec §7 |
-| No agent can create, duplicate or delete items | Spec §1.2 |
-| No agent sees hidden entities, inventories or through-wall data | Spec §5 |
-| No HTTP request ever runs on the tick thread | Spec §7.6 |
-
-There is deliberately **no moderation role** — that capability is absent by construction, not
-by config. A test (`testNoModerationRole`) fails the build if one is ever added.
+There is deliberately **no moderation role** — no endpoint can ban, kick or mute a player.
 
 ---
 
 ## 5. Reliability
 
-Each agent resolves to an ordered endpoint chain: **primary → fallbacks → local logic.**
-
 | Failure | Behaviour |
 | --- | --- |
-| Endpoint disabled | Skipped, next in chain |
-| API key missing | Treated unusable, skipped |
-| Timeout | Bounded retries with backoff, then next in chain |
-| Rate limit hit | Token bucket delays, then next in chain |
-| Repeated failures | **Circuit breaker** opens; calls rejected without touching the network |
-| Malformed / oversized / out-of-schema JSON | Rejected; never partially applied |
-| Everything down | Deterministic local logic. **Basic Null behaviour never stops.** |
+| Endpoint disabled | Skipped, next endpoint tried |
+| Key env var not set | Reported as `resolves=false`, endpoint skipped |
+| Timeout | Bounded retries with backoff, then next endpoint |
+| Rate limit hit | Coalesced and deferred; never a tick-block |
+| Malformed / oversized response | Rejected, local fallback used |
+| Repeated failures | Circuit breaker opens, endpoint rested |
+| Everything down | Deterministic local logic — the plugin keeps working |
 
 ---
 
 ## 6. Operations
 
-```
-/null status
-```
+| Command | Permission | Purpose |
+| --- | --- | --- |
+| `/null features` | `nullarmy.admin` | What works now, and what an AI model would add |
+| `/null status` | `nullarmy.admin` | Adapter, live Null count, policy flags, endpoint diagnostics |
 
-Shows each endpoint: model, base URL, the **env-var name**, whether it resolved, enabled
-state, rate limit and timeout. **Never the key value.**
-
-Config problems are reported at startup with severity:
-
-- `ERROR` — e.g. an agent references an undefined endpoint, or a role is bound twice
-- `WARNING` — e.g. an agent is enabled but every endpoint it points at is disabled
-
-An unknown agent key in `config.yml` is ignored with a warning listing the valid keys.
+`/null status` prints each endpoint with its model id and, for the key, only
+`env:VARNAME resolves=true` (or `resolves=false`). It never prints a key value.
 
 ---
 
 ## 7. FAQ
 
 **Do I need any endpoints at all?**
-No. With `ai.enabled: false` the plugin runs entirely on local deterministic logic. Endpoints
-are an optional enhancement, never a requirement.
+No. See [You do not need any of this](#you-do-not-need-any-of-this) — the plugin is complete
+offline; only five extras need a model.
 
-**Can one endpoint serve several agents?**
-Yes — point as many agents at the same endpoint id as you like. Rate limits are per endpoint,
-so shared endpoints share the budget.
+**Can I mix providers?**
+Yes — anything speaking the OpenAI chat-completions shape. Different providers, different keys,
+same list.
 
-**Can one agent use several endpoints?**
-Yes, as a fallback chain (`endpoint:` + `fallbacks:`). Not as a load-balanced pool — the first
-usable endpoint in order wins.
+**Does a slow model lag my server?**
+No. Calls are async, time-bounded, rate-limited and cancellable, and the tick never waits.
 
-**Can I hot-reload endpoints?**
-Config reload lands with the command layer (Phase 3). Until then, restart the server.
+**What if my key is wrong or the env var isn't set?**
+That endpoint is reported `resolves=false` and skipped. Nothing crashes; you fall back to the
+next endpoint, then to local logic.
 
-**Is my API key sent anywhere except my endpoint?**
-No. Requests go only to the `base-url` you configured. There is no telemetry, no phone-home,
-and no third-party service.
+**Can I put the key straight in config.yml?**
+Yes, but you'll get a startup warning — see [the `api-key` field](#the-api-key-field).
+
+**Where's the old `base-url` / `model` / `auth-key-env` naming?**
+Still accepted, so existing configs keep working. New configs should use
+`endpoint` / `model-id` / `api-key`.
 
 ---
 
