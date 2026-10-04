@@ -272,6 +272,30 @@ else
     NULLARMY_EXIT=1
 fi
 
+# Always report the runtime smoke test's own verdict. "The build passed" says
+# nothing about whether a Null was actually visible on a live server, so the
+# verdict and every check line are re-emitted as a notice annotation, which is
+# readable through the API and shown in the Checks UI.
+if [ -f "$NULLARMY_LOG" ]; then
+    awk '
+        /RUNTIME SMOKE: |\[NullArmy\]\[SELFTEST\]/ {
+            line = $0
+            sub(/\r$/, "", line)
+            gsub(/%/, "%%", line)
+            gsub(/\n/, " ", line)
+            out = out line "%0A"
+            n++
+        }
+        END {
+            if (n > 0) {
+                printf("::notice title=NullArmy runtime smoke test::%s\n", out)
+            } else {
+                printf("::notice title=NullArmy runtime smoke test::the runtime smoke test produced no output - it did not run\n")
+            }
+        }
+    ' "$NULLARMY_LOG"
+fi
+
 if [ "$NULLARMY_EXIT" -ne 0 ] && [ -f "$NULLARMY_LOG" ]; then
     awk '
         match($0, /\.java:[0-9]+: error:/) {
