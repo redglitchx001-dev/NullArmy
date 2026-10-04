@@ -248,8 +248,9 @@ public final class SelfTest {
         boolean announced = plugin.adapter().announceTo(probe, single);
         check(announced, "the player-info packet was accepted for the Null");
         boolean paired = plugin.adapter().pairProbe(probe, single);
-        check(paired, "the tracker paired the Null with the viewer"
-                + (paired ? "" : " - " + plugin.adapter().trackingDiagnostics()));
+        check(paired, "the tracker delivered the Null to the viewer"
+                + (paired ? " (" + pairingPath() + ")"
+                        : " - " + plugin.adapter().trackingDiagnostics()));
 
         say("pairing path: " + plugin.adapter().trackingDiagnostics());
         List<String> packets = plugin.adapter().probePackets(probe);
@@ -262,6 +263,23 @@ public final class SelfTest {
                 "the viewer received the entity pairing packets");
         int viewers = plugin.adapter().viewerCount(single);
         check(viewers >= 1, "the tracker counts at least one viewer (" + viewers + ")");
+    }
+
+    /**
+     * Which path produced the pairing packets.
+     *
+     * <p>Reported rather than hidden: the tracker's own decision path needs a
+     * viewer that has genuinely received its chunks, which a headless probe never
+     * has, so the test may fall back to the exact call that path makes. The verdict
+     * says which one it was instead of implying more than was measured.</p>
+     */
+    private String pairingPath() {
+        for (String line : plugin.adapter().trackingDiagnostics()) {
+            if (line.startsWith("lastPairing=")) {
+                return line.substring("lastPairing=".length());
+            }
+        }
+        return "path not reported";
     }
 
     private void stepSingleCleanup() {

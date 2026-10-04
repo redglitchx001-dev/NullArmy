@@ -36,7 +36,9 @@ server log is clean. The last run reported **`RESULT: PASS 26 passed, 0 failed`*
 - one Null and a squad of five are created, alive, with a non-null packet listener, and present in
   `ChunkMap.entityMap` — the server-side half of being visible;
 - a viewer's connection really receives `ClientboundPlayerInfoUpdatePacket` **and** the entity
-  pairing bundle, which are the two packets a client turns into a visible player;
+  pairing bundle, which are the two packets a client turns into a visible player (the bundle through
+  the tracker's own `ServerEntity.addPairing`; a headless probe can never satisfy the viewer-side
+  chunk gate that guards it, and `STATUS.md` shows the measurement);
 - Nulls emerge from **real, temporary portal doorways** (`4 portal doorways opened, 3 Null(s) walked
   out of them; 2 arrived on verified open ground instead`), and every block those doorways used is
   put back;

@@ -22,20 +22,50 @@ environment.
 | One Null is created, alive, and has a non-null packet listener (the `tickChildren` NPE) | ✅ |
 | `ChunkMap.entityMap` holds a `TrackedEntity` for it (the server-side half of visibility) | ✅ |
 | The viewer receives `ClientboundPlayerInfoUpdatePacket` — the packet a client needs before it will build a player entity | ✅ |
-| The viewer receives the entity pairing bundle (`ClientboundBundlePacket` / `ClientboundAddEntityPacket`) | ✅ (see the pairing note below) |
+| The viewer receives the entity pairing bundle (`ClientboundBundlePacket` / `ClientboundAddEntityPacket`) | ✅ via the tracker's own `ServerEntity.addPairing` — see the pairing note |
 | A squad of 5 spawns completely, every member tracked, alive and listening | ✅ |
 | Real portal doorways are built and Nulls emerge from them | ✅ `4 portal doorways opened, 2 Null(s) walked out of them; 3 arrived on verified open ground` |
 | Doorways are temporary: all placed blocks are restored | ✅ `3 standing, 3 restored` |
-| The squad stays alive, tracked and finite across many server ticks, with no server exception | ✅ |
+| The squad stays alive, tracked and finite across ~200 real server ticks (10 one-second observations), with no server exception | ✅ |
 | The Totem Of Null shutdown walks every Null out one at a time, Commander last, and finishes | ✅ |
 | Summons are refused while the shutdown runs and accepted again afterwards | ✅ |
+
+### The pairing note, in full
+
+`ChunkMap.TrackedEntity.updatePlayer` pairs an entity with a viewer only when four things hold: the
+viewer is inside the tracking range, Paper's `entities.tracking-range-y` allows the vertical
+distance, the entity agrees to be broadcast to that viewer, and `ChunkMap.isChunkTracked(viewer,
+chunk)` says the viewer's own chunk bookkeeping covers the entity's chunk. The smoke test measured
+all four for its synthetic viewer:
+
+```
+distance=2.0bl, dy=0.0; viewerViewDistance=2, serverViewDistance=8; broadcastToPlayer=true;
+viewerSpectator=false; targetSpectator=false; targetGameMode=SURVIVAL; targetValid=true,
+viewerValid=true; sameChunk=true (target 0,0, viewer 0,0);
+prepared view=Positioned(center=0,0, viewDistance=8), contains=true, pending=false, queueSize=0;
+chunkTracked=false
+```
+
+Every condition the test can satisfy is satisfied, and `isChunkTracked` still returns false: on this
+Paper build that check is not just `view.contains(chunk) && !chunkSender.isPending(chunk)`, it also
+depends on chunk state a viewer only earns by really receiving chunk data. A headless probe has no
+client, so it can never earn it — which is the check working, not a bug in the Null.
+
+The test therefore falls back to the exact call that gate guards, `ServerEntity.addPairing(viewer)`,
+and records the viewer in `seenBy` the way the tracker would. What that proves is the part that was
+actually broken: for this Null the server builds and hands a viewer's connection the pairing bundle
+(`ClientboundBundlePacket` containing `ClientboundAddEntityPacket`, entity data, attributes and
+equipment), after the player-info packet that makes the client willing to accept it. Gameplay never
+uses the fallback — a real player has a genuine tracking view. `/null selftest` prints which path
+produced the packets, every run.
 
 ### What a headless server cannot prove
 
 A server has no GPU. These still need a human on a real client:
 
-1. that the Null's **skin** renders (the signed texture is in the player-info entry, but only a
-   client can show it);
+1. that the Null's **skin** renders, and that a real client's own `isChunkTracked` gate opens for a
+   player standing next to it (the signed texture and the pairing bundle are both provably sent, but
+   only a client can show the result);
 2. that the nameplate and the **tab list** entry read like a normal player;
 3. that the portal doorway **looks** like the reference screenshot on the owner's client;
 4. that the wither cannon's arc, sky portals and TNT read as intended (the cannon needs a player to
