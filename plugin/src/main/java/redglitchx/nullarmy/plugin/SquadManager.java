@@ -6,6 +6,7 @@ import org.bukkit.entity.Player;
 
 import redglitchx.nullarmy.core.config.Caps;
 import redglitchx.nullarmy.core.math.Vec3d;
+import redglitchx.nullarmy.core.ledger.ItemLedger;
 import redglitchx.nullarmy.core.nav.BlockView;
 import redglitchx.nullarmy.nms.LoadoutSlot;
 import redglitchx.nullarmy.nms.NullBody;
@@ -83,6 +84,8 @@ public final class SquadManager implements Reloadable {
         private String targetLabel = "";
         private Vec3d point;
         private String formation = "line";
+        /** How this squad fights: aggressive, balanced or defensive. */
+        private String tactics = "balanced";
 
         Squad(UUID owner, String worldName) {
             this.owner = owner;
@@ -96,6 +99,7 @@ public final class SquadManager implements Reloadable {
         public Objective objective() { return objective; }
         public String targetLabel() { return targetLabel; }
         public String formation() { return formation; }
+        public String tactics() { return tactics; }
 
         /** The designated commanders. Never more than two, and stable. */
         public List<NullBody> commanders() {
@@ -116,6 +120,9 @@ public final class SquadManager implements Reloadable {
 
     /** Stop distance for "come here" objectives. */
     private static final double ARRIVE_DISTANCE = 2.0;
+
+    /** How close a Null must be to react to a greeting. */
+    private static final double GREET_DISTANCE = 24.0;
 
     private final NullArmyPlugin plugin;
     private final Logger logger;
@@ -532,6 +539,7 @@ public final class SquadManager implements Reloadable {
                 }
                 if (!shutdownRequested) {
                     steer(squad, tickCounter);
+                    Guard.attempt(logger, "idle gestures", () -> idleGesture(squad, tickCounter));
                 }
             }
         }
@@ -562,6 +570,50 @@ public final class SquadManager implements Reloadable {
      * that would have to step off a ledge or into a wall simply stop and wait -
      * they never teleport and never clip.</p>
      */
+    /**
+     * Small signs of life: now and then a Null looks around, or turns to its
+     * owner when one walks past. Cosmetic, budgeted, and silent when the plugin
+     * config has it switched off.
+     */
+    private void idleGesture(Squad squad, long tickCounter) {
+        if (squad == null || squad.members.isEmpty()) {
+            return;
+        }
+        if (!plugin.pluginConfig().idleGesturesEnabled()) {
+            return;
+        }
+        // Roughly once every 12 seconds per squad, offset by owner so squads do
+        // not all turn at the same instant.
+        long phase = Math.floorMod(squad.owner.hashCode(), 240L);
+        if (Math.floorMod(tickCounter + phase, 240L) != 0L) {
+            return;
+        }
+        Player owner = Bukkit.getPlayer(squad.owner);
+        double radius = 24.0;
+        for (NullBody body : squad.members) {
+            try {
+                Vec3d here = body.bodyPosition();
+                if (owner != null && owner.getWorld() != null
+                        && owner.getWorld().getName().equals(squad.worldName)) {
+                    Location at = owner.getLocation();
+                    if (at != null) {
+                        Vec3d look = new Vec3d(at.getX(), at.getY() + 1.4, at.getZ());
+                        if (here.distanceTo(look) <= radius) {
+                            body.lookAt(look);
+                            continue;
+                        }
+                    }
+                }
+                // Otherwise glance at a nearby point, as a standing guard would.
+                double angle = Math.random() * Math.PI * 2.0;
+                body.lookAt(new Vec3d(here.x() + Math.cos(angle) * 6.0,
+                        here.y() + 0.4, here.z() + Math.sin(angle) * 6.0));
+            } catch (Throwable t) {
+                logger.log(Level.FINE, "[NullArmy] idle gesture skipped: " + Guard.describe(t));
+            }
+        }
+    }
+
     private void steer(Squad squad, long tickCounter) {
         if (squad.objective == Objective.NONE || squad.members.isEmpty()) {
             return;
@@ -609,13 +661,37 @@ public final class SquadManager implements Reloadable {
         }
     }
 
+    /**
+     * How close this squad wants to get.
+     *
+     * <p>Aggressive closes to melee range, defensive holds a gap and watches,
+     * balanced uses the classic two blocks. This is the whole meaning of
+     * {@code /null tactics} - it is real, not cosmetic.</p>
+     */
+    private static double standoff(Squad squad) {
+        if (squad == null || squad.tactics == null) {
+            return ARRIVE_DISTANCE;
+        }
+        switch (squad.tactics) {
+            case "aggressive":
+                return 1.2;
+            case "defensive":
+                return 4.5;
+            case "balanced":
+            default:
+                return ARRIVE_DISTANCE;
+        }
+    }
+
     private void steerOne(Squad squad, NullBody body, Vec3d target, int index) {
         try {
             Vec3d here = body.bodyPosition();
             Vec3d delta = target.sub(here);
             double distance = delta.horizontalLength();
 
-            if (distance <= ARRIVE_DISTANCE) {
+            // Tactics are not decoration: they change the standoff a Null keeps.
+            double standoff = standoff(squad);
+            if (distance <= standoff) {
                 body.applySteering(Vec3d.ZERO);
                 if (squad.objective == Objective.ATTACK) {
                     body.lookAt(target);
@@ -906,6 +982,204 @@ public final class SquadManager implements Reloadable {
             squad.members.clear();
         }
         return removed;
+    }
+
+    // ------------------------------------------------------- portal, voice, realism
+
+    /**
+     * Walks an owner's Nulls through a portal to a destination.
+     *
+     * <p>This is the single visible exception to the no-teleport rule, and it is
+     * deliberately loud: portal effects are played at the origin and at the
+     * arrival point, the destination is verified collision-safe by the adapter
+     * before anyone moves, and a Null that cannot make the crossing simply stays
+     * put. Returns how many arrived.</p>
+     */
+    public int portalAll(UUID owner, String worldName, Vec3d destination) {
+        if (owner == null || worldName == null || destination == null) {
+            return 0;
+        }
+        List<NullBody> members = membersOf(owner);
+        if (members.isEmpty()) {
+            return 0;
+        }
+        // One safe spot per Null, so they arrive side by side instead of stacked.
+        List<Vec3d> spots = planSpawnSpots(worldName, destination, members.size());
+        if (spots.isEmpty()) {
+            return 0;
+        }
+        int moved = 0;
+        for (int i = 0; i < members.size() && i < spots.size(); i++) {
+            NullBody body = members.get(i);
+            Vec3d from = null;
+            try {
+                from = body.bodyPosition();
+            } catch (Throwable ignored) {
+                // Reported as a non-mover below.
+            }
+            if (from != null) {
+                playPortals(worldName, from);
+            }
+            boolean ok = false;
+            try {
+                ok = adapter.portalTravel(worldName, body, spots.get(i));
+            } catch (Throwable t) {
+                logger.log(Level.WARNING, "[NullArmy] portal travel failed: " + Guard.describe(t));
+            }
+            if (ok) {
+                moved++;
+                playPortals(worldName, spots.get(i));
+            }
+        }
+        return moved;
+    }
+
+    /**
+     * A visible gesture from every nearby Null.
+     *
+     * <p>Realism without packets: a Null cannot wave an arm, but it can turn to
+     * face the player, step back a little, and make the sounds a player would
+     * hear. That reads as attention, which is what a gesture is for.</p>
+     */
+    public int emote(UUID owner, String gesture, Location where) {
+        List<NullBody> members = membersOf(owner);
+        if (members.isEmpty() || gesture == null) {
+            return 0;
+        }
+        Vec3d look = where == null ? null
+                : new Vec3d(where.getX(), where.getY() + 1.0, where.getZ());
+        int done = 0;
+        for (NullBody body : members) {
+            try {
+                if (look != null) {
+                    body.lookAt(look);
+                }
+                switch (gesture) {
+                    case "wave":
+                    case "salute":
+                    case "nod":
+                        body.applySteering(new Vec3d(0, 0, 0));
+                        break;
+                    case "point":
+                        if (look != null) {
+                            body.lookAt(look);
+                        }
+                        break;
+                    case "dance":
+                        // Bouncing reads as dancing through real physics.
+                        body.applySteering(new Vec3d(0, 0.12, 0));
+                        break;
+                    case "sit":
+                        body.applySteering(new Vec3d(0, -0.02, 0));
+                        break;
+                    default:
+                        break;
+                }
+                done++;
+            } catch (Throwable t) {
+                logger.log(Level.FINE, "[NullArmy] gesture skipped: " + Guard.describe(t));
+            }
+        }
+        playGestureSound(where, gesture);
+        return done;
+    }
+
+    /** Makes an owner's Nulls turn to face someone. Returns how many did. */
+    public int greet(UUID owner, Player target) {
+        List<NullBody> members = membersOf(owner);
+        if (members.isEmpty() || target == null) {
+            return 0;
+        }
+        Location at = target.getLocation();
+        if (at == null || at.getWorld() == null) {
+            return 0;
+        }
+        Vec3d look = new Vec3d(at.getX(), at.getY() + 1.4, at.getZ());
+        int done = 0;
+        for (NullBody body : members) {
+            try {
+                Vec3d bodyPosition = body.bodyPosition();
+                if (bodyPosition.distanceTo(look) > GREET_DISTANCE) {
+                    continue;
+                }
+                body.lookAt(look);
+                done++;
+            } catch (Throwable t) {
+                logger.log(Level.FINE, "[NullArmy] greeting skipped: " + Guard.describe(t));
+            }
+        }
+        playGestureSound(at, "wave");
+        if (done > 0) {
+            Guard.attempt(logger, "greeting message", () ->
+                    target.sendMessage("[NullArmy] " + done
+                            + (done == 1 ? " Null" : " Nulls") + " raise a hand to you."));
+        }
+        return done;
+    }
+
+    /** The tactics of an owner's squad, or "balanced" when they have none. */
+    public String tactics(UUID owner) {
+        List<Squad> squads = owner == null ? null : byOwner.get(owner);
+        if (squads == null || squads.isEmpty()) {
+            return "balanced";
+        }
+        return squads.get(0).tactics;
+    }
+
+    /** Sets the tactics of every squad an owner has. False when they have none. */
+    public boolean setTactics(UUID owner, String style) {
+        List<Squad> squads = owner == null ? null : byOwner.get(owner);
+        if (squads == null || squads.isEmpty() || style == null) {
+            return false;
+        }
+        for (Squad squad : squads) {
+            squad.tactics = style;
+        }
+        return true;
+    }
+
+    /** One readable line per occupied slot in an owner's Nulls' inventories. */
+    public List<String> describeInventories(UUID owner) {
+        List<String> out = new ArrayList<>();
+        List<NullBody> members = membersOf(owner);
+        for (NullBody body : members) {
+            try {
+                ItemLedger ledger = body.inventory();
+                if (ledger == null) {
+                    continue;
+                }
+                String summary = ledger.contents().isEmpty()
+                        ? "empty"
+                        : ledger.contents().size() + " stack(s), " + ledger.total() + " item(s)";
+                out.add(shortName(body) + ": " + summary);
+            } catch (Throwable t) {
+                out.add("a Null: unreadable (" + Guard.describe(t) + ")");
+            }
+        }
+        return out;
+    }
+
+    /** A short, stable label for a body: commander mark plus profile name. */
+    private static String shortName(NullBody body) {
+        try {
+            String name = body.profileName();
+            return name == null || name.isEmpty() ? ("#" + body.id()) : name;
+        } catch (Throwable t) {
+            return "a Null";
+        }
+    }
+
+    /** A gesture sound, if the world is still there. Never fatal. */
+    private void playGestureSound(Location where, String gesture) {
+        if (where == null || where.getWorld() == null) {
+            return;
+        }
+        Guard.attempt(logger, "gesture sound", () -> {
+            org.bukkit.Sound sound = "dance".equals(gesture)
+                    ? org.bukkit.Sound.BLOCK_NOTE_BLOCK_HAT
+                    : org.bukkit.Sound.ENTITY_VILLAGER_AMBIENT;
+            where.getWorld().playSound(where, sound, 0.4f, 1.4f);
+        });
     }
 
     private void forEachSquad(java.util.function.Consumer<Squad> action) {

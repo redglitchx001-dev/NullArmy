@@ -54,6 +54,40 @@ menu:
 
 chat:
   enabled-by-default: false
+  # Let the player give orders by talking to a Null in ordinary chat, with no
+  # slash: "null attack Steve", "null come", "null stop", "null heal" ...
+  # The wake word is stripped and the rest is dispatched through the same
+  # /null executor, so permissions, caps and policy gates are identical.
+  # The order itself is not broadcast to the server.
+  wake-words:
+    - null
+    - nulls
+    - commander
+  # Orders one player may give per minute through chat. Stops a stuck key or a
+  # macro from turning into a spawn storm.
+  commands-per-minute: 20
+  # Longest reply the plugin will print, in characters.
+  max-reply-chars: 400
+  # A private channel closes after this many seconds without a message.
+  session-timeout-seconds: 600
+  # Who the characters are. {player} is replaced with the speaker's name.
+  # Leave empty to use the built-in soldier voice.
+  personas:
+    null: ""
+    commander: ""
+
+# ---------------------------------------------------------------------
+#  MECHANICS
+# ---------------------------------------------------------------------
+mechanics:
+  # /null portal moves a Null through a visible portal to you (or to a named
+  # player). It plays portal effects at both ends and verifies the arrival spot
+  # as collision-safe ground first. This is the one deliberate exception to the
+  # no-teleport rule; set it to false and the Nulls refuse to cross.
+  portal-travel: true
+  # Nulls occasionally look around on their own, and turn to face their owner
+  # when one walks past. Purely cosmetic; budgeted per tick.
+  idle-gestures: true
 
 # ---------------------------------------------------------------------
 #  AI ENDPOINTS  — add as many as you want

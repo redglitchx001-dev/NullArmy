@@ -19,6 +19,8 @@ import redglitchx.nullarmy.nms.NullBody;
 import redglitchx.nullarmy.nms.VersionAdapter;
 import redglitchx.nullarmy.plugin.NullArmyPlugin;
 import redglitchx.nullarmy.plugin.SquadManager;
+import redglitchx.nullarmy.plugin.chat.ChatBrain;
+import redglitchx.nullarmy.plugin.chat.ChatDirector;
 import redglitchx.nullarmy.plugin.config.PluginConfig;
 import redglitchx.nullarmy.plugin.config.Reloadable;
 import redglitchx.nullarmy.plugin.item.SummonItems;
@@ -71,12 +73,19 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
 
     /** Subcommands in help order. Aliases are resolved before this list is used. */
     private static final List<String> SUBCOMMANDS = Arrays.asList(
-            "menu", "gui", "help", "status", "version", "features", "debug",
+            "menu", "gui", "help", "status", "version", "features", "debug", "ai",
             "horn", "totem", "commander", "respawn", "loadout", "skin",
-            "follow", "guard", "formation", "attack", "attackx", "come", "tp", "bring",
-            "stop", "dismiss", "list", "info", "name", "heal", "equip", "drop",
-            "portals", "clearskins", "reload", "wand", "build", "chat",
+            "follow", "guard", "formation", "tactics", "attack", "attackx",
+            "come", "tp", "bring", "portal",
+            "stop", "dismiss", "list", "info", "name", "heal", "equip", "drop", "inv",
+            "portals", "clearskins", "reload", "wand", "build", "chat", "emote", "greet",
             "withercannon", "cannon", "airdrop", "ban", "kill");
+
+    /** Combat temperaments understood by {@link SquadManager}. */
+    private static final List<String> TACTICS = Arrays.asList("aggressive", "balanced", "defensive");
+
+    /** Gestures a Null can perform. */
+    private static final List<String> EMOTES = Arrays.asList("wave", "salute", "nod", "point", "dance", "sit");
 
     /** Formation styles understood by {@link SquadManager}. */
     private static final List<String> FORMATIONS = Arrays.asList("line", "square", "encircle", "turtle");
@@ -114,7 +123,13 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             new String[]{"reload", "nullarmy.admin", "Re-read config.yml without a restart."},
             new String[]{"wand", "nullarmy.build", "Region-select tool for building (Phase 7)."},
             new String[]{"build <structure>", "nullarmy.build", "Bounded, inventory-funded building (Phase 7)."},
-            new String[]{"chat <on|off>", "nullarmy.chat", "Toggle Null chat (Phase 8)."},
+            new String[]{"chat [null|commander|off]", "nullarmy.chat", "Private chat with a Null or the Commander."},
+            new String[]{"ai", "nullarmy.admin", "Whether an AI model is configured and reachable."},
+            new String[]{"portal [player]", "nullarmy.admin", "Walk your Nulls through a portal to you or a player."},
+            new String[]{"emote <wave|salute|nod|point|dance|sit>", "nullarmy.admin", "A visible human gesture from your Nulls."},
+            new String[]{"greet [player]", "nullarmy.follow", "Your Nulls face and greet someone."},
+            new String[]{"inv", "nullarmy.admin", "What your Nulls are carrying (read-only)."},
+            new String[]{"tactics <aggressive|balanced|defensive>", "nullarmy.attack", "How your Nulls fight."},
             new String[]{"withercannon", "nullarmy.admin", "Fire the opt-in TNT-minecart sky cannon."},
             new String[]{"airdrop [count]", "nullarmy.admin", "Portals above and below deliver a squad."},
             new String[]{"ban <player>", "nullarmy.moderation", "Moderation action; never an AI action."},
@@ -205,6 +220,15 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
                     return onlinePlayerNames(args[1]);
                 case "formation":
                     return startingWith(FORMATIONS, args[1]);
+                case "tactics":
+                    return startingWith(TACTICS, args[1]);
+                case "emote":
+                    return startingWith(EMOTES, args[1]);
+                case "chat":
+                    return startingWith(Arrays.asList("commander", "null", "off", "status"), args[1]);
+                case "portal":
+                case "greet":
+                    return onlinePlayerNames(args[1]);
                 case "info":
                 case "name":
                     return nullSubcommandTargets(args[1]);
@@ -292,6 +316,18 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
                 return notYet(sender, "Building structures", "Phase 7 (building)");
             case "chat":
                 return chat(sender, args);
+            case "ai":
+                return ai(sender);
+            case "portal":
+                return portal(sender, args);
+            case "emote":
+                return emote(sender, args);
+            case "greet":
+                return greet(sender, args);
+            case "inv":
+                return inv(sender);
+            case "tactics":
+                return tactics(sender, args);
             case "withercannon":
                 return witherCannon(sender);
             case "airdrop":
@@ -305,6 +341,23 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
                 sender.sendMessage(PREFIX + "Run /null help for the full list.");
                 return true;
         }
+    }
+
+    /**
+     * True when {@code raw} is a subcommand this plugin actually implements.
+     *
+     * <p>Used by the chat interface: an order like "null attack Steve" must be
+     * recognised as a command, while "null who are you" must not be.</p>
+     */
+    public boolean isSubcommand(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return false;
+        }
+        String name = canonical(raw);
+        return SUBCOMMANDS.contains(name)
+                || name.equals("kill") || name.equals("ban")
+                || name.equals("inv") || name.equals("tactics") || name.equals("portal")
+                || name.equals("emote") || name.equals("greet") || name.equals("ai");
     }
 
     /** Maps every alias to its canonical subcommand name. */
@@ -1031,17 +1084,226 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
         return true;
     }
 
+    /** {@code /null chat [null|commander|off|status]} - the private channel. */
     private boolean chat(CommandSender sender, String[] args) {
         if (!require(sender, "nullarmy.chat")) {
             return true;
         }
-        if (args.length < 2) {
-            sender.sendMessage(PREFIX + "Usage: /null chat <on|off>");
+        Player player = asPlayer(sender, "Chat needs a player on one end of it.");
+        if (player == null) {
             return true;
         }
-        boolean on = args[1].equalsIgnoreCase("on");
-        sender.sendMessage(PREFIX + "Null chat is now " + (on ? "on" : "off")
-                + ". (ChatCommander wiring lands in Phase 8 - nothing is listening yet.)");
+        if (plugin.chat() == null) {
+            sender.sendMessage(PREFIX + "The chat director is unavailable in this state.");
+            return true;
+        }
+        if (args.length < 2 || args[1].equalsIgnoreCase("status")) {
+            sender.sendMessage(PREFIX + plugin.chat().describe(player.getUniqueId()));
+            sender.sendMessage(PREFIX + "Usage: /null chat <null|commander|off>"
+                    + " - then just type normally in chat.");
+            if (!plugin.chat().brain().available()) {
+                sender.sendMessage(PREFIX + "AI: off (" + plugin.chat().brain().unavailableReason() + ").");
+            } else {
+                sender.sendMessage(PREFIX + "AI: ready. The Commander will answer in character.");
+            }
+            return true;
+        }
+        ChatDirector.Speaker speaker = ChatDirector.Speaker.parse(args[1]);
+        if (speaker == null) {
+            sender.sendMessage(PREFIX + "'" + args[1] + "' is neither a Null nor the Commander."
+                    + " Use /null chat <null|commander|off>.");
+            return true;
+        }
+        if (speaker == ChatDirector.Speaker.NONE) {
+            if (!plugin.chat().endSession(player, null)) {
+                sender.sendMessage(PREFIX + "No private channel was open.");
+            }
+            return true;
+        }
+        plugin.chat().startSession(player, speaker);
+        return true;
+    }
+
+    /** {@code /null ai} - honest status of the model connection. */
+    private boolean ai(CommandSender sender) {
+        if (!require(sender, "nullarmy.admin")) {
+            return true;
+        }
+        ChatBrain brain = plugin.chat() == null ? null : plugin.chat().brain();
+        sender.sendMessage(PREFIX + "AI endpoints: " + config.endpoints().size()
+                + ", enabled: " + config.aiEnabled() + ", usable: " + config.aiUsable() + ".");
+        if (brain == null || !brain.available()) {
+            sender.sendMessage(PREFIX + "AI is not usable: "
+                    + (brain == null ? "the chat director is unavailable" : brain.unavailableReason()) + ".");
+            sender.sendMessage(PREFIX + "The plugin is fully functional without it -"
+                    + " AI only adds conversation and the AI-only roles.");
+            return true;
+        }
+        sender.sendMessage(PREFIX + "Chat model is ready for the ChatCommander role.");
+        PlanOutcome outcome = aiOutcome();
+        if (outcome != null) {
+            sender.sendMessage(PREFIX + outcome.message);
+        }
+        return true;
+    }
+
+    /** Small holder so the two AI-info lines stay readable. */
+    private static final class PlanOutcome {
+        private final String message;
+        PlanOutcome(String message) { this.message = message; }
+    }
+
+    private PlanOutcome aiOutcome() {
+        int sessions = plugin.chat() == null ? 0 : plugin.chat().sessionCount();
+        return new PlanOutcome("Open private channels: " + sessions
+                + ". Try /null chat commander, or say 'null hello' in chat.");
+    }
+
+    /** {@code /null portal [player]} - the visible way to move Nulls. */
+    private boolean portal(CommandSender sender, String[] args) {
+        if (!require(sender, "nullarmy.admin")) {
+            return true;
+        }
+        Player player = asPlayer(sender, "The portal needs a player to open next to.");
+        if (player == null) {
+            return true;
+        }
+        if (!config.portalTravelEnabled()) {
+            sender.sendMessage(PREFIX + "Portal travel is switched off:"
+                    + " set mechanics.portal-travel to true in config.yml.");
+            return true;
+        }
+        Location target = player.getLocation();
+        Player destination = null;
+        if (args.length >= 2) {
+            destination = org.bukkit.Bukkit.getPlayerExact(args[1]);
+            if (destination == null) {
+                sender.sendMessage(PREFIX + "'" + args[1] + "' is not online.");
+                return true;
+            }
+            target = destination.getLocation();
+        }
+        if (target == null || target.getWorld() == null) {
+            sender.sendMessage(PREFIX + "Could not read the destination position.");
+            return true;
+        }
+        Vec3d where = new Vec3d(target.getX(), Math.floor(target.getY()), target.getZ());
+        int moved = squads.portalAll(player.getUniqueId(), target.getWorld().getName(), where);
+        if (moved <= 0) {
+            sender.sendMessage(PREFIX + "No Null of yours could make the crossing."
+                    + " They stay where they are rather than risk a bad arrival.");
+            return true;
+        }
+        sender.sendMessage(PREFIX + "Opened the way: " + moved
+                + (moved == 1 ? " Null walked" : " Nulls walked")
+                + " through the portal to " + (destination == null ? "you" : destination.getName()) + ".");
+        return true;
+    }
+
+    /** {@code /null emote <gesture>} - visible body language. */
+    private boolean emote(CommandSender sender, String[] args) {
+        if (!require(sender, "nullarmy.admin")) {
+            return true;
+        }
+        Player player = asPlayer(sender, "Pick a gesture from in game.");
+        if (player == null) {
+            return true;
+        }
+        if (args.length < 2) {
+            sender.sendMessage(PREFIX + "Usage: /null emote <" + String.join("|", EMOTES) + ">");
+            return true;
+        }
+        String gesture = args[1].toLowerCase(Locale.ROOT);
+        if (!EMOTES.contains(gesture)) {
+            sender.sendMessage(PREFIX + "Unknown gesture '" + args[1] + "'. Try "
+                    + String.join(", ", EMOTES) + ".");
+            return true;
+        }
+        int done = squads.emote(player.getUniqueId(), gesture, player.getLocation());
+        if (done <= 0) {
+            sender.sendMessage(PREFIX + "You have no Nulls nearby to " + gesture + ".");
+            return true;
+        }
+        sender.sendMessage(PREFIX + done + (done == 1 ? " Null answers" : " Nulls answer")
+                + " you: " + gesture + ".");
+        return true;
+    }
+
+    /** {@code /null greet [player]} - the human touch. */
+    private boolean greet(CommandSender sender, String[] args) {
+        if (!require(sender, "nullarmy.follow")) {
+            return true;
+        }
+        Player player = asPlayer(sender, "Greetings happen in person.");
+        if (player == null) {
+            return true;
+        }
+        Player target = player;
+        if (args.length >= 2) {
+            target = org.bukkit.Bukkit.getPlayerExact(args[1]);
+            if (target == null) {
+                sender.sendMessage(PREFIX + "'" + args[1] + "' is not online.");
+                return true;
+            }
+        }
+        int done = squads.greet(player.getUniqueId(), target);
+        if (done <= 0) {
+            sender.sendMessage(PREFIX + "You have no Nulls nearby to greet"
+                    + (target == player ? " you" : " " + target.getName()) + ".");
+            return true;
+        }
+        sender.sendMessage(PREFIX + done + (done == 1 ? " Null raises" : " Nulls raise")
+                + " a hand to " + target.getName() + ".");
+        return true;
+    }
+
+    /** {@code /null inv} - what the Nulls are carrying, read-only. */
+    private boolean inv(CommandSender sender) {
+        if (!require(sender, "nullarmy.admin")) {
+            return true;
+        }
+        if (plugin.registry() == null) {
+            sender.sendMessage(PREFIX + "The entity registry is unavailable in this state.");
+            return true;
+        }
+        List<String> lines = squads.describeInventories(sender instanceof Player
+                ? ((Player) sender).getUniqueId() : null);
+        if (lines.isEmpty()) {
+            sender.sendMessage(PREFIX + "No Null is carrying anything.");
+            return true;
+        }
+        sender.sendMessage(PREFIX + "Carried by your Nulls (" + lines.size() + " stack(s)):");
+        for (String line : lines) {
+            sender.sendMessage(PREFIX + "  " + line);
+        }
+        return true;
+    }
+
+    /** {@code /null tactics <aggressive|balanced|defensive>} - how they fight. */
+    private boolean tactics(CommandSender sender, String[] args) {
+        if (!require(sender, "nullarmy.attack")) {
+            return true;
+        }
+        Player player = asPlayer(sender, "Tactics apply to the Nulls of one player.");
+        if (player == null) {
+            return true;
+        }
+        if (args.length < 2) {
+            sender.sendMessage(PREFIX + "Your Nulls are fighting " + squads.tactics(player.getUniqueId())
+                    + ". Usage: /null tactics <" + String.join("|", TACTICS) + ">");
+            return true;
+        }
+        String style = args[1].toLowerCase(Locale.ROOT);
+        if (!TACTICS.contains(style)) {
+            sender.sendMessage(PREFIX + "Unknown style '" + args[1] + "'. Try "
+                    + String.join(", ", TACTICS) + ".");
+            return true;
+        }
+        if (!squads.setTactics(player.getUniqueId(), style)) {
+            sender.sendMessage(PREFIX + "You have no Nulls to give orders to.");
+            return true;
+        }
+        sender.sendMessage(PREFIX + "Tactics set to " + style + ".");
         return true;
     }
 

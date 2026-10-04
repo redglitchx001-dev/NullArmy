@@ -113,6 +113,24 @@ public interface VersionAdapter {
      */
     NullBody spawnNull(SpawnRequest request);
 
+    /**
+     * Moves an existing body through a portal: the one deliberate, visible
+     * exception to the no-teleport rule.
+     *
+     * <p>Implementations must verify the destination (world present, spot
+     * collision-safe), perform the move on the server thread only, and clear
+     * any carried velocity so the body does not arrive mid-fall. Callers are
+     * expected to play portal effects at both ends: this is a relocation the
+     * player is meant to <b>see</b>, never a silent snap.</p>
+     *
+     * @return true when the body is now at the destination
+     */
+    default boolean portalTravel(String worldName, NullBody body, Vec3d destination) {
+        // Adapters that have not implemented it refuse honestly rather than
+        // pretending the body moved.
+        return false;
+    }
+
     /** A block-collision/cost view rooted at a world, for pathfinding. */
     BlockView blockView(String worldName);
 

@@ -112,6 +112,42 @@ public final class V1_21_11Adapter implements VersionAdapter {
         return body;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Order matters and is the whole safety story: server thread, world
+     * present, destination collision-safe (real ground under the feet), body is
+     * one of ours, chunk is loaded - and only then does anything move. The
+     * velocity is cleared inside {@link NullPlayer#portalTo}, so a Null cannot
+     * arrive carrying a fall it earned in the other place.</p>
+     */
+    @Override
+    public boolean portalTravel(String worldName, NullBody body, Vec3d destination) {
+        if (worldName == null || body == null || destination == null) {
+            return false;
+        }
+        if (!Bukkit.isPrimaryThread()) {
+            // Never relocate an entity off the main thread (spec 2.4).
+            return false;
+        }
+        World world = Bukkit.getWorld(worldName);
+        if (world == null) {
+            return false;
+        }
+        if (!(body instanceof NullPlayer)) {
+            return false;
+        }
+        if (!body.isAlive()) {
+            return false;
+        }
+        // Loading the chunk is implicit in the safety check below; a destination
+        // in an unloaded chunk is not a place to send a body.
+        if (!isSpawnSafe(worldName, destination)) {
+            return false;
+        }
+        return ((NullPlayer) body).portalTo(destination.x(), destination.y(), destination.z());
+    }
+
     @Override
     public BlockView blockView(String worldName) {
         World bukkitWorld = Bukkit.getWorld(worldName);

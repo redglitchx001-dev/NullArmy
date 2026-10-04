@@ -13,7 +13,7 @@ commands:
   # command map a null key and crashes Paper's PluginDescriptionFile on load.
   "null":
     description: Manage NullArmy squads and plugin features.
-    usage: "/null <menu|help|status|horn|totem|commander|loadout|follow|guard|formation|attack|attackx|come|stop|dismiss|list|info|heal|equip|drop|reload|withercannon|airdrop|version>  -  /null help lists every subcommand"
+    usage: "/null <menu|help|status|ai|version|features|debug|horn|totem|commander|respawn|loadout|skin|follow|guard|formation|tactics|attack|attackx|come|tp|bring|portal|emote|greet|stop|dismiss|list|info|name|inv|heal|equip|drop|portals|clearskins|reload|wand|build|chat|withercannon|cannon|airdrop|ban|kill>  -  /null help lists every subcommand. In chat, say \"null <order>\" with no slash."
 
 permissions:
   nullarmy.summon:
@@ -29,7 +29,7 @@ permissions:
     description: View NullArmy diagnostics and manage all squads.
     default: op
   nullarmy.chat:
-    description: Toggle Null chat.
+    description: Talk to the Nulls and the Commander in a private channel.
     default: op
   nullarmy.attack:
     description: Set a physical pursuit/combat objective.

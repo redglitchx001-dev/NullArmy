@@ -148,6 +148,34 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     @Override
     public ItemLedger inventory() { return inventory; }
 
+    /**
+     * Relocates the body to a destination the adapter has already verified.
+     *
+     * <p>This is <b>not</b> part of ordinary movement: the only caller is
+     * {@link V1_21_11Adapter#portalTravel}, which checks the world, the chunk
+     * and the collision safety of the destination first, and the player sees
+     * portal effects at both ends. Velocity is cleared so the body cannot arrive
+     * mid-fall, and a non-finite destination is refused outright.</p>
+     *
+     * @return true when the body is at the destination
+     */
+    boolean portalTo(double x, double y, double z) {
+        if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z)) {
+            return false;
+        }
+        try {
+            setDeltaMovement(0.0D, 0.0D, 0.0D);
+            setPos(x, y, z);
+            setDeltaMovement(0.0D, 0.0D, 0.0D);
+            return true;
+        } catch (Throwable t) {
+            org.bukkit.Bukkit.getLogger().warning(
+                    "[NullArmy] portal arrival failed; the Null stays where it was: "
+                            + t.getClass().getSimpleName() + ": " + t.getMessage());
+            return false;
+        }
+    }
+
     @Override
     public void destroy() {
         if (adapter != null) {

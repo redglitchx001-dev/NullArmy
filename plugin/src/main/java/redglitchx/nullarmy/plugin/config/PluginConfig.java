@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.logging.Logger;
 
@@ -67,6 +68,15 @@ public final class PluginConfig {
     private final boolean airdropDropNullsFromSky;
     private final int airdropTntPerDrop;
     private final int airdropHeight;
+
+    private final boolean portalTravelEnabled;
+    private final boolean idleGesturesEnabled;
+    private final int chatCommandsPerMinute;
+    private final List<String> chatWakeWords;
+    private final int chatMaxReplyChars;
+    private final int chatSessionTimeoutTicks;
+    private final String personaNull;
+    private final String personaCommander;
 
     private final boolean aiEnabled;
     private final Map<String, EndpointConfig> endpoints = new LinkedHashMap<>();
@@ -157,6 +167,21 @@ public final class PluginConfig {
                 0, 64, "airdrop.tnt-per-drop", logger);
         this.airdropHeight = clamp(config.getInt("airdrop.height", 12),
                 3, 60, "airdrop.height", logger);
+
+        // ------------------------------------------------------------ mechanics
+        this.portalTravelEnabled = config.getBoolean("mechanics.portal-travel", true);
+        this.idleGesturesEnabled = config.getBoolean("mechanics.idle-gestures", true);
+
+        // ------------------------------------------------------------ chat + AI chat
+        this.chatCommandsPerMinute = clamp(config.getInt("chat.commands-per-minute", 20),
+                1, 600, "chat.commands-per-minute", logger);
+        this.chatWakeWords = readWakeWords(config);
+        this.chatMaxReplyChars = clamp(config.getInt("chat.max-reply-chars", 400),
+                40, 2000, "chat.max-reply-chars", logger);
+        this.chatSessionTimeoutTicks = clamp(config.getInt("chat.session-timeout-seconds", 600),
+                10, 86400, "chat.session-timeout-seconds", logger) * 20;
+        this.personaNull = config.getString("chat.personas.null", "");
+        this.personaCommander = config.getString("chat.personas.commander", "");
 
         // ------------------------------------------------------------ endpoints
         this.aiEnabled = config.getBoolean("ai.enabled", false);
@@ -360,6 +385,37 @@ public final class PluginConfig {
     /** How far above the summoner the sky portal opens, in blocks (3..60). */
     public int airdropHeight() { return airdropHeight; }
 
+    /**
+     * Whether {@code /null portal} may relocate a body.
+     *
+     * <p>On by default because it is an owner-run command with a visible
+     * portal at both ends; it is still the one deliberate exception to the
+     * no-teleport rule, so an owner who wants the strict rule can switch it off
+     * and every Null will refuse to make the crossing.</p>
+     */
+    public boolean portalTravelEnabled() { return portalTravelEnabled; }
+
+    /** Whether Nulls occasionally look around on their own. Pure realism. */
+    public boolean idleGesturesEnabled() { return idleGesturesEnabled; }
+
+    /** Orders a single player may give per minute through chat. */
+    public int chatCommandsPerMinute() { return chatCommandsPerMinute; }
+
+    /** Words that turn a chat line into an order. Never empty. */
+    public List<String> chatWakeWords() { return chatWakeWords; }
+
+    /** Longest reply the plugin will print, in characters. */
+    public int chatMaxReplyChars() { return chatMaxReplyChars; }
+
+    /** How long a private channel stays open without activity. */
+    public int chatSessionTimeoutTicks() { return chatSessionTimeoutTicks; }
+
+    /** System prompt for an ordinary Null; "" means "use the built-in one". */
+    public String personaNull() { return personaNull; }
+
+    /** System prompt for the Commander; "" means "use the built-in one". */
+    public String personaCommander() { return personaCommander; }
+
     private static int clamp(int value, int min, int max, String key, Logger logger) {
         if (value < min) {
             if (logger != null) {
@@ -376,6 +432,31 @@ public final class PluginConfig {
             return max;
         }
         return value;
+    }
+
+    /**
+     * Reads the wake words, always returning something usable.
+     *
+     * <p>An empty or malformed list would silently disable the whole chat
+     * interface, so the built-in words are the fallback, not an error.</p>
+     */
+    private static List<String> readWakeWords(FileConfiguration config) {
+        List<String> fallback = List.of("null", "nulls", "commander");
+        try {
+            List<String> raw = config.getStringList("chat.wake-words");
+            if (raw == null || raw.isEmpty()) {
+                return fallback;
+            }
+            List<String> out = new ArrayList<>();
+            for (String word : raw) {
+                if (word != null && !word.trim().isEmpty()) {
+                    out.add(word.trim().toLowerCase(Locale.ROOT));
+                }
+            }
+            return out.isEmpty() ? fallback : out;
+        } catch (Throwable t) {
+            return fallback;
+        }
     }
 
     private static String nonEmpty(String value, String fallback) {

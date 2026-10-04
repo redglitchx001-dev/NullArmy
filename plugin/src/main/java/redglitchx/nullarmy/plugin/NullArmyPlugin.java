@@ -9,6 +9,8 @@ import redglitchx.nullarmy.core.config.Caps;
 import redglitchx.nullarmy.core.util.TickBudget;
 import redglitchx.nullarmy.nms.VersionAdapter;
 import redglitchx.nullarmy.plugin.commander.CommanderManager;
+import redglitchx.nullarmy.plugin.chat.ChatBrain;
+import redglitchx.nullarmy.plugin.chat.ChatDirector;
 import redglitchx.nullarmy.plugin.command.NullCommand;
 import redglitchx.nullarmy.plugin.config.ConfigBootstrap;
 import redglitchx.nullarmy.plugin.config.PluginConfig;
@@ -76,6 +78,8 @@ public final class NullArmyPlugin extends JavaPlugin {
     private Airdrop airdrop;
     private NullCommand command;
     private MenuManager menuManager;
+    private ChatDirector chatDirector;
+    private ChatBrain chatBrain;
 
     private TickBudget pathBudget;
     private TickBudget blockInspectionBudget;
@@ -148,12 +152,21 @@ public final class NullArmyPlugin extends JavaPlugin {
         this.command = new NullCommand(this, squads, pluginConfig);
         this.menuManager = new MenuManager(this, command);
 
+        // 3b. Chat: orders like "null attack Steve" and private conversations.
+        //     The brain is built even with AI switched off, so status output is
+        //     honest about *why* a model is unavailable.
+        this.chatBrain = new ChatBrain(this);
+        this.chatDirector = new ChatDirector(this, command, chatBrain);
+
         // 4. Listeners. registerEvents throws if a listener is malformed, so
         //    each registration is isolated.
         registerListener(summonFlow, "summon flow");
         registerListener(commander, "Commander GUI");
         registerListener(menuManager, "menu GUI");
         registerListener(entityRegistry, "entity registry");
+        // After SummonFlow: a player answering "How many Nulls should come?"
+        // must never have that answer read as conversation.
+        registerListener(chatDirector, "chat interface");
 
         // 5. Commands. A missing command is a warning, not a crash: the rest of
         //    the plugin is still useful through the tick loop and the menu.
@@ -186,6 +199,7 @@ public final class NullArmyPlugin extends JavaPlugin {
         this.reloadables.add(airdrop);
         this.reloadables.add(command);
         this.reloadables.add(menuManager);
+        this.reloadables.add(chatDirector);
 
         this.fullyEnabled = true;
         getLogger().info("NullArmy enabled on " + serverVersion
@@ -194,6 +208,8 @@ public final class NullArmyPlugin extends JavaPlugin {
         getLogger().info("[NullArmy] caps: " + caps.maxLiveNpcs() + " live Nulls, summon cap "
                 + caps.summonHardCap() + ", " + caps.portalEffectsPerSummon() + " portal effects");
         getLogger().info("[NullArmy] type /null help, or open the menu with /null menu");
+        getLogger().info("[NullArmy] chat: say \"null help\" or \"null attack <player>\";"
+                + " AI is " + (chatBrain != null && chatBrain.available() ? "ready" : "off"));
     }
 
     @Override
@@ -394,6 +410,9 @@ public final class NullArmyPlugin extends JavaPlugin {
     public Airdrop airdrop() { return airdrop; }
     public NullCommand command() { return command; }
     public MenuManager menu() { return menuManager; }
+
+    /** The chat interface: orders by voice, private channels, AI replies. */
+    public ChatDirector chat() { return chatDirector; }
     public TickBudget pathBudget() { return pathBudget; }
     public TickBudget blockInspectionBudget() { return blockInspectionBudget; }
     public long currentTick() { return tickCounter; }
