@@ -31,15 +31,26 @@ limits:
   max-live-npcs: 64
   summon-hard-cap: 24
   path-max-expansions: 4096
+  # Hard ceiling on entities NullArmy itself keeps track of and cleans up
+  # (TNT, minecarts, dropped squad gear). Reaching it refuses new spawns with a
+  # clear message instead of quietly growing without bound.
+  max-tracked-entities: 256
 
 visuals:
   # Spec 3 requires AT LEAST 15 portal effects per summon. Values below 15 are
-  # rejected at startup.
+  # raised to 15 at startup, so the visual floor can never be configured away.
   portal-effects-per-summon: 16
 
 summoning:
   # Ticks before an unanswered "how many Nulls?" prompt expires (20 ticks = 1s).
   prompt-timeout-ticks: 300
+  # How far from you the plugin looks for collision-safe ground for each Null.
+  # Bigger finds room in tight builds; smaller keeps the squad tighter.
+  spawn-search-radius: 6
+
+menu:
+  # Title of the /null menu inventory. Plain text; the plugin styles it itself.
+  title: "NullArmy — Command Center"
 
 chat:
   enabled-by-default: false
@@ -206,3 +217,63 @@ policy:
   # Gates /null ban. Off by default; a ban is a human moderation action and is
   # NEVER reachable by an AI endpoint.
   moderation-integration-enabled: false
+
+# =====================================================================
+#  WITHER CANNON  —  opt-in spectacle, OFF by default
+#
+#  /null withercannon  (alias /null cannon) fires a real TNT minecart that
+#  arcs into the sky, opens portals at the apex and drops TNT out of them.
+#
+#  It stays dead until you turn it on here. Even then it needs:
+#    1. wither-cannon.enabled: true
+#    2. policy.explosives-enabled: true
+#    3. policy.wither-enabled: true
+#    4. policy.griefing-enabled: true  (only when blocks-damage is true)
+#    5. the permission below, held by whoever fires it
+#
+#  blocks-damage: false keeps the show and protects the map: the TNT still
+#  explodes and still looks right, but no block is ever destroyed. Turn it to
+#  true only on a server that has accepted explosives and griefing.
+# =====================================================================
+wither-cannon:
+  enabled: false
+  require-permission: nullarmy.admin
+  # Shots before the cannon must cool down, per player.
+  max-charge: 3
+  # TNT dropped per shot, spread over several ticks (never dumped in one tick).
+  tnt-per-shot: 3
+  cooldown-seconds: 20
+  # When false, explosions are visual only (no blocks destroyed).
+  blocks-damage: false
+
+# =====================================================================
+#  AIR DROP  —  sky portals that deliver a squad, OFF by default
+#
+#  /null airdrop opens portals in the air and on the ground at safe spots.
+#  With drop-nulls-from-sky: false (the default) every Null still emerges from
+#  ground-level portal effects onto verified safe ground, because a Null that
+#  starts mid-air would be spawned inside terrain-free space and would take
+#  real fall damage - the spec forbids starting a Null anywhere unsafe.
+#
+#  drop-nulls-from-sky: true changes that knowingly: Nulls appear at the sky
+#  portal mouth and fall under real vanilla gravity, including real fall
+#  damage. Some may die on landing. That is your call, not the plugin's.
+# =====================================================================
+airdrop:
+  # OFF by default. A permission alone is never enough: this has to be true too.
+  enabled: false
+  require-permission: nullarmy.admin
+  # Portal effects at the sky mouth and around each ground emergence point.
+  # Never below 15, so an air drop always reads as a portal and not a sparkle.
+  portals: 16
+  # false = every Null emerges out of ground-level portal effects at a spot the
+  #         adapter verified as collision-safe; nothing falls, nothing is hurt.
+  # true  = the Nulls drop out of the sky portal under real gravity, INCLUDING
+  #         real fall damage. This is the honest, physical version, and the
+  #         reason the whole feature is opt-in.
+  drop-nulls-from-sky: false
+  # How far above the summoner the sky portal opens (3-60, clamped).
+  height: 12
+  # TNT dropped from the sky portals as part of the show (subject to the same
+  # policy switches as the cannon).
+  tnt-per-drop: 2

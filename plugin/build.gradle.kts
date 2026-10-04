@@ -49,4 +49,35 @@ tasks.jar {
     manifest {
         attributes(mapOf("paperweight-mappings-namespace" to "mojang"))
     }
+
+    /*
+     * Packaging guard.
+     *
+     * A jar without config.yml still loads, but JavaPlugin#saveResource then
+     * throws IllegalArgumentException inside onEnable, the data folder is never
+     * created, and every /null command is left without the plugin behind it.
+     * That failure is invisible to a build that only checks for plugin.yml, so
+     * the build now fails loudly here instead of on the server.
+     *
+     * This runs as part of `./gradlew build`, so CI turns a packaging
+     * regression into a red build with the real reason in the log.
+     */
+    val requiredResources = listOf("plugin.yml", "config.yml")
+    val jarTask = this
+    doLast {
+        val jarFile = jarTask.archiveFile.get().asFile
+        val present = java.util.zip.ZipFile(jarFile).use { zip ->
+            zip.entries().asSequence().map { it.name }.toList()
+        }
+        val missing = requiredResources.filterNot { present.contains(it) }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "NullArmy jar is missing required resource(s): $missing. " +
+                    "Check plugin/src/main/resources and the processResources/jar configuration. " +
+                    "Entries actually packaged: " + present.sorted().joinToString(", ")
+            )
+        }
+        println("NullArmy jar check OK: " + requiredResources.joinToString(", ") +
+            " packaged in " + jarFile.name + " (" + present.size + " entries)")
+    }
 }
