@@ -87,3 +87,43 @@ it.
 
 See [`STATUS.md`](STATUS.md), [`TRACEABILITY.md`](TRACEABILITY.md), and
 [`RELEASING.md`](RELEASING.md) for the remaining work and release gates.
+
+---
+
+## Runtime smoke test on a real Paper server
+
+```bash
+./gradlew runtimeSmoke      # or just ./gradlew build, which ends with it
+```
+
+`ci/runtime-smoke.sh` downloads Paper 1.21.11, starts it headless with the built jar in
+`plugins/`, runs `/null selftest` from the console and then checks the log. It needs network access
+to `fill.papermc.io` (or `api.papermc.io`) and a JDK 21 on `PATH`.
+
+Verdicts, printed with the marker `RUNTIME SMOKE:`:
+
+| Verdict | Meaning | Build |
+| --- | --- | --- |
+| `PASS` | Every `/null selftest` check passed and the server log has no exception, no `Illegal ChunkMap::addEntity` and no NullArmy `SEVERE` line | green |
+| `FAIL` | A check failed, or the server logged a tracking/tick fault | **red** |
+| `BLOCKED` | No Paper jar could be downloaded, so **no runtime claim is made**; the script prints the checks that still need a live server | green, with a warning |
+
+`BLOCKED` is never a pass. It exists because "we could not test it" and "it works" are different
+statements, and only one of them is honest.
+
+You can also run the same test by hand on any server: `null selftest` from the console (or
+`/null selftest` as an operator). Every check prints one line prefixed
+`[NullArmy][SELFTEST]`, ending with `RESULT: PASS n passed, m failed`.
+
+### Reading the verdict in CI
+
+This repository's CI log store is not reachable from every environment, so `gradlew` re-emits the
+important lines as GitHub **annotations**: a `notice` with the smoke-test verdict and check lines on
+every run, and `error` annotations with the javac file/line on a failed build. Read them with:
+
+```bash
+gh api repos/<owner>/NullArmy/check-runs/<job-id>/annotations --jq '.[] | .message'
+```
+
+Annotations are capped in size, so the authoritative record is the `paper-smoke-log` artifact and
+the job log itself.

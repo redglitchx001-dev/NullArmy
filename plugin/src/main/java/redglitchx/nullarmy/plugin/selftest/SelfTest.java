@@ -243,6 +243,7 @@ public final class SelfTest {
         check(paired, "the tracker paired the Null with the viewer"
                 + (paired ? "" : " - " + plugin.adapter().trackingDiagnostics()));
 
+        say("pairing path: " + plugin.adapter().trackingDiagnostics());
         List<String> packets = plugin.adapter().probePackets(probe);
         check(packets.contains("ClientboundPlayerInfoUpdatePacket"),
                 "the viewer received ClientboundPlayerInfoUpdatePacket"

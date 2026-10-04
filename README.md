@@ -27,6 +27,41 @@
 
 ---
 
+## Verified on a live Paper 1.21.11 server
+
+`./gradlew build` ends with `runtimeSmoke`: a headless Paper 1.21.11 server starts with the built
+jar, runs `/null selftest` from the console, and the build fails unless every check passed and the
+server log is clean. The last run reported **`RESULT: PASS 26 passed, 0 failed`**, covering:
+
+- one Null and a squad of five are created, alive, with a non-null packet listener, and present in
+  `ChunkMap.entityMap` — the server-side half of being visible;
+- a viewer's connection really receives `ClientboundPlayerInfoUpdatePacket` **and** the entity
+  pairing bundle, which are the two packets a client turns into a visible player;
+- Nulls emerge from **real, temporary portal doorways** (`4 portal doorways opened, 3 Null(s) walked
+  out of them; 2 arrived on verified open ground instead`), and every block those doorways used is
+  put back;
+- the squad stays alive, tracked and finite across many server ticks with no server exception;
+- a destroyed Totem Of Null walks every Null out one at a time, Commander last, refusing new summons
+  until it finishes.
+
+What a headless server cannot prove is listed in [`STATUS.md`](STATUS.md) — skin rendering, the
+nameplate and tab appearance, how the doorway looks on your client, the cannon's arc when a player
+aims it, and a chunk unload/reload cycle.
+
+## What an owner gets
+
+| | |
+| --- | --- |
+| **Summoning** | Call Horn named `Null` (real Call goat-horn sound) → "How many Nulls should come?" → a random 1…`portals.max-per-summon` real doorways open near you and the Nulls walk out of them. |
+| **Portals** | Temporary obsidian + `NETHER_PORTAL` doorways, built only where every block is already air, restored after `portals.lifetime-ticks`, never used for Nether travel. |
+| **Equipment** | Iron chestplate, shield offhand, and a hotbar of sword, bow, arrows, golden apples, cooked food, pickaxe, ender pearls, water bucket and torches — verified on the NMS body, never duplicated, and the Commander keeps an owner-edited loadout. |
+| **Names** | Every Null gets its own random alphanumeric profile name (≤16 chars). The configured skin account supplies the texture only. Commander and Nulls appear in the tab list with plain names. |
+| **Totem Of Null** | Named exactly `The Totem Of Null`, real Curse of Vanishing, recognised by persistent data. When it pops or is truly destroyed the whole army goes out one at a time, Commander last. |
+| **Chat** | Talk to the Commander only; Nulls take orders. `null guard`, `null follow`, `null formation square`, `null attack Steve` — dispatched through the same validated executor as `/null …`. |
+| **AI** | The Commander sees its squad (health, positions, roles, kit, objective, what the cannon and air drop may do) and answers with one typed, allowlisted action that is re-checked against permissions, caps and policy before it runs. Cannon, air drop and dismiss always need `/null confirm`. With no endpoint configured a deterministic local coordinator runs and `/null ai` says so. |
+| **Missions** | One original objective for the whole army at a time — scouting, a corridor rescue, holding a banner, trials, a gate vigil, an accord between camps, a supply run. Movement and reporting only: no block damage, no explosives, no PvP. |
+| **Reload** | `/null reload` appends any setting this build ships that your `config.yml` lacks, with a timestamped backup, and tells you exactly which keys were added. Your values and comments are never rewritten. |
+
 ## What is NullArmy?
 
 You blow a **Call Horn** (or trigger a **Totem Of Null**). The plugin asks how many. Fifteen-plus portal effects flare open across the ground — and out of them *walk* Nulls: black-skinned, random-named, inventory-carrying entities that behave like a coordinated squad of skilled survival players.
