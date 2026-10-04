@@ -75,6 +75,7 @@ public final class SelfTest {
     private UUID squadOwner;
     private int ticksObserved;
     private boolean tickingClean = true;
+    private SelfTestV3 v3;
 
     public SelfTest(NullArmyPlugin plugin) {
         this.plugin = plugin;
@@ -139,6 +140,9 @@ public final class SelfTest {
         steps.add(this::stepSquadSurvived);
         steps.add(this::stepPortalRestored);
         steps.add(this::stepSquadCleanup);
+        // v3 (S-27 onward): one block of checks per bug B-01..B-17.
+        v3 = new SelfTestV3(plugin, this, worldName, origin);
+        v3.enqueue(steps);
         steps.add(this::stepShutdownSequence);
         // The sequence spends its configured delay between bodies, so it needs
         // more ticks than one step: wait until it is done rather than hoping.
@@ -412,6 +416,11 @@ public final class SelfTest {
     }
 
     private void stepShutdownResult() {
+        if (v3 != null && plugin.chatGate() != null) {
+            int forbidden = plugin.chatGate().forbiddenBroadcasts() - v3.forbiddenAtStart();
+            check(forbidden == 0, "S-84 [B-08] a Null death and a Totem Of Null shutdown caused zero chat"
+                    + " broadcasts (" + forbidden + " forbidden, " + plugin.chatGate().events() + " events logged)");
+        }
         check(!plugin.shutdown().isRunning(), "the shutdown finished");
         check(plugin.squads().liveCount() == 0,
                 "every Null is gone after the shutdown (" + plugin.squads().liveCount() + " left)");
@@ -445,7 +454,7 @@ public final class SelfTest {
 
     // ------------------------------------------------------------------ reporting
 
-    private void check(boolean ok, String what) {
+    void check(boolean ok, String what) {
         if (ok) {
             pass(what);
         } else {
@@ -453,19 +462,24 @@ public final class SelfTest {
         }
     }
 
-    private void pass(String what) {
+    void pass(String what) {
         passed++;
         results.add("PASS " + what);
         say("PASS " + what);
     }
 
-    private void fail(String what) {
+    void fail(String what) {
         failed++;
         results.add("FAIL " + what);
         say("FAIL " + what);
     }
 
-    private void say(String line) {
+    /** Asks for {@code ticks} of real server time before the next step runs. */
+    void gap(int ticks) {
+        nextGap = Math.max(1, ticks);
+    }
+
+    void say(String line) {
         plugin.getLogger().info(MARKER + " " + line);
         if (reporter instanceof Player && ((Player) reporter).isOnline()) {
             try {
@@ -501,6 +515,9 @@ public final class SelfTest {
 
     /** Leaves the world exactly as the test found it. */
     private void cleanupEverything() {
+        if (v3 != null) {
+            Guard.attempt(plugin.getLogger(), "v3 self test cleanup", () -> v3.cleanup());
+        }
         Guard.attempt(plugin.getLogger(), "self test cleanup", () -> {
             if (probe != null) {
                 probe.destroy();

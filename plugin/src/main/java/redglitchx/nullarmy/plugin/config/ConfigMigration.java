@@ -104,7 +104,14 @@ public final class ConfigMigration {
         if (plugin == null) {
             return Report.failed("no plugin");
         }
-        File file = new File(plugin.getDataFolder(), ConfigBootstrap.FILE_NAME);
+        return migrateFile(plugin, new File(plugin.getDataFolder(), ConfigBootstrap.FILE_NAME), version);
+    }
+
+    /** Migrates any config file the same way (the self test uses copies). */
+    public static Report migrateFile(JavaPlugin plugin, File file, String version) {
+        if (plugin == null || file == null) {
+            return Report.failed("no plugin or file");
+        }
         if (!file.isFile()) {
             // Nothing to migrate: the bootstrap writes the full shipped file.
             return Report.untouched(new ArrayList<>());

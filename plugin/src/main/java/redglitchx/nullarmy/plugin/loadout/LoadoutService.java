@@ -63,6 +63,11 @@ public final class LoadoutService implements Listener {
     static final int[] SLOT_OF = new int[54];
 
     static final int SAVE_BUTTON = 7;
+
+    /** The editor slot that shows player slot {@code slot} (0-40). */
+    public static int guiSlotOf(int slot) {
+        return slot < 0 || slot > 40 ? -1 : GUI_OF[slot];
+    }
     static final int INFO_ITEM = 8;
 
     static {

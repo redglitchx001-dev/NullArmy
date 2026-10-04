@@ -526,6 +526,11 @@ public final class BuilderService implements Reloadable {
         if (now - job.lastPlaceTick < rate || now - exec.stepStart < 2) {
             return intent;
         }
+        for (Entity occupant : w.getNearbyEntities(org.bukkit.util.BoundingBox.of(block).expand(-0.01D))) {
+            if (!(occupant instanceof Item) && !occupant.isDead()) {
+                return intent; // somebody stands there: wait, never place a block into a body
+            }
+        }
         Block against = null;
         for (BlockFace face : new BlockFace[] {BlockFace.DOWN, BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST,
                 BlockFace.WEST, BlockFace.UP}) {

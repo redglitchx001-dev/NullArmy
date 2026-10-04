@@ -47,6 +47,8 @@ public final class Mind {
     Vec3d attention;
     long attentionUntil;
     boolean attentionHeadOnly = true;
+    /** True when the current attention is only an idle look-around (players outrank it). */
+    boolean attentionIsScan;
     long nextScanTick;
     long nextPlayerGlance;
     UUID glancedAt;

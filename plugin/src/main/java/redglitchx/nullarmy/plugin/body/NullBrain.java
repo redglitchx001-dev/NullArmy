@@ -545,6 +545,21 @@ public final class NullBrain implements Reloadable {
         mind.nextPlayerGlance = mind.attentionUntil + 40;
     }
 
+    /** Holds a body's look on a point for a while (aiming, the self test). */
+    public void forceLook(NullBody body, Vec3d point, int ticks, boolean headOnly) {
+        Mind mind = mind(body);
+        if (mind == null || point == null) {
+            return;
+        }
+        mind.glancedAt = null;
+        mind.attention = point;
+        mind.attentionIsScan = false;
+        mind.attentionUntil = now + Math.max(1, ticks);
+        mind.attentionHeadOnly = headOnly;
+        mind.nextPlayerGlance = mind.attentionUntil + 40;
+        body.setLookTarget(point, headOnly);
+    }
+
     /** Every Null of {@code owner} within 24 blocks looks at the speaker. */
     public void noteSpeaker(UUID owner, UUID speaker) {
         if (plugin.squads() == null) {
@@ -724,7 +739,7 @@ public final class NullBrain implements Reloadable {
                 return;
             }
         }
-        if (mind.attention != null && now < mind.attentionUntil && mind.glancedAt == null) {
+        if (mind.attention != null && now < mind.attentionUntil && mind.glancedAt == null && !mind.attentionIsScan) {
             intent.look = mind.attention;
             intent.lookHeadOnly = mind.attentionHeadOnly;
             return;
@@ -734,6 +749,7 @@ public final class NullBrain implements Reloadable {
             if (watcher instanceof Player) {
                 mind.glancedAt = ((Player) watcher).getUniqueId();
                 mind.attention = null;
+                mind.attentionIsScan = false;
                 mind.attentionUntil = now + 40 + random.nextInt(41);
                 mind.attentionHeadOnly = true;
                 mind.nextPlayerGlance = mind.attentionUntil + 60 + random.nextInt(100);
@@ -745,6 +761,7 @@ public final class NullBrain implements Reloadable {
             if (watcher instanceof Vec3d) {
                 mind.glancedAt = null;
                 mind.attention = (Vec3d) watcher;
+                mind.attentionIsScan = false;
                 mind.attentionUntil = now + 40 + random.nextInt(41);
                 mind.attentionHeadOnly = true;
                 mind.nextPlayerGlance = mind.attentionUntil + 60 + random.nextInt(100);
@@ -754,6 +771,11 @@ public final class NullBrain implements Reloadable {
             }
             mind.nextPlayerGlance = now + 10;
         }
+        if (mind.attention != null && now < mind.attentionUntil && mind.attentionIsScan) {
+            intent.look = mind.attention;
+            intent.lookHeadOnly = true;
+            return;
+        }
         if (!intent.moving() && v3 != null && v3.idleBehaviour() && now >= mind.nextScanTick) {
             double yaw = Math.toRadians(body.bodyYaw() + (random.nextDouble() * 140.0D - 70.0D));
             mind.glancedAt = null;
@@ -761,6 +783,7 @@ public final class NullBrain implements Reloadable {
                     eye.z() + Math.cos(yaw) * 5.0D);
             mind.attentionUntil = now + 30 + random.nextInt(30);
             mind.attentionHeadOnly = true;
+            mind.attentionIsScan = true;
             mind.nextScanTick = now + 60 + random.nextInt(80);
             intent.look = mind.attention;
             intent.lookHeadOnly = true;

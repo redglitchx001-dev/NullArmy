@@ -60,6 +60,11 @@ public final class SkinChain implements Reloadable {
             this.attempts = Collections.unmodifiableList(new ArrayList<>(attempts));
         }
 
+        /** A resolution from a known texture (the self test's stub skins). */
+        public static Resolution of(SkinData skin, String source) {
+            return new Resolution(skin, source, Collections.singletonList(source));
+        }
+
         public SkinData skin() { return skin; }
         public String source() { return source; }
         public List<String> attempts() { return attempts; }

@@ -233,7 +233,8 @@ public final class CombatBrain {
         intent.look = new Vec3d(point[0], point[1], point[2]);
         intent.lookHeadOnly = false;
         intent.gait = NullBody.GAIT_STOP;
-        boolean aligned = Math.abs(wrap(body.headYaw() - aim.yaw())) < 2.5F
+        // Vanilla shoots along the entity yaw (the travel frame), not the head.
+        boolean aligned = Math.abs(wrap(body.bodyYaw() - aim.yaw())) < 2.5F
                 && Math.abs(body.pitch() - aim.pitch()) < 2.5F;
         if (now - mind.bowDrawStart >= 22 && aligned) {
             body.releaseUseItem();
