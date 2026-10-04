@@ -309,7 +309,7 @@ public final class SelfTest {
             say("after " + ticksObserved + " ticks: " + alive + " alive, " + tracked
                     + " tracked of " + members.size());
         }
-        for (Throwable problem : plugin.selfTestErrors()) {
+        for (String problem : plugin.selfTestErrors()) {
             tickingClean = false;
             fail("the server reported a problem while ticking the squad: " + problem);
         }

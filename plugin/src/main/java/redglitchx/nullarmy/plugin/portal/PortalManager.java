@@ -250,12 +250,6 @@ public final class PortalManager implements Listener, Reloadable {
             if (event == null || active.isEmpty()) {
                 return;
             }
-            if (event instanceof EntityPortalEvent) {
-                // Bukkit's EntityPortalEvent extends PlayerPortalEvent, so this
-                // handler sees it too - and getPlayer() on it is not supported.
-                // The entity handler below owns that case.
-                return;
-            }
             if (ours(event.getFrom())) {
                 event.setCancelled(true);
                 Player player = event.getPlayer();

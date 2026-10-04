@@ -285,6 +285,9 @@ if [ "$NULLARMY_EXIT" -ne 0 ] && [ -f "$NULLARMY_LOG" ]; then
             msg = substr(rest, m + 2)
             gsub(/%/, "%%", msg)
             printf("::error file=%s,line=%s::%s\n", file, lineno, msg)
+            raw = $0
+            gsub(/%/, "%%", raw)
+            printf("::error::%s\n", raw)
             next
         }
         /FAILURE: |What went wrong|^Caused by:|Execution failed for task|error:|BUILD FAILED|RUNTIME SMOKE: FAIL|RUNTIME SMOKE: BLOCKED|\[NullArmy\]\[SELFTEST\]|  FAIL  |^FAILURES:|^  - |^passed: / {
