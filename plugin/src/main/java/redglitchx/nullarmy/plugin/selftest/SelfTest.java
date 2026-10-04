@@ -52,10 +52,17 @@ public final class SelfTest {
     /** Ticks between two steps, so the server really ticks in between. */
     private static final int STEP_GAP_TICKS = 4;
 
+    /** Ticks a step asks for before the next one runs, when it needs real time. */
+    private static final int LONG_STEP_GAP_TICKS = 20;
+
+    /** How many long observations of the ticking squad the test makes. */
+    private static final int SQUAD_OBSERVATIONS = 10;
+
     private final NullArmyPlugin plugin;
     private final Deque<Runnable> steps = new ArrayDeque<>();
     private final List<String> results = new ArrayList<>();
 
+    private int nextGap = STEP_GAP_TICKS;
     private boolean running;
     private int passed;
     private int failed;
@@ -126,10 +133,9 @@ public final class SelfTest {
         steps.add(this::stepProbeVisibility);
         steps.add(this::stepSingleCleanup);
         steps.add(this::stepSquadSpawn);
-        steps.add(this::stepSquadTick);
-        steps.add(this::stepSquadTick);
-        steps.add(this::stepSquadTick);
-        steps.add(this::stepSquadTick);
+        for (int i = 0; i < SQUAD_OBSERVATIONS; i++) {
+            steps.add(this::stepSquadTick);
+        }
         steps.add(this::stepSquadSurvived);
         steps.add(this::stepPortalRestored);
         steps.add(this::stepSquadCleanup);
@@ -148,7 +154,9 @@ public final class SelfTest {
 
     private void scheduleNext() {
         try {
-            Bukkit.getScheduler().runTaskLater(plugin, this::runNextStep, STEP_GAP_TICKS);
+            int gap = Math.max(1, nextGap);
+            nextGap = STEP_GAP_TICKS;
+            Bukkit.getScheduler().runTaskLater(plugin, this::runNextStep, gap);
         } catch (Throwable t) {
             fail("the scheduler refused to continue the self test: " + Guard.describe(t));
             finish();
@@ -304,8 +312,11 @@ public final class SelfTest {
 
     /** Watches the squad while the server ticks it. */
     private void stepSquadTick() {
+        // Ask for a full second of real server ticking before the next look, so
+        // "it survived ticking" means something.
+        nextGap = LONG_STEP_GAP_TICKS;
         List<NullBody> members = plugin.squads().membersOf(squadOwner);
-        ticksObserved += STEP_GAP_TICKS;
+        ticksObserved += LONG_STEP_GAP_TICKS;
         int alive = 0;
         int tracked = 0;
         for (NullBody body : members) {

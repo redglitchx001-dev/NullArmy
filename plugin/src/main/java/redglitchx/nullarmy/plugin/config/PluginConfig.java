@@ -100,6 +100,7 @@ public final class PluginConfig {
 
     // ------------------------------------------------------------ missions
     private final boolean missionsEnabled;
+    private final boolean commanderSpawnWithPortal;
 
     // ---------------------------------------------------------------- chat
     private final boolean commanderOnlyConversation;
@@ -255,6 +256,7 @@ public final class PluginConfig {
 
         // ------------------------------------------------------------ missions
         this.missionsEnabled = config.getBoolean("missions.enabled", true);
+        this.commanderSpawnWithPortal = config.getBoolean("commander.spawn-with-portal", true);
 
         // ---------------------------------------------------------------- chat
         this.commanderOnlyConversation =
@@ -449,6 +451,9 @@ public final class PluginConfig {
     // ------------------------------------------------------------ missions API
 
     public boolean missionsEnabled() { return missionsEnabled; }
+
+    /** The Commander arrives through a real temporary doorway, not just effects. */
+    public boolean commanderSpawnWithPortal() { return commanderSpawnWithPortal; }
 
     // ---------------------------------------------------------------- chat API
 

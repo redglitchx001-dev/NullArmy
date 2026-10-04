@@ -247,12 +247,30 @@ public final class CommanderManager implements Listener, Reloadable {
             return false;
         }
 
-        Vec3d spot = findSafeSpot(adapter, world, origin);
+        // A real doorway first: the Commander should walk out of the same kind of
+        // temporary portal the squad uses, not out of a particle effect. If no
+        // site can be built, verified open ground is used and the message says so.
+        Vec3d spot = null;
+        boolean doorway = false;
+        if (plugin.portals() != null && plugin.pluginConfig() != null
+                && plugin.pluginConfig().commanderSpawnWithPortal()) {
+            java.util.List<redglitchx.nullarmy.plugin.portal.PortalBuilder.BuiltPortal> built =
+                    plugin.portals().buildDoorways(world,
+                            new Vec3d(origin.getX(), Math.floor(origin.getY()), origin.getZ()), 1);
+            if (!built.isEmpty()) {
+                spot = plugin.portals().takeExit(built.get(0), 0);
+                doorway = spot != null;
+            }
+        }
+        if (spot == null) {
+            spot = findSafeSpot(adapter, world, origin);
+        }
         if (spot == null) {
             owner.sendMessage(PREFIX + "No safe ground nearby for the Commander to step onto -"
                     + " move to open ground and try again.");
             return false;
         }
+        final boolean arrivedThroughDoorway = doorway;
 
         String value = (skin != null && skin.complete()) ? skin.value() : "";
         String signature = (skin != null && skin.complete()) ? skin.signature() : "";
@@ -272,6 +290,24 @@ public final class CommanderManager implements Listener, Reloadable {
             owner.sendMessage(PREFIX + "The adapter returned no entity - nothing was summoned.");
             return false;
         }
+        // A returned object is not a spawn: the Commander has to be alive, have a
+        // packet listener, and be tracked by the server, or nobody would see it.
+        String problem = null;
+        if (!adapter.packetListenerReady(commander)) {
+            problem = "it has no packet listener, so it was removed instead of registered";
+        } else if (!commander.isAlive()) {
+            problem = "it was not alive after registration";
+        } else if (!adapter.isTracked(commander)) {
+            problem = "the server is not tracking it, so no client could see it";
+        }
+        if (problem != null) {
+            final redglitchx.nullarmy.nms.NullBody broken = commander;
+            commander = null;
+            Guard.attempt(plugin.getLogger(), "removing an unusable Commander", broken::destroy);
+            owner.sendMessage(PREFIX + "The Commander could not be summoned: " + problem + ".");
+            plugin.getLogger().severe("[NullArmy] Commander registration failed: " + problem);
+            return false;
+        }
 
         // The portal is the whole point of the entrance. It is cosmetic, so it
         // may fail without losing the Commander that already exists.
@@ -283,8 +319,14 @@ public final class CommanderManager implements Listener, Reloadable {
         });
 
         Guard.attempt(plugin.getLogger(), "Commander loadout", this::applyLoadout);
-        owner.sendMessage(PREFIX + "The Commander steps out of the portal."
-                + " Use /null loadout to equip it.");
+        owner.sendMessage(PREFIX + (arrivedThroughDoorway
+                ? "The Commander steps out of a real doorway; it closes on its own shortly."
+                : "No doorway site was clear, so the Commander stepped onto verified open"
+                        + " ground with portal effects instead."));
+        String kitProblem = plugin.kits() == null ? null : plugin.kits().verify(commander);
+        owner.sendMessage(PREFIX + (kitProblem == null
+                ? "Loadout verified on the body. Use /null loadout to edit it."
+                : "Loadout is incomplete: " + kitProblem + ". Use /null loadout to edit it."));
         return true;
     }
 
