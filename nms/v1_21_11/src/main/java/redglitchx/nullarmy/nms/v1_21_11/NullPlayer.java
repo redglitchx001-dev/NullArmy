@@ -96,9 +96,9 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     }
 
     /**
-     * A real NMS connection with no channel and no outbound queue. This uses a
-     * fully-qualified superclass name because ServerPlayer inherits a nested
-     * {@code WaypointTransmitter.Connection} type with the same simple name.
+     * A real NMS connection with no channel; outbound sends are discarded
+     * rather than queued. The superclass is fully qualified because ServerPlayer
+     * inherits a nested {@code WaypointTransmitter.Connection} with the same name.
      */
     private static final class DiscardingConnection extends net.minecraft.network.Connection {
 
