@@ -474,6 +474,11 @@ public final class SelfTest {
         say("FAIL " + what);
     }
 
+    /** Runs {@code step} again next (after the gap), ahead of the queued steps. */
+    void retry(Runnable step) {
+        steps.addFirst(step);
+    }
+
     /** Asks for {@code ticks} of real server time before the next step runs. */
     void gap(int ticks) {
         nextGap = Math.max(1, ticks);

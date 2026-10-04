@@ -617,18 +617,25 @@ final class SelfTestV3 {
         blocked("S-50", "B-06", "no real player connects to the headless smoke server; a watcher point 5 blocks"
                 + " away goes through the same player-glance code");
         plugin.brain().extraWatchers().add(vecA);
-        t.gap(40);
+        numberB = 360.0D;
+        final NullBody body = one;
+        final Vec3d watcher = vecA;
+        sampler = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+            Vec3d q = body.bodyPosition();
+            double want = Math.toDegrees(Math.atan2(-(watcher.x() - q.x()), watcher.z() - q.z()));
+            numberB = Math.min(numberB, Math.abs(wrap(body.headYaw() - want)));
+        }, 1L, 1L);
+        t.gap(50);
     }
 
     private void b06WatchCheck() {
         if (one == null || vecA == null) {
             return;
         }
-        Vec3d p = one.bodyPosition();
-        double want = Math.toDegrees(Math.atan2(-(vecA.x() - p.x()), vecA.z() - p.z()));
-        double off = Math.abs(wrap(one.headYaw() - want));
-        check("S-50", "B-06", off < 25.0D, "the head turns to a nearby watcher (off by "
-                + String.format(Locale.ROOT, "%.0f", off) + " degrees)");
+        stopSampler();
+        double off = numberB;
+        check("S-50", "B-06", off < 25.0D, "the head turns to a nearby watcher (closest "
+                + String.format(Locale.ROOT, "%.0f", off) + " degrees during a 2-4 s glance)");
         plugin.brain().extraWatchers().clear();
         dismissAll();
     }
@@ -658,18 +665,29 @@ final class SelfTestV3 {
             return;
         }
         double worst = 0.0D;
+        String worstNote = "";
         Set<String> cells = new HashSet<>();
         List<double[]> cellPoints = new ArrayList<>();
         for (int i = 0; i < squad.members().size(); i++) {
             Vec3d cell = plugin.brain().formationCell(squad, worldName, i);
-            Vec3d p = squad.members().get(i).bodyPosition();
-            worst = Math.max(worst, flat(cell, p));
+            NullBody body = squad.members().get(i);
+            Vec3d p = body.bodyPosition();
+            double d = flat(cell, p);
+            if (d > worst) {
+                worst = d;
+                Mind m = plugin.brain().minds().get(body.uuid());
+                worstNote = "#" + i + " at " + String.format(Locale.ROOT, "%.2f,%.2f,%.2f", p.x(), p.y(), p.z())
+                        + " cell " + String.format(Locale.ROOT, "%.2f,%.2f", cell.x(), cell.z()) + " ground="
+                        + body.onGround() + " wall=" + body.horizontalCollision() + " v="
+                        + String.format(Locale.ROOT, "%.3f", body.velocity().horizontalLength()) + " mind "
+                        + (m == null ? "none" : m.describe()) + " objective=" + squad.objective();
+            }
             cells.add(Math.round(cell.x() * 10) + ":" + Math.round(cell.z() * 10));
             cellPoints.add(new double[] {cell.x(), cell.z()});
         }
         check("S-51", "B-07", worst <= 0.3D && squad.members().size() == 9,
                 "9 Nulls stand in the rotated square matrix, each within 0.3 of its cell (worst "
-                        + String.format(Locale.ROOT, "%.2f", worst) + ")");
+                        + String.format(Locale.ROOT, "%.2f", worst) + (worst > 0.3D ? "; " + worstNote : "") + ")");
         double minCell = redglitchx.nullarmy.core.formation.FormationMatrix.minPairDistance(cellPoints);
         check("S-52", "B-07", cells.size() == squad.members().size() && minCell >= 1.1D - 1.0e-6,
                 "no two Nulls share a cell (closest cells " + String.format(Locale.ROOT, "%.2f", minCell) + ")");
@@ -687,12 +705,25 @@ final class SelfTestV3 {
             return;
         }
         double moved = 0.0D;
+        String note = "";
         for (int i = 0; i < squad.members().size() && 2 * i + 1 < samples.size(); i++) {
-            Vec3d p = squad.members().get(i).bodyPosition();
-            moved = Math.max(moved, Math.hypot(p.x() - samples.get(2 * i), p.z() - samples.get(2 * i + 1)));
+            NullBody body = squad.members().get(i);
+            Vec3d p = body.bodyPosition();
+            double d = Math.hypot(p.x() - samples.get(2 * i), p.z() - samples.get(2 * i + 1));
+            if (d > moved) {
+                moved = d;
+                Vec3d cell = plugin.brain().formationCell(squad, worldName, i);
+                Mind m = plugin.brain().minds().get(body.uuid());
+                note = "#" + i + " from " + String.format(Locale.ROOT, "%.2f,%.2f", samples.get(2 * i),
+                        samples.get(2 * i + 1)) + " to " + String.format(Locale.ROOT, "%.2f,%.2f,%.2f", p.x(), p.y(), p.z())
+                        + " cell " + (cell == null ? "none" : String.format(Locale.ROOT, "%.2f,%.2f", cell.x(), cell.z()))
+                        + " alive=" + body.isAlive() + " v=" + String.format(Locale.ROOT, "%.3f",
+                        body.velocity().horizontalLength()) + " mind " + (m == null ? "none" : m.describe())
+                        + " objective=" + squad.objective() + " members=" + squad.members().size();
+            }
         }
         check("S-53", "B-07", moved < 0.1D, "a held formation does not jitter (largest drift "
-                + String.format(Locale.ROOT, "%.3f", moved) + " over 20 ticks)");
+                + String.format(Locale.ROOT, "%.3f", moved) + " over 20 ticks" + (moved >= 0.1D ? "; " + note : "") + ")");
         dismissAll();
     }
 
@@ -1373,10 +1404,20 @@ final class SelfTestV3 {
         }
         mark = plugin.currentTick();
         counter = 0;
-        one.setMovement(0, 0, NullBody.GAIT_STOP, true, false);
+        flagJump = false;
         final NullBody body = one;
         sampler = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
             if (counter > 0) {
+                return;
+            }
+            Player attackerNow = handle(body);
+            if (!flagJump) {
+                // Like the combat brain: only jump for a crit with a full cooldown.
+                armSword(attackerNow);
+                if (attackerNow.getAttackCooldown() >= 0.98F && body.onGround()) {
+                    body.setMovement(0, 0, NullBody.GAIT_STOP, true, false);
+                    flagJump = true;
+                }
                 return;
             }
             if (!body.onGround() && body.velocity().y() < 0.0D && body.fallDistance() > 0.0D) {
@@ -1390,8 +1431,10 @@ final class SelfTestV3 {
                 counter = 1;
             }
         }, 1L, 1L);
-        t.gap(25);
+        t.gap(45);
     }
+
+    private boolean flagJump;
 
     private void b17FallingCheck() {
         stopSampler();
@@ -1418,6 +1461,7 @@ final class SelfTestV3 {
         victim.setHealth(Math.min(victim.getHealth() + 10.0D, 20.0D));
         plugin.brain().forceLook(two, eye(one), 200, false);
         victim.startUsingItem(EquipmentSlot.OFF_HAND);
+        counter = 0;
         t.gap(12);
     }
 
@@ -1426,10 +1470,22 @@ final class SelfTestV3 {
             return;
         }
         Player victim = handle(two);
+        plugin.brain().forceLook(two, eye(one), 200, false);
+        Vec3d v = two.bodyPosition();
+        Vec3d a = one.bodyPosition();
+        double want = Math.toDegrees(Math.atan2(-(a.x() - v.x()), a.z() - v.z()));
+        numberA = Math.abs(wrap(two.headYaw() - want));
+        if (numberA > 20.0D && counter < 3) {
+            counter++;
+            t.gap(5);
+            t.retry(this::b17ShieldHit);
+            return;
+        }
         numberB = victim.getHealth();
         flag = victim.isBlocking();
         mark = plugin.currentTick();
         Player attacker = handle(one);
+        armSword(attacker);
         attacker.swingMainHand();
         attacker.attack(victim);
         t.gap(2);
@@ -1445,7 +1501,8 @@ final class SelfTestV3 {
         boolean blockedHit = hits.isEmpty() || hits.get(hits.size() - 1).blocked
                 || hits.get(hits.size() - 1).finalDamage <= 0.0D;
         check("S-82", "B-17", flag && zero && blockedHit, "a raised shield takes the hit to zero (blocking="
-                + flag + ", health " + String.format(Locale.ROOT, "%.1f", numberB) + " -> "
+                + flag + ", facing the attacker within " + String.format(Locale.ROOT, "%.0f", numberA)
+                + " degrees, health " + String.format(Locale.ROOT, "%.1f", numberB) + " -> "
                 + String.format(Locale.ROOT, "%.1f", victim.getHealth()) + ")");
         victim.clearActiveItem();
     }

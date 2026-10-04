@@ -101,7 +101,8 @@ public final class Mind {
         return "order=" + (order == null ? "-" : order.verb) + " exit=" + (exitPoint == null ? "-"
                 : String.format(java.util.Locale.ROOT, "%.1f,%.1f,%.1f", exitPoint.x(), exitPoint.y(), exitPoint.z()))
                 + " exitUntil=" + exitUntil + " slide=" + (slideTo != null) + " fight=" + (combatTarget != null)
-                + " detour=" + (detour != null) + " blocked=" + blockedTicks;
+                + " detour=" + (detour != null) + " blocked=" + blockedTicks + " atCell=" + atCell
+                + " resting=" + resting + " eating=" + eating();
     }
 
     Mind(UUID id, long bornTick) {
