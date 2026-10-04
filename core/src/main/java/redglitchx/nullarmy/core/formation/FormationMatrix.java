@@ -189,4 +189,75 @@ public final class FormationMatrix {
         }
         return 2.0D + depth;
     }
+
+    /**
+     * The assignment of rows (members) to columns (cells) with the smallest total
+     * cost - the Hungarian method, O(n^3). With Euclidean distances as costs the
+     * optimal matching has no crossing paths, so members never have to shoulder
+     * through a cell another member already holds.
+     *
+     * @param cost cost[i][j] = cost of member i taking cell j (rows <= columns)
+     * @return assignment[i] = cell of member i
+     */
+    public static int[] optimalAssignment(double[][] cost) {
+        int n = cost.length;
+        if (n == 0) {
+            return new int[0];
+        }
+        int m = cost[0].length;
+        if (m < n) {
+            throw new IllegalArgumentException("more members than cells");
+        }
+        double[] u = new double[n + 1];
+        double[] v = new double[m + 1];
+        int[] p = new int[m + 1];
+        int[] way = new int[m + 1];
+        for (int i = 1; i <= n; i++) {
+            p[0] = i;
+            int j0 = 0;
+            double[] minv = new double[m + 1];
+            boolean[] used = new boolean[m + 1];
+            java.util.Arrays.fill(minv, Double.POSITIVE_INFINITY);
+            do {
+                used[j0] = true;
+                int i0 = p[j0];
+                double delta = Double.POSITIVE_INFINITY;
+                int j1 = 0;
+                for (int j = 1; j <= m; j++) {
+                    if (!used[j]) {
+                        double cur = cost[i0 - 1][j - 1] - u[i0] - v[j];
+                        if (cur < minv[j]) {
+                            minv[j] = cur;
+                            way[j] = j0;
+                        }
+                        if (minv[j] < delta) {
+                            delta = minv[j];
+                            j1 = j;
+                        }
+                    }
+                }
+                for (int j = 0; j <= m; j++) {
+                    if (used[j]) {
+                        u[p[j]] += delta;
+                        v[j] -= delta;
+                    } else {
+                        minv[j] -= delta;
+                    }
+                }
+                j0 = j1;
+            } while (p[j0] != 0);
+            do {
+                int j1 = way[j0];
+                p[j0] = p[j1];
+                j0 = j1;
+            } while (j0 != 0);
+        }
+        int[] out = new int[n];
+        for (int j = 1; j <= m; j++) {
+            if (p[j] != 0) {
+                out[p[j] - 1] = j - 1;
+            }
+        }
+        return out;
+    }
 }

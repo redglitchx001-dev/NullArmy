@@ -1454,15 +1454,24 @@ final class SelfTestV3 {
         if (one == null) {
             return;
         }
-        // The shooter steps 12 blocks away; the target walks across its line of fire.
-        Player shooter = handle(one);
-        Vec3d p = two.bodyPosition();
-        int bow = Bodies.find(shooter.getInventory(), Material.BOW);
-        if (bow >= 0) {
-            Bodies.hold(shooter, bow);
+        // Fixed geometry: a fresh shooter 16 blocks west of a fresh target, the
+        // target sprinting north-south across the line of fire.
+        dismissAll();
+        try {
+            Vec3d shooterAt = at(-36, 12);
+            Vec3d targetAt = ground(shooterAt.x() + 16.0D, shooterAt.z());
+            prepare(targetAt, 40);
+            SquadManager.Squad s = plugin.squads().spawnSquadAt(owner("b17bow"), worldName,
+                    List.of(shooterAt, targetAt));
+            one = s.members().get(0);
+            two = s.members().get(1);
+            Vec3d p = two.bodyPosition();
+            plugin.brain().order(List.of(two), Mind.Verb.SPRINT, new Vec3d(p.x(), p.y(), p.z() + 40.0D), null, null, 1);
+        } catch (Throwable e) {
+            one = null;
+            check("S-83", "B-17", false, "the bow setup threw " + Guard.describe(e));
         }
-        plugin.brain().order(List.of(one), Mind.Verb.RUN, new Vec3d(p.x() - 14.0D, p.y(), p.z()), null, null, 1);
-        t.gap(90);
+        t.gap(25);
     }
 
     private Vec3d previousTarget;
@@ -1477,8 +1486,6 @@ final class SelfTestV3 {
         if (bow >= 0) {
             Bodies.hold(shooter, bow);
         }
-        Vec3d p = two.bodyPosition();
-        plugin.brain().order(List.of(two), Mind.Verb.SPRINT, new Vec3d(p.x(), p.y(), p.z() + 30.0D), null, null, 1);
         shooter.startUsingItem(EquipmentSlot.HAND);
         notes.clear();
         notes.add("drawing=" + shooter.isHandRaised() + " item=" + shooter.getInventory().getItemInMainHand().getType()
@@ -1507,7 +1514,7 @@ final class SelfTestV3 {
             boolean aligned = Math.abs(wrap(body.bodyYaw() - aim.yaw())) < 2.0D
                     && Math.abs(body.pitch() - aim.pitch()) < 2.0D;
             long drawn = plugin.currentTick() - mark;
-            if ((drawn >= 24 && aligned && targetStep.length() > 0.12D) || drawn >= 60) {
+            if ((drawn >= 24 && aligned && targetStep.length() > 0.2D) || drawn >= 60) {
                 numberA = tp.x();
                 numberB = tp.z();
                 vecA = new Vec3d(targetStep.getX(), 0.0D, targetStep.getZ());

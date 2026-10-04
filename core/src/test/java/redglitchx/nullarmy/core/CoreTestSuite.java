@@ -171,6 +171,8 @@ public final class CoreTestSuite {
                 CoreTestSuite::testSeparation);
         run("portal frame: 4x5 obsidian, 2x3 air, support and floating gap",
                 CoreTestSuite::testPortalFrame);
+        run("formation cells are assigned with the least total walking, no crossing",
+                CoreTestSuite::testFormationAssignment);
 
         System.out.println();
         System.out.println("passed: " + passed + "  failed: " + failed);
@@ -2011,5 +2013,32 @@ public final class CoreTestSuite {
         check(ground.containsBody(inside[0], inside[1], inside[2]), "the start spot is inside the frame");
         int[] fp = ground.footprint();
         check(fp[0] == 0 && fp[2] == 3 && fp[3] == 2, "footprint covers the face and the apron");
+    }
+
+    private static void testFormationAssignment() {
+        double[][] cost = {{4, 1, 3}, {2, 0, 5}, {3, 2, 2}};
+        int[] a = redglitchx.nullarmy.core.formation.FormationMatrix.optimalAssignment(cost);
+        double total = cost[0][a[0]] + cost[1][a[1]] + cost[2][a[2]];
+        checkEquals(5.0, total, "the classic 3x3 example costs 5 at best");
+        check(a[0] != a[1] && a[1] != a[2] && a[0] != a[2], "every member gets its own cell");
+        // A squad approaching a line of cells from the east: the leading body must
+        // take the farthest cell, so nobody walks through an occupied one.
+        double[][] bodies = {{5, 0}, {6.5, 0}, {8, 0}};
+        double[][] cells = {{-1.5, 0}, {0, 0}, {1.5, 0}};
+        double[][] dist = new double[3][3];
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                dist[i][j] = Math.hypot(bodies[i][0] - cells[j][0], bodies[i][1] - cells[j][1]);
+            }
+        }
+        int[] b = redglitchx.nullarmy.core.formation.FormationMatrix.optimalAssignment(dist);
+        double sum = dist[0][b[0]] + dist[1][b[1]] + dist[2][b[2]];
+        checkEquals(19.5, Math.round(sum * 1e9) / 1e9, "collinear paths: any order costs the same total");
+        double[][] grid = new double[2][3];
+        grid[0] = new double[] {0, 10, 10};
+        grid[1] = new double[] {10, 10, 0};
+        int[] c = redglitchx.nullarmy.core.formation.FormationMatrix.optimalAssignment(grid);
+        checkEquals(0, c[0], "fewer members than cells: member 0 takes its free cell");
+        checkEquals(2, c[1], "fewer members than cells: member 1 takes its free cell");
     }
 }

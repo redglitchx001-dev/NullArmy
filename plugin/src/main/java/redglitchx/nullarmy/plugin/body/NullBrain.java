@@ -72,6 +72,8 @@ public final class NullBrain implements Reloadable {
         public boolean sneak;
         /** A precise hold: no separation, no jitter. */
         public boolean precise;
+        /** Stepping off an edge is intended (leaving a floating doorway, walking down on purpose). */
+        public boolean allowDrop;
         public Vec3d look;
         public boolean lookHeadOnly = true;
 
@@ -253,6 +255,10 @@ public final class NullBrain implements Reloadable {
             intent = steerTo(body, mind, world, pos, mind.exitPoint, 0.5D, NullBody.GAIT_RUN);
             if (intent == null) {
                 mind.exitPoint = null;
+            } else {
+                // Leaving a floating doorway means dropping out of it: never let the
+                // ledge-sneak rule hold the body on the frame's bottom row.
+                intent.allowDrop = true;
             }
         }
         if (!busy && intent == null && mind.slideTo != null && now < mind.slideUntil) {
@@ -284,7 +290,7 @@ public final class NullBrain implements Reloadable {
             }
         }
 
-        if (intent.moving() && !intent.sneak && body.onGround()) {
+        if (intent.moving() && !intent.sneak && !intent.allowDrop && body.onGround()) {
             intent.sneak = ledgeAhead(world, pos, intent.dx, intent.dz);
         }
 
@@ -425,6 +431,9 @@ public final class NullBrain implements Reloadable {
                 if (intent == null) {
                     mind.order = null;
                     return Intent.stop();
+                }
+                if (target != null && target.y() < pos.y() - 1.5D) {
+                    intent.allowDrop = true; // ordered down there on purpose
                 }
                 return intent;
             }
@@ -720,34 +729,21 @@ public final class NullBrain implements Reloadable {
         List<NullBody> members = squad.members();
         int n = Math.min(members.size(), cells.size());
         int[] out = new int[members.size()];
-        java.util.Arrays.fill(out, -1);
-        List<double[]> pairs = new ArrayList<>();
+        for (int i = 0; i < out.length; i++) {
+            out[i] = i % Math.max(1, cells.size());
+        }
+        if (n == 0) {
+            return out;
+        }
+        double[][] cost = new double[n][cells.size()];
         for (int i = 0; i < n; i++) {
             Vec3d p = members.get(i).bodyPosition();
             for (int j = 0; j < cells.size(); j++) {
-                double d = Math.hypot(p.x() - cells.get(j)[0], p.z() - cells.get(j)[1]);
-                pairs.add(new double[] {d, i, j});
+                cost[i][j] = Math.hypot(p.x() - cells.get(j)[0], p.z() - cells.get(j)[1]);
             }
         }
-        pairs.sort((a, b) -> Double.compare(a[0], b[0]));
-        boolean[] cellTaken = new boolean[cells.size()];
-        int assigned = 0;
-        for (double[] pair : pairs) {
-            int i = (int) pair[1];
-            int j = (int) pair[2];
-            if (out[i] < 0 && !cellTaken[j]) {
-                out[i] = j;
-                cellTaken[j] = true;
-                if (++assigned == n) {
-                    break;
-                }
-            }
-        }
-        for (int i = 0; i < out.length; i++) {
-            if (out[i] < 0) {
-                out[i] = i % Math.max(1, cells.size());
-            }
-        }
+        int[] best = FormationMatrix.optimalAssignment(cost);
+        System.arraycopy(best, 0, out, 0, n);
         return out;
     }
 
