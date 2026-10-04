@@ -8,8 +8,9 @@ Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit +
 
 ## Delta on `arena/01a10643-nullarmy` (the P0–P4 pass)
 
-This is source-level implementation status, not live-server proof. The current sandbox has no
-JDK, so the changes still need a Gradle/CI build and a Paper 1.21.11 smoke test before release.
+This is implementation status, not live-server proof. GitHub Actions now passes a clean
+Gradle/Paperweight build and distributable-JAR verification for this branch; the current sandbox
+still has no JDK. A Paper 1.21.11 live smoke test remains required before release.
 
 | Area | Change |
 | --- | --- |
@@ -23,11 +24,11 @@ JDK, so the changes still need a Gradle/CI build and a Paper 1.21.11 smoke test 
 | **P5 — chat is an interface** | Wake-word orders in ordinary chat (`null attack Steve`, `null kill Steve`, `null eliminate Steve`, `null come`, `null stop`, `null heal` …) are stripped out of public chat and dispatched through the same `NullCommand` executor, so permissions, caps and policy gates are identical; per-player rate limit of 20 orders a minute; a player answering a summon prompt is never interrupted. `/null chat <null\|commander>` opens a private channel and `ChatBrain` drives the existing `ai.endpoints`/`ai.agents` config over the JDK HTTP client, off-thread, with the reply delivered on the main thread - and with no model configured the characters answer locally and `/null ai` says why. |
 | **P5 — movement and behaviour** | `/null portal [player]` walks Nulls through a visible portal (effects at both ends, verified arrival, opt-in via `mechanics.portal-travel`); `/null tactics` changes the real standoff (1.2/2.0/4.5 blocks); `/null emote`, `/null greet` and `/null inv` add body language and honesty; Nulls glance around and turn to face their owner on their own (`mechanics.idle-gestures`). |
 
-**Still unverified:** This checkout has no JDK, so this delta has not been compiled here. Run the
-Gradle/CI build and a Paper 1.21.11 smoke test before release. Adapter runtime behaviour, AI HTTP
-responses, and portal arrival still need a live server to verify. The earlier NMS additions include
-`SpawnRequest.airborne()` + `isAirborneSpawnSafe(...)`, `NullBody.heal(double)`/`loadout()`, and the
-tick guard.
+**Still unverified:** This checkout has no JDK, but GitHub Actions now compiles and packages the
+branch and passes the core checks. A Paper 1.21.11 live spawn/tick/packet-broadcast smoke test is
+still pending before release. Adapter runtime behaviour, AI HTTP responses and portal arrival need
+a live server to verify. The earlier NMS additions include `SpawnRequest.airborne()` +
+`isAirborneSpawnSafe(...)`, `NullBody.heal(double)`/`loadout()`, and the tick guard.
 
 ---
 
@@ -36,7 +37,7 @@ tick guard.
 | Phase | Focus | Status |
 | --- | :---: | --- |
 | **0** | Repository & feasibility audit | ✅ **COMPLETE** |
-| 1 | Build skeleton & version adapters | 🟠 **Source authored — UNVERIFIED** (blocked B-1) |
+| 1 | Build skeleton & version adapters | 🟠 **CI-compiled; live runtime unverified** (smoke test pending) |
 | 2 | Authoritative NPC identity & lifecycle | 🟠 Partial source authored — UNVERIFIED |
 | 3 | Commands, summoning & visuals | 🟠 Partial source authored — UNVERIFIED |
 | 4 | Perception, movement, collision & formations | ⬜ Not started |
@@ -51,7 +52,7 @@ tick guard.
 ## 🔴 Blockers
 
 ### B-1 — Build environment unavailable (partially mitigated)
-No JDK, no Gradle, and network access limited to `github.com`. `repo.papermc.io` (Paper dev bundle), Maven Central, Gradle distributions, and JDK downloads are all unreachable. **No Phase can be compiled or verified in this sandbox.** → Owner decision **D-2** in the plan.
+No JDK or Gradle in this sandbox, and direct access to `repo.papermc.io` (Paper dev bundle), Maven Central, Gradle distributions and JDK downloads is unavailable. **A full build cannot run locally here.** GitHub Actions can resolve the Paper dev bundle and is now the only full compile; a green CI build still does not verify runtime behaviour. → Owner decision **D-2** in the plan.
 
 > **Partial mitigation (2026-10-04).** A local type-check now exists: the Eclipse batch
 > compiler (ECJ, from the VS Code Java language server bundle) running on a bundled JRE,
@@ -63,13 +64,12 @@ No JDK, no Gradle, and network access limited to `github.com`. `repo.papermc.io`
 > runtime behaviour.
 
 > **What this does and does not mean for the code that now exists.**
-> 33 Java files (4,423 lines) have been authored across all four modules. They are
-> **syntactically valid** (verified with the `javalang` Java parser: 33/33 parse, 0
-> package/directory mismatches, 0 self-recursive methods). They have **never been
-> compiled**, so type-checking, NMS signatures and every runtime behaviour remain
-> unproven. Every NMS class, method and constructor in `nms/v1_21_11` is a
-> **hypothesis**, and is labelled `STATUS: UNVERIFIED` in its Javadoc.
-> See [`BUILD.md`](BUILD.md) for the exact commands to prove or disprove it.
+> The hosted GitHub Actions build has compiled the full plugin, including
+> `nms/v1_21_11`, against Paper 1.21.11 and verified the distributable JAR. This
+> validates the referenced compile-time NMS signatures; it does **not** prove
+> that a real server can spawn and tick a Null without errors. Both NMS adapter
+> Javadocs now say `COMPILED; RUNTIME UNVERIFIED`. A live smoke test is still
+> required before release. See [`BUILD.md`](BUILD.md) for the build commands.
 
 ### B-2 — Target version range is end-of-life
 Paper 1.21.11 support ended **2026-06-15**; 1.21.10 ended **2026-01-17**. Every version from 1.21 → 1.21.11 is `UNSUPPORTED`. Current MC release is 26.3 (needs Java 25). → Owner decision **D-1** in the plan.
