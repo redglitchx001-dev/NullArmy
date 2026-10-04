@@ -1,6 +1,7 @@
 package redglitchx.nullarmy.nms.v1_21_11;
 
 import net.minecraft.server.level.ChunkMap;
+import net.minecraft.server.level.ChunkTrackingView;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.PlayerChunkSender;
@@ -50,6 +51,9 @@ final class Tracking {
 
     /** {@code LivingEntity.detectEquipmentUpdates()}: private in vanilla. */
     private static Method detectEquipmentUpdates;
+
+    /** {@code ChunkMap.serverViewDistance}: the clamp the tracker applies. */
+    private static Field serverViewDistanceField;
 
     /** The last reflective failure, so a diagnosis is never a guess. */
     private static String lastError = "";
@@ -121,6 +125,21 @@ final class Tracking {
             lastError = "TrackedEntity.updatePlayer(ServerPlayer) is not reachable";
             return false;
         }
+        // A synthetic viewer has no client behind it, so the server never gave it
+        // the chunk-tracking view a real player gets at login. The tracker only
+        // pairs an entity whose chunk that view covers (ChunkMap.isChunkTracked),
+        // so give the viewer exactly the view the tracker itself would compute -
+        // centred on its own chunk, at the server's view distance - and make sure
+        // the target's chunk is not still marked pending for it.
+        try {
+            int viewDistance = Math.max(2, serverViewDistance(level));
+            viewer.setChunkTrackingView(
+                    ChunkTrackingView.of(viewer.chunkPosition(), viewDistance));
+            viewer.connection.chunkSender.dropChunk(viewer, target.chunkPosition());
+        } catch (Throwable t) {
+            lastError = "could not prepare the viewer's chunk tracking view: "
+                    + t.getClass().getSimpleName() + ": " + t.getMessage();
+        }
         try {
             method.invoke(tracked, viewer);
         } catch (Throwable t) {
@@ -154,7 +173,8 @@ final class Tracking {
             double dy = viewer.getY() - target.getY();
             sb.append("distance=").append(String.format(java.util.Locale.ROOT, "%.1f", Math.sqrt(dx * dx + dz * dz)))
                     .append("bl, dy=").append(String.format(java.util.Locale.ROOT, "%.1f", dy)).append("; ");
-            sb.append("viewerViewDistance=").append(viewer.requestedViewDistance()).append("; ");
+            sb.append("viewerViewDistance=").append(viewer.requestedViewDistance())
+                    .append(", serverViewDistance=").append(serverViewDistance(level)).append("; ");
             sb.append("broadcastToPlayer=").append(target.broadcastToPlayer(viewer)).append("; ");
             sb.append("viewerSpectator=").append(viewer.isSpectator()).append("; ");
             if (target instanceof ServerPlayer) {
@@ -189,6 +209,20 @@ final class Tracking {
                     .append(": ").append(t.getMessage());
         }
         return sb.toString();
+    }
+
+    /** The view distance the tracker clamps every player to. 8 when unreadable. */
+    static int serverViewDistance(ServerLevel level) {
+        try {
+            if (serverViewDistanceField == null) {
+                serverViewDistanceField = ChunkMap.class.getDeclaredField("serverViewDistance");
+                serverViewDistanceField.setAccessible(true);
+            }
+            ChunkMap map = chunkMap(level);
+            return map == null ? 8 : serverViewDistanceField.getInt(map);
+        } catch (Throwable t) {
+            return 8;
+        }
     }
 
     /** How many chunks are still marked pending for a viewer, or -1 if unreadable. */
