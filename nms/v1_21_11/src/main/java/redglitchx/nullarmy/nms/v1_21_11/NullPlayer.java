@@ -60,6 +60,15 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
      */
     private static final int TICK_FAILURE_LIMIT = 3;
 
+    /** Vanilla gravity per tick. Applied so an airborne Null really falls. */
+    private static final double GRAVITY = 0.08D;
+
+    /** Vanilla terminal fall speed: the air drop must not exceed real physics. */
+    private static final double TERMINAL_FALL_SPEED = 3.92D;
+
+    /** Anything smaller than this is noise, and normalising it yields NaN. */
+    private static final double MIN_SPEED = 1.0e-4D;
+
     private final ItemLedger inventory;
     private final V1_21_11Adapter adapter;
     private final Vec3d[] pendingForce = new Vec3d[1];
@@ -175,41 +184,103 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
                 // Remove the body instead of letting it throw again next tick.
                 // This is the difference between one lost Null and a crashed
                 // server: nothing may keep throwing inside the entity loop.
-                try {
-                    if (adapter != null) {
-                        adapter.forget(this);
-                    }
-                } catch (Throwable ignored) {
-                    // The adapter list is best-effort here.
-                }
-                try {
-                    discard();
-                } catch (Throwable ignored) {
-                    // Nothing further can be done for this body.
-                }
+                destroyQuietly();
             }
         }
     }
 
     /** The real per-tick work, isolated so a failure can be contained. */
     private void tickBody() {
+        if (isRemoved()) {
+            return;
+        }
+
+        // A position that is already NaN cannot be recovered without a
+        // teleport, and NaN coordinates are what actually kills a server:
+        // every chunk/block lookup downstream throws or spins. Throw the body
+        // away instead - one lost Null, not a dead server.
+        if (!Double.isFinite(getX()) || !Double.isFinite(getY()) || !Double.isFinite(getZ())) {
+            org.bukkit.Bukkit.getLogger().severe("[NullArmy] a Null reached an invalid"
+                    + " position and was removed; the server is unaffected.");
+            destroyQuietly();
+            return;
+        }
+
+        Vec3 delta = getDeltaMovement();
+        if (delta == null || !isFinite(delta)) {
+            delta = Vec3.ZERO;
+        }
+
+        // Gravity, the way vanilla applies it: every tick, and the collision
+        // resolution inside move() cancels whatever the ground stops. Without
+        // this an airborne Null would hang in the sky for ever and the air
+        // drop's real-fall-damage promise would be a lie.
+        if (!onGround()) {
+            delta = delta.add(0.0D, -GRAVITY, 0.0D);
+            if (delta.y < -TERMINAL_FALL_SPEED) {
+                delta = new Vec3(delta.x, -TERMINAL_FALL_SPEED, delta.z);
+            }
+        }
+
         Vec3d force = pendingForce[0];
         pendingForce[0] = null;
 
-        if (force != null && !isRemoved()) {
+        if (force != null && isFinite(force)) {
             // Blend toward the desired velocity, then clamp - never snap.
             Vec3d desired = force.clampLength(MAX_SPEED);
-            Vec3 current = getDeltaMovement();
-            Vec3 blended = current.add(new Vec3(desired.x(), desired.y(), desired.z()))
-                    .scale(0.5)
-                    .normalize()
-                    .scale(Math.min(MAX_SPEED, desired.length()));
-            setDeltaMovement(blended);
+            double speed = Math.min(MAX_SPEED, desired.length());
+            if (speed > MIN_SPEED) {
+                Vec3 blended = delta.add(new Vec3(desired.x(), desired.y(), desired.z()))
+                        .scale(0.5D);
+                double length = blended.length();
+                if (length <= MIN_SPEED) {
+                    // The blend cancelled itself out; take the desired direction
+                    // directly rather than normalising a zero vector (NaN).
+                    blended = new Vec3(desired.x(), desired.y(), desired.z()).scale(speed);
+                } else {
+                    blended = blended.scale(speed / length);
+                }
+                delta = blended;
+            }
         }
 
+        // Last line of defence before touching the world.
+        if (!isFinite(delta)) {
+            delta = Vec3.ZERO;
+        }
+
+        setDeltaMovement(delta);
         // Real collision-respecting movement. This is the only thing that ever
         // changes a Null's position.
-        move(MoverType.SELF, getDeltaMovement());
+        move(MoverType.SELF, delta);
+    }
+
+    /** True when every component is a real number, never NaN or infinite. */
+    private static boolean isFinite(Vec3 v) {
+        return v != null
+                && Double.isFinite(v.x) && Double.isFinite(v.y) && Double.isFinite(v.z);
+    }
+
+    /** True when every component is a real number, never NaN or infinite. */
+    private static boolean isFinite(Vec3d v) {
+        return v != null
+                && Double.isFinite(v.x()) && Double.isFinite(v.y()) && Double.isFinite(v.z());
+    }
+
+    /** Removes this body without letting the cleanup itself throw. */
+    private void destroyQuietly() {
+        try {
+            if (adapter != null) {
+                adapter.forget(this);
+            }
+        } catch (Throwable ignored) {
+            // Best effort.
+        }
+        try {
+            discard();
+        } catch (Throwable ignored) {
+            // Nothing further can be done for this body.
+        }
     }
 
     /**
