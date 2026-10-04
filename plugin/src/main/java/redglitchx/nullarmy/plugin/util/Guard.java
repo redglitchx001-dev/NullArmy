@@ -15,10 +15,11 @@ import java.util.logging.Logger;
  * running.</p>
  *
  * <p>{@link Breaker} is a latched circuit breaker for the one path that is
- * genuinely dangerous: creating a connectionless {@code ServerPlayer} through
- * NMS. If that path fails once, it is not worth trying again with a live
- * server on the line - it stays off until the owner reloads or restarts, and
- * the reason is visible in {@code /null status}.</p>
+ * genuinely dangerous: creating a fake {@code ServerPlayer} through NMS. Each
+ * NPC gets a listener backed by a discard-only connection so server packet
+ * broadcasts cannot dereference a null connection or queue packets for a client
+ * that does not exist. If the spawn path still fails, it stays off until the
+ * owner reloads or restarts, and the reason is visible in {@code /null status}.</p>
  *
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
  */
