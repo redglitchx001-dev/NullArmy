@@ -1,6 +1,9 @@
 package redglitchx.nullarmy.nms.v1_21_11;
 
 import com.mojang.authlib.GameProfile;
+import io.netty.channel.ChannelFutureListener;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
@@ -16,7 +19,6 @@ import redglitchx.nullarmy.nms.LoadoutSlot;
 import redglitchx.nullarmy.nms.NullBody;
 import redglitchx.nullarmy.nms.VersionAdapter;
 
-import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -25,9 +27,9 @@ import java.util.logging.Level;
 /**
  * The server-authoritative body of a Null on 1.21.11.
  *
- * <p><b>STATUS: UNVERIFIED.</b> Never compiled, never run - the build
- * environment has no JDK and no dev bundle (blocker B-1). Every NMS signature
- * here is a hypothesis for Phase 1 verification V-04.</p>
+ * <p><b>STATUS: COMPILED; RUNTIME UNVERIFIED.</b> The Paperweight build compiles
+ * this adapter against Paper 1.21.11. A live spawn, tick and packet-broadcast
+ * smoke test is still required before the connection shim is considered proven.</p>
  *
  * <h3>Why extend {@code ServerPlayer} at all</h3>
  * ADR-001: one entity means one hitbox, one inventory and one item ledger,
@@ -89,66 +91,35 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         // first entity tick. Install a non-null listener before registration,
         // and discard packets for the client that does not exist.
         this.connection = new ServerGamePacketListenerImpl(server,
-                createDiscardingConnection(), this,
+                new DiscardingConnection(), this,
                 CommonListenerCookie.createInitial(profile, false));
     }
 
     /**
-     * Makes an inert implementation of Paper's connection interface. Outbound
-     * packets sent by server maintenance are discarded; viewers still receive
-     * entity-tracking packets through their own real connections.
+     * A real NMS connection with no channel and no outbound queue. This uses a
+     * fully-qualified superclass name because ServerPlayer inherits a nested
+     * {@code WaypointTransmitter.Connection} type with the same simple name.
      */
-    private static net.minecraft.network.Connection createDiscardingConnection() {
-        return (net.minecraft.network.Connection) Proxy.newProxyInstance(
-                net.minecraft.network.Connection.class.getClassLoader(),
-                new Class<?>[] {net.minecraft.network.Connection.class},
-                (proxy, method, arguments) -> {
-                    if (method.getDeclaringClass() == Object.class) {
-                        switch (method.getName()) {
-                            case "toString":
-                                return "NullArmyDiscardingConnection";
-                            case "hashCode":
-                                return System.identityHashCode(proxy);
-                            case "equals":
-                                return proxy == (arguments == null ? null : arguments[0]);
-                            default:
-                                break;
-                        }
-                    }
-                    return defaultReturnValue(method.getReturnType());
-                });
-    }
+    private static final class DiscardingConnection extends net.minecraft.network.Connection {
 
-    /** Returns a harmless default for methods on the no-network connection. */
-    private static Object defaultReturnValue(Class<?> type) {
-        if (!type.isPrimitive()) {
-            return null;
+        private DiscardingConnection() {
+            super(PacketFlow.SERVERBOUND);
         }
-        if (type == boolean.class) {
-            return false;
+
+        @Override
+        public void send(Packet<?> packet) {
+            // A Null has no client. Do not queue or redirect its packets.
         }
-        if (type == byte.class) {
-            return (byte) 0;
+
+        @Override
+        public void send(Packet<?> packet, ChannelFutureListener listener) {
+            // No channel exists, so there is no send future to complete.
         }
-        if (type == short.class) {
-            return (short) 0;
+
+        @Override
+        public void send(Packet<?> packet, ChannelFutureListener listener, boolean flush) {
+            // Explicit-flush sends are discarded too.
         }
-        if (type == int.class) {
-            return 0;
-        }
-        if (type == long.class) {
-            return 0L;
-        }
-        if (type == float.class) {
-            return 0.0F;
-        }
-        if (type == double.class) {
-            return 0.0D;
-        }
-        if (type == char.class) {
-            return (char) 0;
-        }
-        return null; // void
     }
 
     // ------------------------------------------------------------ NullBody impl
