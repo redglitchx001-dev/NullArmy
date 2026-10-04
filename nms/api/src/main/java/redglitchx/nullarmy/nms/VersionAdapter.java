@@ -104,6 +104,25 @@ public interface VersionAdapter {
     }
 
     /**
+     * A spawn was refused for a reason that is <b>not</b> a broken adapter: the
+     * position is not collision-safe, another entity is already standing there,
+     * the world is gone, or the name is unusable.
+     *
+     * <p>Callers must not latch a session-wide spawn breaker for one of these -
+     * the next candidate position may be perfectly good. Everything else the
+     * adapter throws means the registration itself failed, which is a different
+     * thing and does deserve the latch.</p>
+     */
+    class SpawnRefusedException extends IllegalStateException {
+
+        private static final long serialVersionUID = 1L;
+
+        public SpawnRefusedException(String message) {
+            super(message);
+        }
+    }
+
+    /**
      * Spawns a Null at a position the caller has already verified as safe.
      *
      * <p>The adapter must re-verify: safe spawn validation is a server-authority
@@ -159,4 +178,97 @@ public interface VersionAdapter {
 
     /** All Nulls currently live in a world. */
     List<NullBody> activeIn(String worldName);
+
+    // --------------------------------------------------------------- visibility
+
+    /**
+     * True when the server is tracking this body for clients.
+     *
+     * <p>Registration alone is not visibility: a body the chunk map does not
+     * track produces no packets, so no client ever renders it. The spawn path
+     * checks this before reporting success, and {@code /null debug} reports it.</p>
+     */
+    default boolean isTracked(NullBody body) { return false; }
+
+    /**
+     * How many player connections are currently paired with this body.
+     *
+     * @return -1 when the adapter cannot read that
+     */
+    default int viewerCount(NullBody body) { return -1; }
+
+    /**
+     * True when the body's packet listener is installed.
+     *
+     * <p>A {@code ServerPlayer} without one crashes
+     * {@code MinecraftServer.tickChildren}, which walks {@code level.players()}
+     * and sends time packets through it every second.</p>
+     */
+    default boolean packetListenerReady(NullBody body) { return body != null; }
+
+    /**
+     * Sends the player-info entries of every live Null to one player.
+     *
+     * <p>A client drops the add-entity packet for a player UUID it has no info
+     * entry for, so anyone who joins after a squad exists needs this.</p>
+     *
+     * @return how many Nulls were announced
+     */
+    default int refreshViewer(UUID viewerId) { return 0; }
+
+    /**
+     * Whether spawned Nulls are listed in clients' tab lists.
+     *
+     * <p>Either way a Null is <b>announced</b> with a player-info entry, because a
+     * client refuses to render a player entity it has no entry for. This only
+     * decides whether that entry is listed in the tab overlay.</p>
+     */
+    default void setTabListing(boolean listed) {
+        // Adapters that cannot honour it stay as they are rather than pretending.
+    }
+
+    /** Adapter-specific tracking diagnostics for {@code /null debug}. */
+    default List<String> trackingDiagnostics() { return java.util.Collections.emptyList(); }
+
+    /**
+     * True when no other entity occupies the body box at this position.
+     *
+     * <p>Block checks alone can place two Nulls inside each other. The default
+     * is permissive so an adapter without the check does not refuse every spawn;
+     * the 1.21.11 adapter implements it.</p>
+     */
+    default boolean isEntitySpaceFree(String worldName, Vec3d position) { return true; }
+
+    // ------------------------------------------------------------- smoke test
+
+    /**
+     * Creates a throwaway body whose outbound packets are recorded instead of
+     * discarded, so the client-facing pairing path can be verified on a server
+     * with no client connected.
+     *
+     * @return the probe, or null when this adapter does not support it
+     */
+    default NullBody createViewerProbe(String worldName, Vec3d position) { return null; }
+
+    /**
+     * Runs the tracker's pairing pass between a probe and a target body.
+     *
+     * @return true when the probe is paired with the target afterwards
+     */
+    default boolean pairProbe(NullBody viewer, NullBody target) { return false; }
+
+    /** Packet class names the probe's listener was asked to send. */
+    default List<String> probePackets(NullBody viewer) { return java.util.Collections.emptyList(); }
+
+    /**
+     * Sends one body's player-info entry to another body's listener.
+     *
+     * <p>This is the same packet {@link #refreshViewer(UUID)} sends to a joining
+     * player, and the client refuses to build a player entity without it. The
+     * smoke test uses a probe as the receiving side so the packet path can be
+     * proven on a server with no client connected.</p>
+     *
+     * @return true when the packet was handed to the viewer's listener
+     */
+    default boolean announceTo(NullBody viewer, NullBody target) { return false; }
 }

@@ -2,6 +2,7 @@ package redglitchx.nullarmy.nms.v1_21_11;
 
 import com.mojang.authlib.GameProfile;
 import io.netty.channel.ChannelFutureListener;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.server.MinecraftServer;
@@ -11,6 +12,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.world.entity.MoverType;
+import net.minecraft.world.level.block.Portal;
 import net.minecraft.world.phys.Vec3;
 
 import redglitchx.nullarmy.core.ledger.ItemLedger;
@@ -22,14 +24,11 @@ import redglitchx.nullarmy.nms.VersionAdapter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 import java.util.logging.Level;
 
 /**
  * The server-authoritative body of a Null on 1.21.11.
- *
- * <p><b>STATUS: COMPILED; RUNTIME UNVERIFIED.</b> The Paperweight build compiles
- * this adapter against Paper 1.21.11. A live spawn, tick and packet-broadcast
- * smoke test is still required before the connection shim is considered proven.</p>
  *
  * <h3>Why extend {@code ServerPlayer} at all</h3>
  * ADR-001: one entity means one hitbox, one inventory and one item ledger,
@@ -37,20 +36,44 @@ import java.util.logging.Level;
  * (server authority) require. A packet-only fake cannot hold a real inventory
  * or participate in authoritative combat (spec 1.5).
  *
- * <h3>How movement stays honest</h3>
- * There is no {@code teleport} and no {@code setPos} entry point on
- * {@link NullBody}. The only way to move a Null is {@link #applySteering},
- * which feeds a bounded force into the entity's real vanilla movement via
- * {@link MoverType#SELF}. So the no-teleport rule is enforced by the
- * interface, not by convention.
+ * <h3>What makes a Null actually visible</h3>
+ * Two server facts drive the whole design, and both were verified against the
+ * Paper 1.21.11 sources rather than assumed:
+ * <ol>
+ *   <li>{@code ServerLevel.onTrackingStart} adds any {@code ServerPlayer} it is
+ *       given to {@code ServerLevel.players} and hands it to
+ *       {@code ChunkMap.addEntity}, which creates a {@code TrackedEntity}. That
+ *       is what makes nearby clients receive
+ *       {@code ClientboundAddEntityPacket} - so registration alone does put a
+ *       Null in front of players.</li>
+ *   <li>The client <b>drops</b> that packet unless it already holds a player-info
+ *       entry for the same UUID ({@code ClientPacketListener
+ *       #createEntityFromPacket}: "Server attempted to add player prior to
+ *       sending player info"). Normal joins get that entry from
+ *       {@code PlayerList.placeNewPlayer}, which a Null never goes through. The
+ *       adapter therefore broadcasts
+ *       {@code ClientboundPlayerInfoUpdatePacket} <i>before</i> the body is
+ *       added to the level, and a remove packet when it goes.</li>
+ * </ol>
  *
  * <h3>Connection safety</h3>
- * A {@code ServerPlayer} may be visited by server tick and packet-broadcast
- * paths even though this NPC has no client. A null {@code connection} crashes
- * those paths outside this entity's {@link #tick()} guard. The constructor gives
- * every Null a real packet-listener object with outbound sends discarded;
- * those packets are never sent to another player or retained for a fake client.
- * This must be smoke-tested on the target Paper build before release.
+ * {@code MinecraftServer.tickChildren} walks {@code level.players()} once per
+ * second and calls {@code entityplayer.connection.send(...)}. A Null with a null
+ * listener therefore crashed the server tick loop (crash-2026-10-04). Every Null
+ * gets a real {@code ServerGamePacketListenerImpl} in its constructor - before
+ * registration - whose {@code Connection} has no channel and discards every
+ * outbound packet. Nothing is redirected to another player, and nothing is
+ * queued: {@code Connection.send} would otherwise park packets in its unbounded
+ * {@code pendingActions} queue because a channel-less connection never reports
+ * itself as connected.
+ *
+ * <h3>How movement stays honest</h3>
+ * There is no {@code teleport} and no {@code setPos} entry point on
+ * {@link NullBody}. The only way to move a Null is {@link #applySteering}, which
+ * feeds a bounded force into the entity's real vanilla movement via
+ * {@link MoverType#SELF}. The no-teleport rule is enforced by the interface, not
+ * by convention. The one exception is {@link #portalTo}, called only by the
+ * adapter's verified portal crossing.
  *
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
  */
@@ -76,49 +99,110 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     /** Anything smaller than this is noise, and normalising it yields NaN. */
     private static final double MIN_SPEED = 1.0e-4D;
 
+    /** Hard bound on what a viewer probe records, so a probe cannot grow. */
+    private static final int PROBE_PACKET_LIMIT = 1024;
+
+    /** How often a Null drops the chunk queue its own listener never drains. */
+    private static final int QUEUE_SWEEP_INTERVAL = 100;
+
     private final ItemLedger inventory;
     private final V1_21_11Adapter adapter;
     private final Vec3d[] pendingForce = new Vec3d[1];
+
+    /** Non-null only for a viewer probe: outbound packet class names. */
+    private final List<String> recordedPackets;
+
     private int tickFailures;
+    private int upkeepFailures;
+    private boolean upkeepDisabled;
 
     NullPlayer(MinecraftServer server, ServerLevel level, GameProfile profile,
                VersionAdapter.SpawnRequest request, V1_21_11Adapter adapter) {
+        this(server, level, profile, request, adapter, false);
+    }
+
+    /**
+     * @param recording true for the runtime smoke-test probe, whose outbound
+     *     packets are recorded instead of discarded so the pairing path can be
+     *     proven end to end without a real client
+     */
+    NullPlayer(MinecraftServer server, ServerLevel level, GameProfile profile,
+               VersionAdapter.SpawnRequest request, V1_21_11Adapter adapter,
+               boolean recording) {
         super(server, level, profile, ClientInformation.createDefault());
         this.adapter = adapter;
         this.inventory = new ItemLedger(request.inventoryCapacity(), 200);
+        this.recordedPackets = recording ? Collections.synchronizedList(new ArrayList<>()) : null;
 
         // The server's player work can send packets to this entity before its
-        // first entity tick. Install a non-null listener before registration,
-        // and discard packets for the client that does not exist.
+        // first entity tick - MinecraftServer.tickChildren does it every second
+        // for everything in ServerLevel.players. Install a non-null listener
+        // before registration; packets for the client that does not exist are
+        // discarded, never queued and never redirected.
         this.connection = new ServerGamePacketListenerImpl(server,
-                new DiscardingConnection(), this,
+                new NullConnection(this.recordedPackets), this,
                 CommonListenerCookie.createInitial(profile, false));
     }
 
     /**
-     * A real NMS connection with no channel; outbound sends are discarded
-     * rather than queued. The superclass is fully qualified because ServerPlayer
-     * inherits a nested {@code WaypointTransmitter.Connection} with the same name.
+     * A real NMS connection with no channel: outbound packets are dropped on the
+     * floor (or recorded, for a viewer probe).
+     *
+     * <p>Every entry point that could otherwise park work in
+     * {@code Connection.pendingActions} is overridden, because that queue is
+     * unbounded and only ever drained when a channel is connected.</p>
+     *
+     * <p>The superclass is fully qualified because ServerPlayer inherits a
+     * nested {@code WaypointTransmitter.Connection} with the same simple name.</p>
      */
-    private static final class DiscardingConnection extends net.minecraft.network.Connection {
+    private static final class NullConnection extends net.minecraft.network.Connection {
 
-        private DiscardingConnection() {
+        private final List<String> sink;
+
+        private NullConnection(List<String> sink) {
             super(PacketFlow.SERVERBOUND);
+            this.sink = sink;
         }
 
         @Override
         public void send(Packet<?> packet) {
             // A Null has no client. Do not queue or redirect its packets.
+            record(packet);
         }
 
         @Override
         public void send(Packet<?> packet, ChannelFutureListener listener) {
             // No channel exists, so there is no send future to complete.
+            record(packet);
         }
 
         @Override
         public void send(Packet<?> packet, ChannelFutureListener listener, boolean flush) {
             // Explicit-flush sends are discarded too.
+            record(packet);
+        }
+
+        @Override
+        public void runOnceConnected(java.util.function.Consumer<net.minecraft.network.Connection> action) {
+            // The base implementation appends to pendingActions and waits for a
+            // channel that will never exist. There is nothing to run and nothing
+            // to remember.
+        }
+
+        @Override
+        public void flushChannel() {
+            // Same story: the base implementation queues a flush forever.
+        }
+
+        private void record(Packet<?> packet) {
+            if (sink == null || packet == null) {
+                return;
+            }
+            synchronized (sink) {
+                if (sink.size() < PROBE_PACKET_LIMIT) {
+                    sink.add(packet.getClass().getSimpleName());
+                }
+            }
         }
     }
 
@@ -129,6 +213,9 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
 
     @Override
     public String profileName() { return getGameProfile().name(); }
+
+    /** The profile UUID this body is registered under. */
+    public UUID profileId() { return getUUID(); }
 
     @Override
     public Vec3d bodyPosition() {
@@ -159,8 +246,19 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         setXRot((float) pitch);
     }
 
+    /**
+     * Alive means: not removed, above zero health, <b>and</b> still a valid
+     * entity of this level.
+     *
+     * <p>{@code valid} is CraftBukkit's marker, cleared when the body leaves the
+     * world - including when its chunk unloads, which for a {@code noSave()}
+     * player entity means it is gone for good. Reporting such a body as alive
+     * would leave a squad list full of ghosts, so it is part of the test.</p>
+     */
     @Override
-    public boolean isAlive() { return super.isAlive() && !isRemoved(); }
+    public boolean isAlive() {
+        return super.isAlive() && !isRemoved() && this.valid;
+    }
 
     @Override
     public double health() { return getHealth(); }
@@ -192,7 +290,7 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     /**
      * Relocates the body to a destination the adapter has already verified.
      *
-     * <p>This is <b>not</b> part of ordinary movement: the only caller is
+     * <p>This is <b>not</b> ordinary movement: the only caller is
      * {@link V1_21_11Adapter#portalTravel}, which checks the world, the chunk
      * and the collision safety of the destination first, and the player sees
      * portal effects at both ends. Velocity is cleared so the body cannot arrive
@@ -225,19 +323,53 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         discard();
     }
 
+    // ------------------------------------------------------------- diagnostics
+
+    /** True when the packet listener is installed. Must always be true. */
+    public boolean packetListenerReady() { return this.connection != null; }
+
+    /** True for the smoke-test probe, whose outbound packets are recorded. */
+    public boolean isProbe() { return recordedPackets != null; }
+
+    /** Packet class names this body's listener was asked to send. */
+    public List<String> recordedPackets() {
+        if (recordedPackets == null) {
+            return Collections.emptyList();
+        }
+        synchronized (recordedPackets) {
+            return Collections.unmodifiableList(new ArrayList<>(recordedPackets));
+        }
+    }
+
+    /** Empties the probe's record. */
+    public void clearRecordedPackets() {
+        if (recordedPackets != null) {
+            synchronized (recordedPackets) {
+                recordedPackets.clear();
+            }
+        }
+    }
+
+    /** The level this body belongs to, or null when it has none. */
+    ServerLevel serverLevelOrNull() {
+        try {
+            return level() instanceof ServerLevel ? (ServerLevel) level() : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     // ------------------------------------------------------------------- ticking
 
     /**
      * Drives movement through vanilla physics.
      *
      * <p>Overridden because a server-only {@code ServerPlayer} must not run
-     * normal client synchronization. We keep only what a Null needs: movement
-     * integration and living-entity upkeep. The discard-only listener exists
-     * for server-level packet sends; it does not make this a networked player.</p>
-     *
-     * <p><b>UNVERIFIED.</b> The exact set of vanilla living-entity upkeep needed
-     * to keep this specialized player stable must be established on a real
-     * Paper server.</p>
+     * normal client synchronization: {@code ServerPlayer.tick()} sends chunk
+     * cache centers, flushes menus, triggers advancements and writes player
+     * statistics, none of which apply to a body with no client and no account.
+     * What a Null does keep is real world interaction ({@code baseTick}: fire,
+     * water, suffocation) and real collision-respecting movement.</p>
      */
     @Override
     public void tick() {
@@ -259,6 +391,20 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         }
     }
 
+    /**
+     * The player-list upkeep pass.
+     *
+     * <p>{@code PlayerList.tick()} calls this for listed players only and a Null
+     * is never listed. It is overridden anyway so that anything which does reach
+     * it (another plugin, a future Paper build) gets the Null's own tick rather
+     * than food, statistics, keep-alives and playerdata writes for an account
+     * that does not exist.</p>
+     */
+    @Override
+    public void doTick() {
+        tick();
+    }
+
     /** The real per-tick work, isolated so a failure can be contained. */
     private void tickBody() {
         if (isRemoved()) {
@@ -275,6 +421,9 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
             destroyQuietly();
             return;
         }
+
+        upkeep();
+        worldInteraction();
 
         Vec3 delta = getDeltaMovement();
         if (delta == null || !isFinite(delta)) {
@@ -323,7 +472,98 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         // Real collision-respecting movement. This is the only thing that ever
         // changes a Null's position.
         move(MoverType.SELF, delta);
+
+        // The chunk sender of a Null's listener is never drained (that happens in
+        // ServerGamePacketListenerImpl#tick, which the server runs for listed
+        // players only). Empty it so nothing accumulates for the session.
+        if (this.tickCount % QUEUE_SWEEP_INTERVAL == 0) {
+            Tracking.clearPendingChunks(this.connection);
+        }
     }
+
+    /**
+     * The timers the server would normally decay in {@code Player#tick}.
+     *
+     * <p>Without this a Null that is hurt once keeps {@code invulnerableTime} at
+     * its hurt value forever and becomes permanently damage-immune, and a dead
+     * body never advances its death animation.</p>
+     */
+    private void upkeep() {
+        if (upkeepDisabled) {
+            return;
+        }
+        try {
+            if (this.invulnerableTime > 0) {
+                this.invulnerableTime--;
+            }
+            if (this.hurtTime > 0) {
+                this.hurtTime--;
+            }
+            if (this.deathTime < 20 && getHealth() <= 0.0F) {
+                this.deathTime++;
+            }
+        } catch (Throwable t) {
+            upkeepFailures++;
+            if (upkeepFailures >= TICK_FAILURE_LIMIT) {
+                upkeepDisabled = true;
+                org.bukkit.Bukkit.getLogger().warning("[NullArmy] Null upkeep disabled after "
+                        + upkeepFailures + " failures: " + t.getClass().getSimpleName()
+                        + ": " + t.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Real interaction with the world: fire, water, suffocation, freeze.
+     *
+     * <p>{@code Entity.baseTick()} also runs the portal countdown, which is
+     * neutralised here (see {@link #handlePortal()}), so standing in one of the
+     * plugin's arrival portals can never send a Null to the Nether.</p>
+     */
+    private void worldInteraction() {
+        if (upkeepDisabled) {
+            return;
+        }
+        try {
+            baseTick();
+        } catch (Throwable t) {
+            upkeepFailures++;
+            if (upkeepFailures >= TICK_FAILURE_LIMIT) {
+                upkeepDisabled = true;
+                org.bukkit.Bukkit.getLogger().warning("[NullArmy] Null world interaction disabled"
+                        + " after " + upkeepFailures + " failures: " + t.getClass().getSimpleName()
+                        + ": " + t.getMessage());
+            }
+        }
+    }
+
+    // --------------------------------------------------------- portal containment
+
+    /**
+     * A Null never enters a portal on its own.
+     *
+     * <p>The plugin builds temporary arrival portals out of real portal blocks.
+     * A Null standing in one must not be transported anywhere: the only
+     * relocation a Null ever makes is the adapter's verified portal crossing.</p>
+     */
+    @Override
+    public void setAsInsidePortal(Portal portal, BlockPos pos) {
+        // Deliberately empty.
+    }
+
+    /** The portal countdown. Empty for the same reason. */
+    @Override
+    protected void handlePortal() {
+        // Deliberately empty.
+    }
+
+    /** A Null cannot use portals, with or without passengers. */
+    @Override
+    public boolean canUsePortal(boolean ignorePassenger) {
+        return false;
+    }
+
+    // ------------------------------------------------------------------- cleanup
 
     /** True when every component is a real number, never NaN or infinite. */
     private static boolean isFinite(Vec3 v) {
@@ -399,14 +639,32 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         }
     }
 
+    /**
+     * Equips this body, replacing what is in the listed slots.
+     *
+     * <p>Applying the same loadout twice must not duplicate anything: every slot
+     * named here is <b>set</b>, never added to. Slots the caller does not name
+     * are left alone.</p>
+     */
     @Override
-    public void setLoadout(java.util.List<redglitchx.nullarmy.nms.LoadoutSlot> slots) {
-        org.bukkit.inventory.PlayerInventory inv = getBukkitEntity().getInventory();
+    public void setLoadout(List<LoadoutSlot> slots) {
+        org.bukkit.inventory.PlayerInventory inv;
+        try {
+            inv = getBukkitEntity().getInventory();
+        } catch (Throwable t) {
+            return;
+        }
+        if (inv == null) {
+            return;
+        }
         if (slots == null || slots.isEmpty()) {
             inv.clear();
             return;
         }
-        for (redglitchx.nullarmy.nms.LoadoutSlot slot : slots) {
+        for (LoadoutSlot slot : slots) {
+            if (slot == null) {
+                continue;
+            }
             org.bukkit.Material material = org.bukkit.Material.matchMaterial(slot.material());
             if (material == null || material.isAir()) {
                 // Unknown on this server version: skip it rather than fail the summon.
@@ -420,19 +678,19 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
             // them as dedicated armour/offhand slots. Writing 36-40 with
             // setItem() would silently do nothing, so map them explicitly.
             switch (slot.slot()) {
-                case redglitchx.nullarmy.nms.LoadoutSlot.SLOT_BOOTS:
+                case LoadoutSlot.SLOT_BOOTS:
                     inv.setBoots(stack);
                     break;
-                case redglitchx.nullarmy.nms.LoadoutSlot.SLOT_LEGGINGS:
+                case LoadoutSlot.SLOT_LEGGINGS:
                     inv.setLeggings(stack);
                     break;
-                case redglitchx.nullarmy.nms.LoadoutSlot.SLOT_CHESTPLATE:
+                case LoadoutSlot.SLOT_CHESTPLATE:
                     inv.setChestplate(stack);
                     break;
-                case redglitchx.nullarmy.nms.LoadoutSlot.SLOT_HELMET:
+                case LoadoutSlot.SLOT_HELMET:
                     inv.setHelmet(stack);
                     break;
-                case redglitchx.nullarmy.nms.LoadoutSlot.SLOT_OFFHAND:
+                case LoadoutSlot.SLOT_OFFHAND:
                     inv.setItemInOffHand(stack);
                     break;
                 default:
@@ -443,5 +701,11 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
                     break;
             }
         }
+        // The body is already in the world, so run vanilla's own equipment pass:
+        // it applies the armour attribute modifiers (an iron chestplate has to
+        // actually protect) and broadcasts ClientboundSetEquipmentPacket to
+        // whoever is tracking this Null. Without it a client keeps rendering the
+        // old kit and the armour is decoration only.
+        Tracking.syncEquipment(this);
     }
 }

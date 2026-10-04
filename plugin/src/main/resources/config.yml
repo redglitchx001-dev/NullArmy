@@ -1,315 +1,402 @@
 # =====================================================================
 #  NullArmy configuration. Copyright (c) RedGlitchX. All rights reserved.
 #
-#  QUICK ANSWER: where do I add endpoints?
+#  EVERY FEATURE IN THIS FILE IS SWITCHED ON, and the Null caps are 100,
+#  because that is what the owner asked for. Two settings are deliberately
+#  left OFF and are marked with  !! MAP PROTECTION !!  below:
 #
-#    1. Add as many as you like under  ai.endpoints:  — each one is three lines:
+#     policy.griefing-enabled   - lets explosions destroy blocks
+#     wither-cannon.blocks-damage - lets the cannon's TNT destroy blocks
+#
+#  With those two off you still get the full show: the cannon fires a real
+#  TNT minecart, real TNT comes through the sky portals, the blasts happen
+#  with sound, light, particles and knockback - no block is ever destroyed.
+#  Turn them on only on a map you are willing to lose.
+#
+#  UPDATES: when this build ships a setting your file does not have yet, it
+#  is APPENDED to the bottom of your config.yml (with a timestamped backup
+#  next to it). Nothing you wrote is ever overwritten or rewritten, so your
+#  comments stay where they are. /null reload reports what it added.
+#
+#  QUICK ANSWER: where do I add AI endpoints?
+#
+#    1. Add as many as you like under  ai.endpoints:  - each one is:
 #
 #         my-model:
-#           endpoint: "https://api.example.com/v1"   # base URL, http or https
+#           endpoint: "https://api.example.com/v1"   # base URL
 #           model-id: "example-flash"                # the model id
 #           api-key:  "env:MY_API_KEY"               # key, or env:VARNAME
+#           enabled: true
 #
-#    2. Repeat that block for every model you want. NO LIMIT — add 1, 5 or 50.
-#    3. Set  ai.enabled: true  and set  enabled: true  on the endpoints you want.
-#
-#  That is all. The optional  ai.agents:  section at the bottom is NOT required;
-#  ignore it unless you want different models for different jobs.
-#
-#  Endpoints that are disabled, unreachable, rate-limited, or whose circuit
-#  breaker is open are skipped, and the next one is tried. If none answer, the
-#  plugin falls back to deterministic local logic. The server tick is never
-#  blocked on a network call.
+#    2. ai.enabled is already true. An endpoint with no key just fails and
+#       falls back to the local coordinator, so only enable the ones you have
+#       credentials for.
 #
 #  SECURITY: `api-key: "env:NAME"` stores only the NAME of an environment
 #  variable. The real key is read from the server process at call time, so it
-#  is never written to config, chat, logs, git, or the jar. Writing the key
-#  inline works too, but a warning is logged because it sits in plain text.
+#  is never written to config, chat, logs, git, or the jar.
 # =====================================================================
 
 limits:
-  max-live-npcs: 64
-  summon-hard-cap: 24
+  # Hard maximum of Nulls alive on the whole server.
+  max-live-npcs: 100
+  # Hard maximum one summon may ask for.
+  summon-hard-cap: 100
   path-max-expansions: 4096
-  # Hard ceiling on entities NullArmy itself keeps track of and cleans up
-  # (TNT, minecarts, dropped squad gear). Reaching it refuses new spawns with a
-  # clear message instead of quietly growing without bound.
-  max-tracked-entities: 256
+  # Ceiling on entities NullArmy itself tracks and cleans up (TNT, minecarts,
+  # dropped squad gear). Reaching it refuses new spawns with a clear message.
+  max-tracked-entities: 100
 
 visuals:
   # Spec 3 requires AT LEAST 15 portal effects per summon. Values below 15 are
   # raised to 15 at startup, so the visual floor can never be configured away.
+  # These particles are ON TOP OF the real portal doorways below, never instead.
   portal-effects-per-summon: 16
 
 summoning:
   # Ticks before an unanswered "how many Nulls?" prompt expires (20 ticks = 1s).
   prompt-timeout-ticks: 300
   # How far from you the plugin looks for collision-safe ground for each Null.
-  # Bigger finds room in tight builds; smaller keeps the squad tighter.
   spawn-search-radius: 6
+
+# ---------------------------------------------------------------------
+#  ARRIVAL PORTALS  -  real, temporary doorways the Nulls walk out of
+#
+#  A particle effect is not an entrance. For every summon the plugin picks a
+#  RANDOM number of doorways from 1 up to max-per-summon, splits the Nulls
+#  between them at random, builds each one out of real blocks, and spawns the
+#  Nulls at the verified exit spots in front of the openings.
+#
+#  It cannot damage your map:
+#    * a site is only used when every block the frame needs is already air -
+#      one existing block and the site is refused;
+#    * every block placed is recorded with its original data and put back when
+#      the doorway's lifetime ends, on /null portals, and on plugin disable;
+#    * blocks are written with physics off, so nothing catches fire, falls or
+#      flows, and no second portal is ever created;
+#    * portal travel through these blocks is cancelled, so nobody is sent to the
+#      Nether by a Null's doorway.
+# ---------------------------------------------------------------------
+portals:
+  enabled: true
+  # HARD maximum doorways one summon may open. The plugin also refuses to go
+  # above 16 whatever this says.
+  max-per-summon: 4
+  # How many Nulls may share one doorway before they would step on each other.
+  max-per-portal: 4
+  # How many doorways may be standing in the world at once.
+  max-active: 32
+  # How long a doorway stays before its blocks are put back (20 ticks = 1s).
+  lifetime-ticks: 600
+  # How far from the summoner a build site is searched for.
+  search-radius: 6
+  # !! MAP PROTECTION !! Leave false. True would let a player who stands in one
+  # of these doorways travel to the Nether, which also generates a portal there.
+  allow-travel: false
+
+# ---------------------------------------------------------------------
+#  TOTEM OF NULL  -  the army's heart
+#
+#  The item is named exactly "The Totem Of Null", carries the real Curse of
+#  Vanishing, and is recognised by its persistent-data tag (nullarmy:
+#  totem_of_null), so renaming or moving it cannot break recognition.
+#
+#  "Destroyed" means exactly one of:
+#    1. it POPS - somebody dies holding it and vanilla consumes it;
+#    2. a dropped totem takes any damage (fire, lava, explosion, cactus);
+#    3. a dropped totem despawns after its five minutes (see below).
+#  It does NOT mean: moving it between slots, putting it in a chest, renaming
+#  it, enchanting it, dropping it, or reloading the plugin.
+#
+#  When it happens, EVERY Null - including the Commander - goes out one at a
+#  time with a visible delay between them, queued summons are cancelled, and no
+#  new Null may appear until the last one has gone.
+# ---------------------------------------------------------------------
+totem:
+  shutdown-enabled: true
+  # Visible gap between two Nulls going out. 10 ticks = half a second.
+  shutdown-delay-ticks: 10
+  # Report progress in chat (every tenth body, and the last one).
+  announce-progress: true
+  # Whether a totem that despawns on the ground also ends the army. Turn this
+  # off if you would rather a dropped totem only mattered while it exists.
+  despawn-triggers-shutdown: true
+
+# ---------------------------------------------------------------------
+#  DEFAULT EQUIPMENT  -  the Commander and every Null
+#
+#  Format is  slot:MATERIAL:count .  Slots are the real player-inventory
+#  numbers: 0-8 hotbar, 9-35 storage, 36 boots, 37 leggings, 38 chestplate,
+#  39 helmet, 40 offhand. Armour and the offhand are written to those slots
+#  directly, because Bukkit's setItem(36..40) silently does nothing.
+#
+#  The kit is applied to every new Null, and to the Commander ONLY when no
+#  Commander loadout is saved yet (a fresh install, or a deleted commander.yml).
+#  An owner-edited loadout from the GUI is never touched. Re-applying a kit
+#  writes only the slots that are missing, so nothing is ever duplicated.
+# ---------------------------------------------------------------------
+loadout:
+  apply-to-nulls: true
+  apply-to-commander: true
+  default-kit:
+    - "0:IRON_SWORD:1"
+    - "1:BOW:1"
+    - "2:ARROW:64"
+    - "3:GOLDEN_APPLE:4"
+    - "4:COOKED_BEEF:16"
+    - "5:IRON_PICKAXE:1"
+    - "6:ENDER_PEARL:8"
+    - "7:WATER_BUCKET:1"
+    - "8:TORCH:32"
+    - "38:IRON_CHESTPLATE:1"
+    - "40:SHIELD:1"
 
 menu:
   # Title of the /null menu inventory. Plain text; the plugin styles it itself.
   title: "NullArmy — Command Center"
 
+# ---------------------------------------------------------------------
+#  CHAT  -  talk to the Commander, order the Nulls
+#
+#  Only the Commander holds a conversation. Ordinary Nulls take ORDERS and
+#  give no chat replies at all: "null guard", "null follow", "null formation
+#  square", "null attack Steve". Orders run through the same /null executor as
+#  typing them, so permissions, caps and policy gates are identical.
+#
+#  The Commander's lines are printed as:  [NullArmy] <its name>: <text>
+#  The prefix is the plugin's gradient brand; the name itself carries no
+#  colours and no symbols, exactly like a normal player's name.
+# ---------------------------------------------------------------------
 chat:
-  enabled-by-default: false
-  # Let the player give orders by talking to a Null in ordinary chat, with no
-  # slash: "null attack Steve", "null come", "null stop", "null heal" ...
-  # The wake word is stripped and the rest is dispatched through the same
-  # /null executor, so permissions, caps and policy gates are identical.
-  # The order itself is not broadcast to the server.
+  enabled-by-default: true
+  commander-only-conversation: true
+  nulls-orders-only: true
+  commander-chat-prefix: true
   wake-words:
     - null
     - nulls
     - commander
-  # Orders one player may give per minute through chat. Stops a stuck key or a
-  # macro from turning into a spawn storm.
+  # Orders one player may give per minute through chat.
   commands-per-minute: 20
   # Longest reply the plugin will print, in characters.
   max-reply-chars: 400
   # A private channel closes after this many seconds without a message.
   session-timeout-seconds: 600
-  # Who the characters are. {player} is replaced with the speaker's name.
-  # Leave empty to use the built-in soldier voice.
   personas:
-    # Quoted on purpose: an unquoted `null` key is YAML's null value, not the
-    # word, so the Null persona would silently never load.
+    # Quoted on purpose: an unquoted `null` key is YAML's null value.
     "null": ""
     commander: ""
+
+# ---------------------------------------------------------------------
+#  NULLS THEMSELVES
+#
+#  Nulls are announced to every client with a real player-info packet, which
+#  is what makes them visible AND what puts them in the tab list. Their names
+#  are unique random alphanumeric profile names of at most 16 characters - the
+#  configured skin account is only ever the source of the skin texture, never
+#  the name of every Null.
+# ---------------------------------------------------------------------
+nulls:
+  show-in-tab-list: true
+  plain-names: true
 
 # ---------------------------------------------------------------------
 #  MECHANICS
 # ---------------------------------------------------------------------
 mechanics:
   # /null portal moves a Null through a visible portal to you (or to a named
-  # player). It plays portal effects at both ends and verifies the arrival spot
-  # as collision-safe ground first. This is the one deliberate exception to the
-  # no-teleport rule; set it to false and the Nulls refuse to cross.
+  # player), verifying the arrival spot as collision-safe ground first. This is
+  # the one deliberate exception to the no-teleport rule.
   portal-travel: true
-  # Nulls occasionally look around on their own, and turn to face their owner
-  # when one walks past. Purely cosmetic; budgeted per tick.
+  # Nulls occasionally look around on their own, and turn to face their owner.
   idle-gestures: true
 
 # ---------------------------------------------------------------------
-#  AI ENDPOINTS  — add as many as you want
+#  MISSIONS  -  original NullArmy content
+#
+#  One objective at a time for the Commander and every active Null: scouting a
+#  hidden outpost, a corridor rescue, holding a banner, a squad tournament, a
+#  gate vigil, carrying an accord between two camps, a supply run. All of it is
+#  written for this plugin - no characters, items, dialogue or plots from any
+#  other work.
+#
+#  Missions move, form up and report. They never destroy a block, spawn an
+#  explosive or attack a player, so they are safe with every policy switch off.
+# ---------------------------------------------------------------------
+missions:
+  enabled: true
+
+# ---------------------------------------------------------------------
+#  SELF TEST  -  /null selftest
+#
+#  Runs the real spawn path against the running server: one Null, then a squad,
+#  then many ticks, then the portals and the totem shutdown, printing PASS/FAIL
+#  per check with the marker [NullArmy][SELFTEST]. This is what CI runs.
+# ---------------------------------------------------------------------
+selftest:
+  squad-size: 5
+
+# ---------------------------------------------------------------------
+#  AI ENDPOINTS  —  add as many as you want
 # ---------------------------------------------------------------------
 ai:
-  # Master switch.
-  #
-  # FALSE (default) = the plugin is COMPLETE and FULLY FUNCTIONAL with no AI
-  # at all. Every structural feature works: summoning, portal, movement,
-  # flocking, pathfinding, the Commander, its loadout, the shared skin, and
-  # all mace/elytra combat techniques. A few extras need a model - run
-  # /null features to see exactly which.
-  #
-  # TRUE = additionally use the endpoints below to enrich decisions.
-  enabled: false
+  # Master switch. TRUE means the Commander may ask a model what the squad
+  # should do next. FALSE (or no usable endpoint) means the local deterministic
+  # coordinator does it instead - and /null ai says plainly which one you have.
+  enabled: true
+
+  # The Commander gets a live view of its squad (every Null's health, position
+  # and role, the objective, formation, tactics, kit state, portal arrivals and
+  # what the cannon and air drop are allowed to do) and answers with ONE typed,
+  # allowlisted action: report, follow, come, guard, formation, tactics, heal,
+  # roles, portal, mission-start, mission-stop, airdrop, cannon, dismiss.
+  # A model can never run a console command, grant a permission, enable
+  # griefing, ban or kill a player. Cannon, air drop and dismiss always need the
+  # owner's /null confirm before anything happens.
+  squad-coordination: true
+  # Let the LOCAL coordinator take safe, reversible steps on its own (heal a
+  # hurt squad, hold position when idle, store missing roles). It never touches
+  # anything destructive.
+  auto-coordinate: true
+  coordinate-interval-ticks: 400
 
   # Which endpoint a role uses when it has no explicit binding below.
-  # Set it to the id of any endpoint defined under ai.endpoints.
-  # Leave it empty ("") to auto-pick the first enabled endpoint.
+  # Leave empty ("") to auto-pick the first enabled endpoint.
   default-endpoint: ""
 
-  # Defaults inherited by any endpoint that does not override them.
   defaults:
     timeout-millis: 3000
     calls-per-minute: 20
     max-json-bytes: 8192
 
   # ===================================================================
-  #  ENDPOINTS  -  ADD AS MANY AS YOU WANT. THERE IS NO LIMIT.
-  #
-  #  Every entry is exactly three lines you care about:
-  #
-  #    <name>:        any unique name you like
-  #      endpoint:    the base URL  (must start with http:// or https://)
-  #      model-id:    the model id  (sent with every request)
-  #      api-key:     the key       (env:VARNAME recommended, or the literal key)
-  #
-  #  To add another model: copy any block below, rename it, change those
-  #  three lines. Repeat as many times as you want.
-  #
-  #  More endpoints = better performance for players and for the Null
-  #  Commander: when one model is slow, rate-limited or down, the next
-  #  one in the list is tried instead of the Commander going silent.
-  #
-  #  api-key forms:
-  #    api-key: "env:OPENAI_API_KEY"  <- RECOMMENDED. Only the NAME is
-  #                                      stored here; the real key is read
-  #                                      from the server process environment
-  #                                      at call time, so it never sits in
-  #                                      config.yml, the jar, git or backups.
-  #    api-key: "sk-xxxxx"            <- works, but is plain text on disk.
-  #                                      Can leak through a paste, a
-  #                                      screenshot or a git commit. A
-  #                                      warning is logged at startup.
-  #    api-key: ""                    <- no auth (local models like Ollama)
+  #  ENDPOINTS - enable the ones you actually have credentials for.
+  #  An enabled endpoint with no key just fails and falls back, so they
+  #  are all disabled here even though the master switch above is on.
   # ===================================================================
   endpoints:
-    # ---- OpenAI -----------------------------------------------------
     openai:
       endpoint: "https://api.openai.com/v1"
       model-id: "gpt-4o-mini"
       api-key: "env:OPENAI_API_KEY"
       enabled: false
 
-    # ---- Anthropic --------------------------------------------------
     anthropic:
       endpoint: "https://api.anthropic.com/v1"
       model-id: "claude-3-5-sonnet-latest"
       api-key: "env:ANTHROPIC_API_KEY"
       enabled: false
 
-    # ---- OpenRouter (hundreds of models, one key) --------------------
     openrouter:
       endpoint: "https://openrouter.ai/api/v1"
       model-id: "meta-llama/llama-3.1-8b-instruct"
       api-key: "env:OPENROUTER_API_KEY"
       enabled: false
 
-    # ---- Google Gemini (OpenAI-compatible endpoint) -------------------
     gemini:
       endpoint: "https://generativelanguage.googleapis.com/v1beta/openai"
       model-id: "gemini-2.0-flash"
       api-key: "env:GEMINI_API_KEY"
       enabled: false
 
-    # ---- Local Ollama (no key needed) ---------------------------------
+    # A local Ollama needs no key at all: set enabled: true if you run one.
     ollama-local:
       endpoint: "http://127.0.0.1:11434/v1"
       model-id: "llama3"
       api-key: ""
       enabled: false
 
-    # ---- COPY THIS BLOCK TO ADD YOUR OWN ------------------------------
-    # my-model:
-    #   endpoint: "https://my.provider/v1"
-    #   model-id: "my-model-id"
-    #   api-key: "env:MY_API_KEY"
-    #   enabled: true
-
   # ===================================================================
-  #  OPTIONAL - per-role routing. YOU DO NOT NEED THIS.
-  #
-  #  Omit it entirely and every role uses ai.default-endpoint (or the
-  #  first enabled endpoint). It only exists if you want, say, combat
-  #  decisions on a fast local model and chat on a large cloud model.
-  #
-  #  Valid role names: ChatCommander, CombatTactician, BuilderAgent,
-  #  PathfinderCore, ScoutObserver, ThreatAnalyst, LogisticsQuartermaster,
-  #  MedicTriage, FormationTactician, RedstoneAnalyst, MiningForeman,
+  #  OPTIONAL - per-role routing. Valid role names: ChatCommander,
+  #  CombatTactician, BuilderAgent, PathfinderCore, ScoutObserver,
+  #  ThreatAnalyst, LogisticsQuartermaster, MedicTriage,
+  #  FormationTactician, RedstoneAnalyst, MiningForeman,
   #  IdleBehaviourDirector, GuardianAuditor
   # ===================================================================
   # agents:
   #   CombatTactician:
   #     endpoint: "ollama-local"
   #     fallbacks: ["openai"]
-  #     enabled: false
-  #   ChatCommander:
-  #     endpoint: "openai"
-  #     fallbacks: ["gemini"]
-  #     enabled: false
+  #     enabled: true
 
+# ---------------------------------------------------------------------
+#  SKINS  -  the texture source only, never the name
+# ---------------------------------------------------------------------
 skins:
-  # -------------------------------------------------------------------
-  #  The skin every Null wears, and the skin the Commander wears.
-  #
-  #  Put the Mojang username of ANY account whose skin you want.
-  #  The plugin looks the skin up once and reuses it for every NPC.
-  #
-  #  If the name does not exist, or the lookup fails, the plugin logs a
-  #  warning and Nulls keep the default skin. NOTHING BREAKS - a missing
-  #  skin is purely cosmetic and never blocks a spawn.
-  #
-  #  Leave "commander" empty to make the Commander use the same skin as
-  #  ordinary Nulls.
-  #
-  #  You can also override without editing this file:
-  #    -Dnullarmy.skin.null=SomeName
-  #    -Dnullarmy.skin.commander=SomeOtherName
-  # -------------------------------------------------------------------
-
-  # Skin for ordinary Nulls.
+  # The Mojang username whose SKIN every Null wears. Nulls are still named with
+  # their own unique random alphanumeric profile names; this account is only the
+  # source of the signed texture. If the lookup fails, Nulls keep the default
+  # skin and nothing breaks.
   # NOTE: the key is "nulls", not "null" - in YAML an unquoted `null` is the
-  # null value, not the word, and it would silently become an empty key.
+  # null value, not the word.
   nulls: "uH3WR2v0ti0uTHJ"
 
   # Skin for the Commander. Empty = same as the Null skin above.
   commander: ""
 
 commander:
-  # The Commander's in-game username (player names cannot contain spaces).
+  # The Commander's in-game username. It is used exactly as a normal player name
+  # is: no colours, no symbols, and it is what the tab list shows.
   name: "NullCommander"
-
-  # Reserved for future tuning; the Commander always enters through a portal.
   spawn-with-portal: true
 
+# ---------------------------------------------------------------------
+#  POLICY
+#
+#  explosives and wither are ON so the cannon and the sky portals work.
+#  griefing is OFF: that is the switch that would let an explosion destroy
+#  blocks, and the owner has to choose it explicitly.
+# ---------------------------------------------------------------------
 policy:
-  # All destructive behaviour defaults to false (spec 8).
+  # !! MAP PROTECTION !! true would let NullArmy explosions break blocks.
   griefing-enabled: false
-  explosives-enabled: false
-  wither-enabled: false
-  # Gates /null ban. Off by default; a ban is a human moderation action and is
-  # NEVER reachable by an AI endpoint.
-  moderation-integration-enabled: false
+  explosives-enabled: true
+  wither-enabled: true
+  # Gates /null ban. A ban is a human moderation action and is NEVER reachable
+  # by an AI endpoint, whatever this says. The nullarmy.moderation permission
+  # still has to be granted to anyone who should be able to use it.
+  moderation-integration-enabled: true
 
 # =====================================================================
-#  WITHER CANNON  —  opt-in spectacle, OFF by default
+#  WITHER CANNON  —  a real TNT minecart, delivered through sky portals
 #
-#  /null withercannon  (alias /null cannon) fires a real TNT minecart that
-#  arcs into the sky, opens portals at the apex and drops TNT out of them.
+#  /null withercannon (alias /null cannon) fires a tracked TNT minecart from
+#  verified free air, opens portal clusters at the top of the arc, drops the
+#  configured TNT through them one per tick, then removes the cart before it can
+#  land and explode somewhere nobody asked for.
 #
-#  It stays dead until you turn it on here. Even then it needs:
-#    1. wither-cannon.enabled: true
-#    2. policy.explosives-enabled: true
-#    3. policy.wither-enabled: true
-#    4. policy.griefing-enabled: true  (only when blocks-damage is true)
-#    5. the permission below, held by whoever fires it
+#  A shot is never reported as successful unless an entity was really created
+#  and TNT was really delivered: a failed spawn says how many TNT were lost and
+#  why, and a shot that cannot deliver gives up after three failed attempts
+#  instead of retrying for the rest of the session.
 #
-#  blocks-damage: false keeps the show and protects the map: the TNT still
-#  explodes and still looks right, but no block is ever destroyed. Turn it to
-#  true only on a server that has accepted explosives and griefing.
+#  /null status and /null debug print the cannon's exact state, including which
+#  setting or permission is missing when it cannot fire.
 # =====================================================================
 wither-cannon:
-  enabled: false
+  enabled: true
   require-permission: nullarmy.admin
-  # Shots before the cannon must cool down, per player.
   max-charge: 3
-  # TNT dropped per shot, spread over several ticks (never dumped in one tick).
   tnt-per-shot: 3
   cooldown-seconds: 20
-  # When false, explosions are visual only (no blocks destroyed).
+  # !! MAP PROTECTION !! Needs policy.griefing-enabled to be true as well.
   blocks-damage: false
 
 # =====================================================================
-#  AIR DROP  —  sky portals that deliver a squad, OFF by default
+#  AIR DROP  —  sky portals that deliver a squad
 #
-#  /null airdrop opens portals in the air and on the ground at safe spots.
-#  With drop-nulls-from-sky: false (the default) every Null still emerges from
-#  ground-level portal effects onto verified safe ground, because a Null that
-#  starts mid-air would be spawned inside terrain-free space and would take
-#  real fall damage - the spec forbids starting a Null anywhere unsafe.
-#
-#  drop-nulls-from-sky: true changes that knowingly: Nulls appear at the sky
-#  portal mouth and fall under real vanilla gravity, including real fall
-#  damage. Some may die on landing. That is your call, not the plugin's.
+#  With drop-nulls-from-sky: true the Nulls appear at the sky portal mouth and
+#  fall under real vanilla gravity, INCLUDING real fall damage. Some may die on
+#  landing. That is the honest, physical version, and it is why the switch
+#  exists; set it to false and every Null emerges from ground-level doorways
+#  onto verified safe ground instead.
 # =====================================================================
 airdrop:
-  # OFF by default. A permission alone is never enough: this has to be true too.
-  enabled: false
+  enabled: true
   require-permission: nullarmy.admin
-  # Portal effects at the sky mouth and around each ground emergence point.
-  # Never below 15, so an air drop always reads as a portal and not a sparkle.
   portals: 16
-  # false = every Null emerges out of ground-level portal effects at a spot the
-  #         adapter verified as collision-safe; nothing falls, nothing is hurt.
-  # true  = the Nulls drop out of the sky portal under real gravity, INCLUDING
-  #         real fall damage. This is the honest, physical version, and the
-  #         reason the whole feature is opt-in.
-  drop-nulls-from-sky: false
+  drop-nulls-from-sky: true
   # How far above the summoner the sky portal opens (3-60, clamped).
   height: 12
-  # TNT dropped from the sky portals as part of the show (subject to the same
-  # policy switches as the cannon).
+  # TNT dropped from the sky portals as part of the show (same policy switches).
   tnt-per-drop: 2

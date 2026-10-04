@@ -81,6 +81,16 @@ public final class CommanderManager implements Listener, Reloadable {
         if (name == null || name.trim().isEmpty()) {
             name = DEFAULT_NAME;
         }
+        // The Commander is presented exactly like a normal player: no colours, no
+        // symbols, no decoration in the name itself. The brand prefix belongs to
+        // the plugin's chat lines, not to the name.
+        name = name.replaceAll("[^A-Za-z0-9_]", "");
+        if (name.isEmpty()) {
+            name = DEFAULT_NAME;
+        }
+        if (name.length() > 16) {
+            name = name.substring(0, 16);
+        }
         if (!file.isFile()) {
             return;
         }
@@ -138,6 +148,33 @@ public final class CommanderManager implements Listener, Reloadable {
     public SkinData skin() { return skin; }
     public String commanderName() { return name; }
     public ItemStack[] loadout() { return loadout; }
+
+    /** The live Commander body, or null when it is not here. */
+    public NullBody body() { return commander; }
+
+    /**
+     * True when a Commander loadout is already saved.
+     *
+     * <p>This is what decides whether the default kit is installed: a fresh
+     * install (or a deleted {@code commander.yml}) gets the shipped kit, an
+     * owner-edited loadout is left exactly as it was saved.</p>
+     */
+    public boolean hasSavedLoadout() {
+        for (ItemStack stack : loadout) {
+            if (stack != null && stack.getType() != null && !stack.getType().isAir()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The kit verification line for {@code /null status}, or null when it is right. */
+    public String kitProblem() {
+        if (commander == null || plugin.kits() == null) {
+            return null;
+        }
+        return plugin.kits().verify(commander);
+    }
 
     /**
      * A config reload does not change anything the Commander is already
@@ -210,12 +247,30 @@ public final class CommanderManager implements Listener, Reloadable {
             return false;
         }
 
-        Vec3d spot = findSafeSpot(adapter, world, origin);
+        // A real doorway first: the Commander should walk out of the same kind of
+        // temporary portal the squad uses, not out of a particle effect. If no
+        // site can be built, verified open ground is used and the message says so.
+        Vec3d spot = null;
+        boolean doorway = false;
+        if (plugin.portals() != null && plugin.pluginConfig() != null
+                && plugin.pluginConfig().commanderSpawnWithPortal()) {
+            java.util.List<redglitchx.nullarmy.plugin.portal.PortalBuilder.BuiltPortal> built =
+                    plugin.portals().buildDoorways(world,
+                            new Vec3d(origin.getX(), Math.floor(origin.getY()), origin.getZ()), 1);
+            if (!built.isEmpty()) {
+                spot = plugin.portals().takeExit(built.get(0), 0);
+                doorway = spot != null;
+            }
+        }
+        if (spot == null) {
+            spot = findSafeSpot(adapter, world, origin);
+        }
         if (spot == null) {
             owner.sendMessage(PREFIX + "No safe ground nearby for the Commander to step onto -"
                     + " move to open ground and try again.");
             return false;
         }
+        final boolean arrivedThroughDoorway = doorway;
 
         String value = (skin != null && skin.complete()) ? skin.value() : "";
         String signature = (skin != null && skin.complete()) ? skin.signature() : "";
@@ -235,19 +290,44 @@ public final class CommanderManager implements Listener, Reloadable {
             owner.sendMessage(PREFIX + "The adapter returned no entity - nothing was summoned.");
             return false;
         }
+        // A returned object is not a spawn: the Commander has to be alive, have a
+        // packet listener, and be tracked by the server, or nobody would see it.
+        String problem = null;
+        if (!adapter.packetListenerReady(commander)) {
+            problem = "it has no packet listener, so it was removed instead of registered";
+        } else if (!commander.isAlive()) {
+            problem = "it was not alive after registration";
+        } else if (!adapter.isTracked(commander)) {
+            problem = "the server is not tracking it, so no client could see it";
+        }
+        if (problem != null) {
+            final redglitchx.nullarmy.nms.NullBody broken = commander;
+            commander = null;
+            Guard.attempt(plugin.getLogger(), "removing an unusable Commander", broken::destroy);
+            owner.sendMessage(PREFIX + "The Commander could not be summoned: " + problem + ".");
+            plugin.getLogger().severe("[NullArmy] Commander registration failed: " + problem);
+            return false;
+        }
 
-        // The portal is the whole point of the entrance. It is cosmetic, so it
-        // may fail without losing the Commander that already exists.
+        // The portal effects are the last, cosmetic part of the entrance: they may
+        // fail without losing the Commander that already exists and was verified.
+        final Vec3d arrivalSpot = spot;
         Guard.attempt(plugin.getLogger(), "Commander portal effects", () -> {
             int effects = Math.max(Caps.minPortalEffects(),
                     plugin.pluginConfig() == null ? Caps.minPortalEffects()
                             : plugin.pluginConfig().caps().portalEffectsPerSummon());
-            adapter.playPortalEffects(world, spot, effects);
+            adapter.playPortalEffects(world, arrivalSpot, effects);
         });
 
         Guard.attempt(plugin.getLogger(), "Commander loadout", this::applyLoadout);
-        owner.sendMessage(PREFIX + "The Commander steps out of the portal."
-                + " Use /null loadout to equip it.");
+        owner.sendMessage(PREFIX + (arrivedThroughDoorway
+                ? "The Commander steps out of a real doorway; it closes on its own shortly."
+                : "No doorway site was clear, so the Commander stepped onto verified open"
+                        + " ground with portal effects instead."));
+        String kitProblem = plugin.kits() == null ? null : plugin.kits().verify(commander);
+        owner.sendMessage(PREFIX + (kitProblem == null
+                ? "Loadout verified on the body. Use /null loadout to edit it."
+                : "Loadout is incomplete: " + kitProblem + ". Use /null loadout to edit it."));
         return true;
     }
 

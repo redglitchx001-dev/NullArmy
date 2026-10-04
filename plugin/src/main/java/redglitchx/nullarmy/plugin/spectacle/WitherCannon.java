@@ -54,8 +54,14 @@ public final class WitherCannon implements Reloadable {
     /** Portal clusters drawn in the sky. Spec 3's floor applies per cluster. */
     private static final int SKY_CLUSTERS = 3;
 
-    /** Hard lifetime of one shot, in ticks (8s). */
+    /** Hard lifetime of one shot, in ticks (8s). A shot outliving this is stuck. */
     private static final int SHOT_LIFETIME_TICKS = 160;
+
+    /** Consecutive failed TNT spawns before a shot gives up and says so. */
+    private static final int DROP_FAILURE_LIMIT = 3;
+
+    /** Shots that may be in the air at once, so a macro cannot fill the entity cap. */
+    private static final int MAX_CONCURRENT_SHOTS = 3;
 
     /** Downward velocity of each dropped TNT. */
     private static final double TNT_DROP_SPEED = 0.18;
@@ -83,15 +89,22 @@ public final class WitherCannon implements Reloadable {
         private final Entity cart;
         private final long startTick;
         private Location lastLocation;
+        /** The highest point the cart reached: where the doors open. */
+        private Location apex;
         private boolean apexReached;
         private int tntRemaining;
         private int droppedByAir;
+        /** Consecutive failed TNT spawns. Bounded, so a shot cannot retry forever. */
+        private int dropFailures;
+        /** Why the shot ended, in the owner's words. */
+        private String outcome = "";
 
         Shot(UUID owner, Entity cart, long startTick, Location start, int tntRemaining) {
             this.owner = owner;
             this.cart = cart;
             this.startTick = startTick;
             this.lastLocation = start;
+            this.apex = start;
             this.tntRemaining = tntRemaining;
         }
     }
@@ -180,19 +193,46 @@ public final class WitherCannon implements Reloadable {
             return new Result(false, cooldown);
         }
 
+        if (shots.size() >= MAX_CONCURRENT_SHOTS) {
+            return new Result(false, MAX_CONCURRENT_SHOTS + " shots are already in the air;"
+                    + " wait for one to finish.");
+        }
+
         Vector direction = eye.getDirection();
         if (direction == null || direction.lengthSquared() < 1.0E-6) {
             direction = new Vector(0, 0, 1);
         }
         direction = direction.normalize().multiply(1.15);
         Vector velocity = new Vector(direction.getX(), 1.35, direction.getZ());
-        Location spawn = eye.clone().add(direction.clone().multiply(1.2));
 
-        Entity cart = world.spawnEntity(spawn, EntityType.TNT_MINECART);
-        if (cart == null) {
-            return new Result(false, "The server refused to create the minecart.");
+        // The cart has to be created in free air. A minecart spawned inside a
+        // block is destroyed (or explodes) the same tick, which is how a shot
+        // used to "succeed" and then deliver nothing.
+        Location spawn = launchSite(eye, direction, world);
+        if (spawn == null) {
+            return new Result(false, "There is no free air in front of you to launch from -"
+                    + " step back into the open and try again.");
         }
-        cart.setVelocity(velocity);
+
+        Entity cart;
+        try {
+            cart = world.spawnEntity(spawn, EntityType.TNT_MINECART);
+        } catch (Throwable t) {
+            noteFailure();
+            return new Result(false, "The server threw while creating the minecart: "
+                    + Guard.describe(t));
+        }
+        if (cart == null || !cart.isValid()) {
+            noteFailure();
+            return new Result(false, "The server created no minecart, so nothing was fired."
+                    + " (spawnEntity returned " + (cart == null ? "null" : "an invalid entity") + ")");
+        }
+        try {
+            cart.setVelocity(velocity);
+        } catch (Throwable t) {
+            cart.remove();
+            return new Result(false, "The minecart could not be given its arc: " + Guard.describe(t));
+        }
         if (!registry.track(cart)) {
             cart.remove();
             return new Result(false, "Too many tracked entities (" + registry.maxTracked()
@@ -202,7 +242,37 @@ public final class WitherCannon implements Reloadable {
         shots.add(new Shot(player.getUniqueId(), cart, plugin.currentTick(), spawn,
                 current.witherCannonTntPerShot()));
         consecutiveFailures = 0;
-        return new Result(true, "Shot away. Watch the sky - the doors open at the top of the arc.");
+        return new Result(true, "Shot away (minecart #" + cart.getEntityId() + "). Watch the sky -"
+                + " the doors open at the top of the arc and " + current.witherCannonTntPerShot()
+                + " TNT come through them.");
+    }
+
+    /**
+     * Finds free air to launch from.
+     *
+     * <p>Tries the natural spot in front of the player's eye first, then a little
+     * higher and a little further out. Every candidate has to be inside the world
+     * height and free of blocks, because a cart created inside a wall is a cart
+     * that never flies.</p>
+     *
+     * @return a validated launch location, or null when there is nowhere to fire from
+     */
+    private Location launchSite(Location eye, Vector direction, World world) {
+        double[][] offsets = {{1.2, 0.0}, {1.6, 0.4}, {2.0, 0.8}, {1.2, 1.0}, {2.4, 0.0}};
+        for (double[] offset : offsets) {
+            Location candidate = eye.clone()
+                    .add(direction.clone().multiply(offset[0]))
+                    .add(0.0, offset[1], 0.0);
+            if (candidate.getY() < world.getMinHeight() + 1
+                    || candidate.getY() > world.getMaxHeight() - 2) {
+                continue;
+            }
+            if (candidate.getBlock().getType().isAir()
+                    && candidate.clone().add(0, 1, 0).getBlock().getType().isAir()) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     /**
@@ -260,54 +330,112 @@ public final class WitherCannon implements Reloadable {
         Entity cart = shot.cart;
         boolean alive = cart != null && !cart.isDead() && cart.isValid();
         if (alive) {
-            shot.lastLocation = cart.getLocation();
+            Location now = cart.getLocation();
+            if (now != null) {
+                shot.lastLocation = now;
+                if (shot.apex == null || now.getY() > shot.apex.getY()) {
+                    shot.apex = now;
+                }
+            }
+        }
+
+        // A shot that has outlived its window is stuck - it is ended here rather
+        // than left retrying for the rest of the session with its entities behind.
+        if (tickCounter - shot.startTick > SHOT_LIFETIME_TICKS) {
+            shot.outcome = "the shot timed out after " + (SHOT_LIFETIME_TICKS / 20) + "s";
+            cleanup(shot);
+            return true;
         }
 
         if (!shot.apexReached) {
             if (!alive) {
-                // Lost the cart before the arc topped out: still deliver the show.
+                // Lost the cart before the arc topped out (a roof, a wall, another
+                // plugin). The show still happens, from the highest point it
+                // actually reached - never from the player's own eye position.
                 shot.apexReached = true;
-                openSkyPortals(shot.lastLocation);
+                shot.outcome = "the minecart was destroyed on the way up";
+                openSkyPortals(deliveryPoint(shot));
                 shot.tntRemaining = Math.min(shot.tntRemaining, 1);
             } else {
                 Vector velocity = cart.getVelocity();
                 if (velocity == null || velocity.getY() <= 0.0
                         || tickCounter - shot.startTick > 60) {
                     shot.apexReached = true;
-                    openSkyPortals(shot.lastLocation);
+                    openSkyPortals(deliveryPoint(shot));
                 }
             }
             return false;
         }
 
         // Drop phase: exactly one TNT per tick, so a shot can never empty a
-        // payload into a single tick.
+        // payload into a single tick. Failures are counted, and a shot that cannot
+        // deliver gives up instead of retrying for ever.
         if (shot.tntRemaining > 0) {
             if (dropOne(shot)) {
                 shot.tntRemaining--;
+                shot.dropFailures = 0;
+            } else {
+                shot.dropFailures++;
+                if (shot.dropFailures >= DROP_FAILURE_LIMIT) {
+                    shot.outcome = shot.tntRemaining + " TNT could not be created";
+                    cleanup(shot);
+                    return true;
+                }
             }
             return false;
         }
 
-        // Delivery done.
-        if (alive) {
-            cart.remove();
-        }
-        registry.untrack(cart);
+        // Delivery done: take the cart out before it can land and explode somewhere
+        // nobody asked for.
+        shot.outcome = shot.droppedByAir + " TNT delivered through the sky portals";
+        cleanup(shot);
         return true;
     }
 
+    /** Where the doors open and the TNT comes out: the highest point reached. */
+    private Location deliveryPoint(Shot shot) {
+        if (shot.apex != null && shot.apex.getWorld() != null) {
+            return shot.apex;
+        }
+        return shot.lastLocation;
+    }
+
+    /** Removes the cart and stops tracking it, whatever state it is in. */
+    private void cleanup(Shot shot) {
+        registry.untrack(shot.cart);
+        try {
+            if (shot.cart != null && shot.cart.isValid() && !shot.cart.isDead()) {
+                shot.cart.remove();
+            }
+        } catch (Throwable t) {
+            plugin.getLogger().fine("[NullArmy] cannon cart cleanup skipped: " + Guard.describe(t));
+        }
+    }
+
+    /**
+     * Creates one TNT at the delivery point.
+     *
+     * @return true when an entity really exists now; false is counted, and the
+     *     shot gives up after {@link #DROP_FAILURE_LIMIT} of them
+     */
     private boolean dropOne(Shot shot) {
-        Location at = shot.lastLocation;
+        Location at = deliveryPoint(shot);
         if (at == null || at.getWorld() == null) {
-            return true;
+            shot.outcome = "the delivery point was lost";
+            return false;
         }
         World world = at.getWorld();
         double spreadX = (random.nextDouble() - 0.5) * 0.4;
         double spreadZ = (random.nextDouble() - 0.5) * 0.4;
         Location drop = at.clone().add(spreadX, -0.5, spreadZ);
-        Entity tnt = world.spawnEntity(drop, EntityType.TNT);
-        if (tnt == null) {
+        Entity tnt;
+        try {
+            tnt = world.spawnEntity(drop, EntityType.TNT);
+        } catch (Throwable t) {
+            plugin.getLogger().warning("[NullArmy] TNT spawn failed: " + Guard.describe(t));
+            return false;
+        }
+        if (tnt == null || !tnt.isValid()) {
             return false;
         }
         tnt.setVelocity(new Vector(spreadX, -TNT_DROP_SPEED, spreadZ));
@@ -339,17 +467,37 @@ public final class WitherCannon implements Reloadable {
         }
     }
 
+    /**
+     * Reports the shot honestly.
+     *
+     * <p>A shot that delivered nothing says so, with the reason. Reporting
+     * "complete" over an empty sky is exactly the failure this class is here to
+     * stop.</p>
+     */
     private void finish(Shot shot) {
-        registry.untrack(shot.cart);
+        cleanup(shot);
+        if (shot.droppedByAir <= 0) {
+            noteFailure();
+        } else {
+            consecutiveFailures = 0;
+        }
         try {
             Player owner = Bukkit.getPlayer(shot.owner);
             if (owner != null && owner.isOnline()) {
-                owner.sendMessage(PluginText.PREFIX + "Shot complete: " + shot.droppedByAir
-                        + " TNT delivered through the sky portals.");
-                if (config != null && config.witherCannonBlocksDamage()) {
-                    owner.sendMessage(PluginText.PREFIX + "Block damage is enabled for this shot.");
+                if (shot.droppedByAir <= 0) {
+                    owner.sendMessage(PluginText.PREFIX + "Shot failed: no TNT was delivered. "
+                            + (shot.outcome.isEmpty() ? "The reason was not recorded." : shot.outcome)
+                            + ".");
                 } else {
-                    owner.sendMessage(PluginText.PREFIX + "Block damage is off: the blasts are visual only.");
+                    owner.sendMessage(PluginText.PREFIX + "Shot complete: " + shot.droppedByAir
+                            + " TNT delivered through the sky portals"
+                            + (shot.outcome.isEmpty() ? "." : " (" + shot.outcome + ")."));
+                    if (config != null && config.witherCannonBlocksDamage()) {
+                        owner.sendMessage(PluginText.PREFIX + "Block damage is enabled for this shot.");
+                    } else {
+                        owner.sendMessage(PluginText.PREFIX + "Block damage is off: the blasts are"
+                                + " visual only.");
+                    }
                 }
             }
         } catch (Throwable ignored) {
@@ -373,6 +521,49 @@ public final class WitherCannon implements Reloadable {
     /** Shots currently in flight, for {@code /null status}. */
     public int shotsInFlight() {
         return shots.size();
+    }
+
+    /**
+     * The cannon's state in one line, for {@code /null status} and {@code /null debug}.
+     *
+     * <p>When it cannot fire, the line names the exact setting or permission that
+     * is missing rather than just saying "off".</p>
+     */
+    public String describeState(Player viewer) {
+        PluginConfig current = config;
+        if (current == null) {
+            return "no config loaded";
+        }
+        if (!current.witherCannonEnabled()) {
+            return "DISABLED - set wither-cannon.enabled: true";
+        }
+        if (!current.explosivesEnabled()) {
+            return "BLOCKED - set policy.explosives-enabled: true";
+        }
+        if (!current.witherEnabled()) {
+            return "BLOCKED - set policy.wither-enabled: true";
+        }
+        if (viewer != null && !viewer.hasPermission(current.witherCannonPermission())) {
+            return "BLOCKED for you - needs permission " + current.witherCannonPermission();
+        }
+        if (breaker.isOpen()) {
+            return "LATCHED OFF this session - " + breaker.reason()
+                    + " (run /null reload to re-arm)";
+        }
+        return "READY - " + shots.size() + "/" + MAX_CONCURRENT_SHOTS + " shots in flight, "
+                + current.witherCannonTntPerShot() + " TNT per shot, charge "
+                + current.witherCannonMaxCharge() + ", cooldown "
+                + current.witherCannonCooldownSeconds() + "s, block damage "
+                + (current.witherCannonBlocksDamage() ? "ON" : "off");
+    }
+
+    /** Charges left for one player, for {@code /null status}. */
+    public int chargesLeft(UUID player) {
+        Charge charge = player == null ? null : charges.get(player);
+        if (charge == null) {
+            return config == null ? 0 : config.witherCannonMaxCharge();
+        }
+        return Math.max(0, charge.remaining);
     }
 
     private void noteFailure() {

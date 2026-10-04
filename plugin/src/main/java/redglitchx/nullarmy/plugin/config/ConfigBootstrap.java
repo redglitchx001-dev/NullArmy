@@ -40,6 +40,14 @@ public final class ConfigBootstrap {
     /** The file name inside the data folder, and the resource path in the jar. */
     public static final String FILE_NAME = "config.yml";
 
+    /** What the most recent {@link ConfigMigration} did, for {@code /null debug}. */
+    private static ConfigMigration.Report lastReport;
+
+    /** The last migration report, or null when nothing has run yet. */
+    public static ConfigMigration.Report lastReport() {
+        return lastReport;
+    }
+
     private ConfigBootstrap() {
     }
 
@@ -70,6 +78,7 @@ public final class ConfigBootstrap {
                 try {
                     // replace=false: never overwrite an existing file.
                     plugin.saveResource(FILE_NAME, false);
+                    log.info("[NullArmy] Wrote the shipped " + FILE_NAME + ".");
                 } catch (IllegalArgumentException missing) {
                     log.severe("[NullArmy] " + missing.getMessage());
                     log.severe("[NullArmy] The plugin jar is missing " + FILE_NAME
@@ -78,7 +87,31 @@ public final class ConfigBootstrap {
                     writeStarter(file);
                 }
             } else if (file != null) {
-                log.info("[NullArmy] Keeping the existing configuration (never overwritten).");
+                // An existing file is never overwritten - but it is also not left
+                // behind. Settings this build ships that the file does not have yet
+                // are appended, with a backup, so /null reload really does reload
+                // something new instead of silently reading yesterday's file.
+                String version = "unknown";
+                try {
+                    version = plugin.getDescription().getVersion();
+                } catch (Throwable ignored) {
+                    // The header of the appended block just says "unknown".
+                }
+                ConfigMigration.Report report = ConfigMigration.migrate(plugin, version);
+                lastReport = report;
+                if (report.error() != null) {
+                    log.severe("[NullArmy] " + report.describe());
+                } else if (report.changed()) {
+                    log.info("[NullArmy] " + report.describe() + ": " + report.addedKeys());
+                } else {
+                    log.info("[NullArmy] Keeping the existing configuration ("
+                            + report.describe() + ").");
+                }
+                if (!report.unknownKeys().isEmpty()) {
+                    log.info("[NullArmy] config.yml also has " + report.unknownKeys().size()
+                            + " key(s) this build does not ship; they were left in place: "
+                            + report.unknownKeys());
+                }
             }
             plugin.reloadConfig();
         } catch (Throwable t) {

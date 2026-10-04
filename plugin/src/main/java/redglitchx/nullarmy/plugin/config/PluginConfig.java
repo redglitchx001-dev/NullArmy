@@ -78,6 +78,47 @@ public final class PluginConfig {
     private final String personaNull;
     private final String personaCommander;
 
+    // ------------------------------------------------------------- portals
+    private final boolean portalsEnabled;
+    private final int portalsMaxPerSummon;
+    private final int portalsMaxPerPortal;
+    private final int portalsMaxActive;
+    private final long portalsLifetimeTicks;
+    private final int portalSearchRadius;
+    private final boolean portalTravelAllowed;
+
+    // --------------------------------------------------------------- totem
+    private final boolean totemShutdownEnabled;
+    private final int totemShutdownDelayTicks;
+    private final boolean totemAnnounceProgress;
+    private final boolean totemDespawnTriggersShutdown;
+
+    // ------------------------------------------------------------- loadout
+    private final List<String> defaultKitLines;
+    private final boolean kitAppliesToNulls;
+    private final boolean kitAppliesToCommander;
+
+    // ------------------------------------------------------------ missions
+    private final boolean missionsEnabled;
+    private final boolean commanderSpawnWithPortal;
+
+    // ---------------------------------------------------------------- chat
+    private final boolean commanderOnlyConversation;
+    private final boolean nullsOrdersOnly;
+    private final boolean commanderChatPrefix;
+
+    // --------------------------------------------------------------- nulls
+    private final boolean nullsInTabList;
+    private final boolean plainNames;
+
+    // ------------------------------------------------------------ self test
+    private final int selfTestSquadSize;
+
+    // ------------------------------------------------------------------ ai
+    private final boolean aiSquadCoordination;
+    private final boolean aiAutoCoordinate;
+    private final int aiCoordinateIntervalTicks;
+
     private final boolean aiEnabled;
     private final Map<String, EndpointConfig> endpoints = new LinkedHashMap<>();
     private final Map<AgentRole, AgentBinding> bindings = new LinkedHashMap<>();
@@ -182,6 +223,60 @@ public final class PluginConfig {
                 10, 86400, "chat.session-timeout-seconds", logger) * 20;
         this.personaNull = config.getString("chat.personas.null", "");
         this.personaCommander = config.getString("chat.personas.commander", "");
+
+        // ------------------------------------------------------------- portals
+        // Real, temporary doorways the Nulls walk out of. On by default: an
+        // arrival made of particles only is not an arrival.
+        this.portalsEnabled = config.getBoolean("portals.enabled", true);
+        this.portalsMaxPerSummon = clamp(config.getInt("portals.max-per-summon", 4),
+                1, redglitchx.nullarmy.core.portal.PortalPlan.HARD_PORTAL_CEILING,
+                "portals.max-per-summon", logger);
+        this.portalsMaxPerPortal = clamp(config.getInt("portals.max-per-portal", 4),
+                1, 16, "portals.max-per-portal", logger);
+        this.portalsMaxActive = clamp(config.getInt("portals.max-active", 32),
+                1, 512, "portals.max-active", logger);
+        this.portalsLifetimeTicks = clamp((int) config.getLong("portals.lifetime-ticks", 600L),
+                20, 72_000, "portals.lifetime-ticks", logger);
+        this.portalSearchRadius = clamp(config.getInt("portals.search-radius", 6),
+                1, 24, "portals.search-radius", logger);
+        this.portalTravelAllowed = config.getBoolean("portals.allow-travel", false);
+
+        // --------------------------------------------------------------- totem
+        this.totemShutdownEnabled = config.getBoolean("totem.shutdown-enabled", true);
+        this.totemShutdownDelayTicks = clamp(config.getInt("totem.shutdown-delay-ticks", 10),
+                1, 200, "totem.shutdown-delay-ticks", logger);
+        this.totemAnnounceProgress = config.getBoolean("totem.announce-progress", true);
+        this.totemDespawnTriggersShutdown =
+                config.getBoolean("totem.despawn-triggers-shutdown", true);
+
+        // ------------------------------------------------------------- loadout
+        this.defaultKitLines = readKit(config);
+        this.kitAppliesToNulls = config.getBoolean("loadout.apply-to-nulls", true);
+        this.kitAppliesToCommander = config.getBoolean("loadout.apply-to-commander", true);
+
+        // ------------------------------------------------------------ missions
+        this.missionsEnabled = config.getBoolean("missions.enabled", true);
+        this.commanderSpawnWithPortal = config.getBoolean("commander.spawn-with-portal", true);
+
+        // ---------------------------------------------------------------- chat
+        this.commanderOnlyConversation =
+                config.getBoolean("chat.commander-only-conversation", true);
+        this.nullsOrdersOnly = config.getBoolean("chat.nulls-orders-only", true);
+        this.commanderChatPrefix = config.getBoolean("chat.commander-chat-prefix", true);
+
+        // --------------------------------------------------------------- nulls
+        this.nullsInTabList = config.getBoolean("nulls.show-in-tab-list", true);
+        this.plainNames = config.getBoolean("nulls.plain-names", true);
+
+        // ------------------------------------------------------------ self test
+        this.selfTestSquadSize = clamp(config.getInt("selftest.squad-size", 5),
+                1, 32, "selftest.squad-size", logger);
+
+        // ------------------------------------------------------------------ ai
+        this.aiSquadCoordination = config.getBoolean("ai.squad-coordination", true);
+        this.aiAutoCoordinate = config.getBoolean("ai.auto-coordinate", true);
+        this.aiCoordinateIntervalTicks = clamp(config.getInt("ai.coordinate-interval-ticks", 400),
+                100, 72_000, "ai.coordinate-interval-ticks", logger);
 
         // ------------------------------------------------------------ endpoints
         this.aiEnabled = config.getBoolean("ai.enabled", false);
@@ -308,6 +403,107 @@ public final class PluginConfig {
             }
         }
         return "";
+    }
+
+    // ------------------------------------------------------------- portals API
+
+    /** Whether arrivals are built as real, temporary portal doorways. */
+    public boolean portalsEnabled() { return portalsEnabled; }
+
+    /** Hard maximum of doorways one summon may open. Always at least 1. */
+    public int portalsMaxPerSummon() { return portalsMaxPerSummon; }
+
+    /** How many Nulls may share one doorway. */
+    public int portalsMaxPerPortal() { return portalsMaxPerPortal; }
+
+    /** How many doorways may stand in the world at once. */
+    public int portalsMaxActive() { return portalsMaxActive; }
+
+    /** How long a doorway stays before its blocks are restored. */
+    public long portalsLifetimeTicks() { return portalsLifetimeTicks; }
+
+    /** How far from the summoner a site is searched for. */
+    public int portalSearchRadius() { return portalSearchRadius; }
+
+    /**
+     * Whether standing in one of our doorways may send a player to the Nether.
+     *
+     * <p>Off by default and deliberately so: the plugin must not be the reason a
+     * Nether portal gets generated on somebody's map.</p>
+     */
+    public boolean portalTravelAllowed() { return portalTravelAllowed; }
+
+    // --------------------------------------------------------------- totem API
+
+    public boolean totemShutdownEnabled() { return totemShutdownEnabled; }
+    public int totemShutdownDelayTicks() { return totemShutdownDelayTicks; }
+    public boolean totemAnnounceProgress() { return totemAnnounceProgress; }
+    public boolean totemDespawnTriggersShutdown() { return totemDespawnTriggersShutdown; }
+
+    // ------------------------------------------------------------- loadout API
+
+    /** The default kit in config form: {@code slot:MATERIAL:count}. */
+    public List<String> defaultKitLines() { return defaultKitLines; }
+
+    public boolean kitAppliesToNulls() { return kitAppliesToNulls; }
+    public boolean kitAppliesToCommander() { return kitAppliesToCommander; }
+
+    // ------------------------------------------------------------ missions API
+
+    public boolean missionsEnabled() { return missionsEnabled; }
+
+    /** The Commander arrives through a real temporary doorway, not just effects. */
+    public boolean commanderSpawnWithPortal() { return commanderSpawnWithPortal; }
+
+    // ---------------------------------------------------------------- chat API
+
+    /** Only the Commander holds a conversation; Nulls take orders and stay quiet. */
+    public boolean commanderOnlyConversation() { return commanderOnlyConversation; }
+
+    /** Ordinary Nulls answer orders only, never chat. */
+    public boolean nullsOrdersOnly() { return nullsOrdersOnly; }
+
+    /** The Commander's chat lines carry the gradient brand prefix and its name. */
+    public boolean commanderChatPrefix() { return commanderChatPrefix; }
+
+    // --------------------------------------------------------------- nulls API
+
+    /** Nulls appear in the client's tab list, with a plain name. */
+    public boolean nullsInTabList() { return nullsInTabList; }
+
+    /** Names carry no colours or symbols, exactly like a normal player. */
+    public boolean plainNames() { return plainNames; }
+
+    // ------------------------------------------------------------------ ai API
+
+    /** How many Nulls the runtime smoke test summons as a squad. */
+    public int selfTestSquadSize() { return selfTestSquadSize; }
+
+    /** The AI may coordinate the squad through typed, allowlisted actions. */
+    public boolean aiSquadCoordination() { return aiSquadCoordination; }
+
+    /** The local coordinator may take safe steps on its own, on an interval. */
+    public boolean aiAutoCoordinate() { return aiAutoCoordinate; }
+
+    /** How often the local coordinator may act by itself. */
+    public int aiCoordinateIntervalTicks() { return aiCoordinateIntervalTicks; }
+
+    /** Reads the default kit, falling back to the shipped one. */
+    private static List<String> readKit(FileConfiguration config) {
+        try {
+            List<String> raw = config.getStringList("loadout.default-kit");
+            List<String> out = new ArrayList<>();
+            if (raw != null) {
+                for (String line : raw) {
+                    if (line != null && !line.trim().isEmpty()) {
+                        out.add(line.trim());
+                    }
+                }
+            }
+            return out;
+        } catch (Throwable t) {
+            return new ArrayList<>();
+        }
     }
 
     public Caps caps() { return caps; }

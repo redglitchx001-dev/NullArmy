@@ -186,6 +186,28 @@ public final class ChatDirector implements Listener, Reloadable {
 
     public ChatBrain brain() { return brain; }
 
+    /** True when conversation is reserved for the Commander. */
+    private boolean commanderOnlyConversation() {
+        return config == null || config.commanderOnlyConversation();
+    }
+
+    /**
+     * How a speaker is named in chat.
+     *
+     * <p>The Commander is shown by its configured name with no colours and no
+     * symbols, exactly like a normal player; the brand prefix in front of the line
+     * is the plugin's own gradient.</p>
+     */
+    private String label(Speaker speaker) {
+        if (speaker == Speaker.COMMANDER && plugin.commander() != null) {
+            String name = plugin.commander().commanderName();
+            if (name != null && !name.trim().isEmpty()) {
+                return name.trim();
+            }
+        }
+        return speaker == null ? "Commander" : speaker.displayName();
+    }
+
     /** True when this player is talking to a character. */
     public boolean isInSession(UUID player) {
         return player != null && sessions.containsKey(player);
@@ -204,6 +226,12 @@ public final class ChatDirector implements Listener, Reloadable {
      */
     public boolean startSession(Player player, Speaker speaker) {
         if (player == null || speaker == null || speaker == Speaker.NONE) {
+            return false;
+        }
+        if (speaker == Speaker.NULL && commanderOnlyConversation()) {
+            player.sendMessage(PREFIX + "Only the Commander talks. The Nulls take orders and"
+                    + " nothing else - try 'null guard', 'null follow', 'null formation square'.");
+            player.sendMessage(PREFIX + "Use /null chat commander to open the Commander's channel.");
             return false;
         }
         if (!player.hasPermission("nullarmy.chat")) {
@@ -375,17 +403,17 @@ public final class ChatDirector implements Listener, Reloadable {
         if (!brain.available()) {
             String local = localLine(message);
             if (local == null) {
-                player.sendMessage(PREFIX + session.speaker.displayName() + ": the channel is"
+                player.sendMessage(PREFIX + label(session.speaker) + ": the channel is"
                         + " not connected to a model, so I only know a few lines."
                         + " (" + brain.unavailableReason() + ")");
                 return;
             }
-            player.sendMessage(PREFIX + session.speaker.displayName() + ": " + local);
+            player.sendMessage(PREFIX + label(session.speaker) + ": " + local);
             push(session.history, new ChatBrain.Turn("assistant", local));
             return;
         }
         if (session.awaitingReply) {
-            player.sendMessage(PREFIX + session.speaker.displayName() + ": one moment...");
+            player.sendMessage(PREFIX + label(session.speaker) + ": one moment...");
             return;
         }
         session.awaitingReply = true;
@@ -414,7 +442,7 @@ public final class ChatDirector implements Listener, Reloadable {
         if (history == null || history.isEmpty()) {
             String local = localLine(message);
             if (local != null && !brain.available()) {
-                player.sendMessage(PREFIX + speaker.displayName() + ": " + local);
+                player.sendMessage(PREFIX + label(speaker) + ": " + local);
                 if (onDone != null) {
                     onDone.accept(local);
                 }
@@ -427,7 +455,7 @@ public final class ChatDirector implements Listener, Reloadable {
             @Override
             public void ok(String text) {
                 String clipped = clip(text, config == null ? 400 : config.chatMaxReplyChars());
-                player.sendMessage(PREFIX + speaker.displayName() + ": " + clipped);
+                player.sendMessage(PREFIX + label(speaker) + ": " + clipped);
                 if (onDone != null) {
                     onDone.accept(clipped);
                 }
@@ -437,27 +465,46 @@ public final class ChatDirector implements Listener, Reloadable {
             public void failed(String reason) {
                 String local = localLine(message);
                 if (local != null) {
-                    player.sendMessage(PREFIX + speaker.displayName() + ": " + local);
+                    player.sendMessage(PREFIX + label(speaker) + ": " + local);
                     if (onDone != null) {
                         onDone.accept(local);
                     }
                     return;
                 }
-                player.sendMessage(PREFIX + "The " + speaker.displayName()
+                player.sendMessage(PREFIX + "The " + label(speaker)
                         + " cannot answer that right now: " + reason + ".");
             }
         });
     }
 
-    /** The system prompt that makes the reply sound like the character. */
+    /**
+     * The system prompt that makes the reply sound like the character.
+     *
+     * <p>The Commander also gets its squad: a live snapshot of every Null's
+     * health, position and role, the objective, kit state, portal arrivals and
+     * what the cannon and air drop are allowed to do. That is what turns chat
+     * answers into coordination instead of small talk.</p>
+     */
     private String persona(Speaker speaker, Player player) {
         String name = player == null ? "the operator" : player.getName();
-        if (speaker == Speaker.NULL) {
-            String configured = config == null ? null : config.personaNull();
-            return render(configured, name);
+        String base = render(config == null ? null : config.personaCommander(), name);
+        if (speaker == Speaker.NULL && !commanderOnlyConversation()) {
+            base = render(config == null ? null : config.personaNull(), name);
         }
-        String configured = config == null ? null : config.personaCommander();
-        return render(configured, name);
+        if (player != null && plugin.coordinator() != null) {
+            try {
+                base = base + "\n\nYour squad right now:\n"
+                        + plugin.coordinator().snapshot(player.getUniqueId())
+                        + "\nYou may only ask for allowlisted actions: "
+                        + String.join(", ", redglitchx.nullarmy.core.ai.SquadAction.allowlist())
+                        + ". Never invent console commands, never ban or kill a player,"
+                        + " never enable griefing.";
+            } catch (Throwable t) {
+                // A squad the snapshot cannot read is not a reason to stop talking.
+                plugin.getLogger().fine("[NullArmy] squad snapshot skipped: " + Guard.describe(t));
+            }
+        }
+        return base;
     }
 
     private static String render(String template, String playerName) {

@@ -8,18 +8,26 @@ import org.bukkit.scheduler.BukkitTask;
 import redglitchx.nullarmy.core.config.Caps;
 import redglitchx.nullarmy.core.util.TickBudget;
 import redglitchx.nullarmy.nms.VersionAdapter;
+import redglitchx.nullarmy.plugin.ai.SquadCoordinator;
 import redglitchx.nullarmy.plugin.commander.CommanderManager;
 import redglitchx.nullarmy.plugin.chat.ChatBrain;
 import redglitchx.nullarmy.plugin.chat.ChatDirector;
 import redglitchx.nullarmy.plugin.command.NullCommand;
 import redglitchx.nullarmy.plugin.config.ConfigBootstrap;
+import redglitchx.nullarmy.plugin.config.ConfigMigration;
 import redglitchx.nullarmy.plugin.config.PluginConfig;
 import redglitchx.nullarmy.plugin.config.Reloadable;
+import redglitchx.nullarmy.plugin.kit.KitService;
 import redglitchx.nullarmy.plugin.menu.MenuManager;
+import redglitchx.nullarmy.plugin.mission.MissionRunner;
+import redglitchx.nullarmy.plugin.portal.PortalManager;
+import redglitchx.nullarmy.plugin.selftest.SelfTest;
+import redglitchx.nullarmy.plugin.shutdown.ShutdownDirector;
 import redglitchx.nullarmy.plugin.skin.SkinResolver;
 import redglitchx.nullarmy.plugin.spectacle.Airdrop;
 import redglitchx.nullarmy.plugin.spectacle.EntityRegistry;
 import redglitchx.nullarmy.plugin.spectacle.WitherCannon;
+import redglitchx.nullarmy.plugin.totem.TotemWatcher;
 import redglitchx.nullarmy.plugin.util.Guard;
 
 import java.io.File;
@@ -82,6 +90,13 @@ public final class NullArmyPlugin extends JavaPlugin {
     private MenuManager menuManager;
     private ChatDirector chatDirector;
     private ChatBrain chatBrain;
+    private PortalManager portalManager;
+    private KitService kitService;
+    private TotemWatcher totemWatcher;
+    private ShutdownDirector shutdownDirector;
+    private SquadCoordinator coordinator;
+    private MissionRunner missionRunner;
+    private SelfTest selfTest;
 
     private TickBudget pathBudget;
     private TickBudget blockInspectionBudget;
@@ -90,6 +105,15 @@ public final class NullArmyPlugin extends JavaPlugin {
 
     /** Latched guard around the NMS spawn path. See {@link Guard.Breaker}. */
     private final Guard.Breaker spawnBreaker = new Guard.Breaker("NMS Null spawning");
+
+    /**
+     * Recent failures from the tick loop, drained by the runtime smoke test.
+     *
+     * <p>The test has to be able to say "the server threw while the squad was
+     * ticking" instead of only "the squad is still here", so anything the guards
+     * catch is kept here until the test reads it.</p>
+     */
+    private final java.util.ArrayDeque<String> tickErrors = new java.util.ArrayDeque<>();
 
     private final Map<String, Integer> subsystemFailures = new HashMap<>();
     private final Set<String> disabledSubsystems = new HashSet<>();
@@ -142,11 +166,19 @@ public final class NullArmyPlugin extends JavaPlugin {
         this.pathBudget = new TickBudget("paths", caps.concurrentPathSearches());
         this.blockInspectionBudget = new TickBudget("blockInspections", caps.blockInspectionsPerTick());
 
+        this.kitService = new KitService(this, pluginConfig);
+        this.portalManager = new PortalManager(this, pluginConfig);
+        this.shutdownDirector = new ShutdownDirector(this, pluginConfig);
+        this.missionRunner = new MissionRunner(this, pluginConfig);
         this.squads = new SquadManager(this, adapter, caps, pluginConfig);
         this.summonFlow = new SummonFlow(this, pluginConfig, squads);
         this.skinResolver = new SkinResolver(this);
         this.commander = new CommanderManager(this, skinResolver);
         Guard.attempt(getLogger(), "loading the Commander file", () -> commander.load());
+        // A fresh install - or a deleted commander.yml - gets the shipped kit. An
+        // owner-edited loadout is left exactly as it was saved.
+        Guard.attempt(getLogger(), "installing the Commander's default kit",
+                () -> kitService.installCommanderDefault(commander));
         this.entityRegistry = new EntityRegistry(this);
         this.witherCannon = new WitherCannon(this, entityRegistry);
         this.airdrop = new Airdrop(this, entityRegistry);
@@ -159,6 +191,9 @@ public final class NullArmyPlugin extends JavaPlugin {
         //     honest about *why* a model is unavailable.
         this.chatBrain = new ChatBrain(this);
         this.chatDirector = new ChatDirector(this, command, chatBrain);
+        this.coordinator = new SquadCoordinator(this, pluginConfig);
+        this.totemWatcher = new TotemWatcher(this, pluginConfig);
+        this.selfTest = new SelfTest(this);
 
         // 4. Listeners. registerEvents throws if a listener is malformed, so
         //    each registration is isolated.
@@ -166,6 +201,14 @@ public final class NullArmyPlugin extends JavaPlugin {
         registerListener(commander, "Commander GUI");
         registerListener(menuManager, "menu GUI");
         registerListener(entityRegistry, "entity registry");
+        // Real, temporary arrival portals: their blocks, their lifetime, and the
+        // containment that stops anyone travelling to the Nether through one.
+        registerListener(portalManager, "arrival portals");
+        // The Totem Of Null: what ends the army when it pops or is destroyed.
+        registerListener(totemWatcher, "Totem Of Null");
+        // A player who joins after a squad exists needs the Nulls' player-info
+        // entries, or the client drops their add-entity packets and sees nobody.
+        registerListener(new ViewerListener(this), "viewer refresh");
         // After SummonFlow: a player answering "How many Nulls should come?"
         // must never have that answer read as conversation.
         registerListener(chatDirector, "chat interface");
@@ -181,6 +224,12 @@ public final class NullArmyPlugin extends JavaPlugin {
             nullCommand.setTabCompleter(command);
         }
 
+        // 5b. Tab listing. A Null is always announced with a player-info entry
+        //     (a client will not render a player entity without one); this only
+        //     decides whether that entry shows in the tab overlay.
+        Guard.attempt(getLogger(), "applying the tab-list setting",
+                () -> adapter.setTabListing(pluginConfig == null || pluginConfig.nullsInTabList()));
+
         // 6. Warm the skin cache in the background. Cosmetic, never fatal.
         Guard.attempt(getLogger(), "warming the skin cache", () -> commander.preloadSkin());
 
@@ -193,6 +242,12 @@ public final class NullArmyPlugin extends JavaPlugin {
                     + Guard.describe(t), t);
         }
 
+        this.reloadables.add(kitService);
+        this.reloadables.add(portalManager);
+        this.reloadables.add(shutdownDirector);
+        this.reloadables.add(missionRunner);
+        this.reloadables.add(coordinator);
+        this.reloadables.add(totemWatcher);
         this.reloadables.add(squads);
         this.reloadables.add(summonFlow);
         this.reloadables.add(commander);
@@ -231,11 +286,31 @@ public final class NullArmyPlugin extends JavaPlugin {
             if (squads != null) {
                 Guard.attempt(getLogger(), "dismissing live Nulls", () -> squads.dismissAll());
             }
+            if (shutdownDirector != null && shutdownDirector.isRunning()) {
+                // Finish the sequence now rather than leaving half an army behind.
+                Guard.attempt(getLogger(), "completing the totem shutdown",
+                        () -> shutdownDirector.abort("the plugin is disabling"));
+            }
+            if (missionRunner != null) {
+                Guard.attempt(getLogger(), "stopping the running mission",
+                        () -> missionRunner.stop("the plugin is disabling"));
+            }
             if (witherCannon != null) {
                 Guard.attempt(getLogger(), "stopping pending cannon shots", () -> witherCannon.stopAll());
             }
             if (airdrop != null) {
                 Guard.attempt(getLogger(), "stopping pending airdrops", () -> airdrop.stopAll());
+            }
+            if (portalManager != null) {
+                // Every block the plugin placed goes back, whatever its lifetime
+                // had left. A doorway that outlives its summon is world damage.
+                int restored = 0;
+                try {
+                    restored = portalManager.restoreAll();
+                } catch (Throwable ignored) {
+                    // Reported by restoreAll itself.
+                }
+                getLogger().info("[NullArmy] restored " + restored + " arrival portal(s).");
             }
             if (entityRegistry != null) {
                 int removed = 0;
@@ -259,6 +334,7 @@ public final class NullArmyPlugin extends JavaPlugin {
         try {
             onTick();
         } catch (Throwable t) {
+            rememberTickError("tick loop: " + Guard.describe(t));
             int count = subsystemFailures.merge("tick loop", 1, Integer::sum);
             if (count <= 3 || count % 600 == 0) {
                 getLogger().log(Level.SEVERE, "[NullArmy] tick loop failed (" + count
@@ -293,6 +369,26 @@ public final class NullArmyPlugin extends JavaPlugin {
                 airdrop.tick(tickCounter);
             }
         });
+        guarded("portal lifetime", () -> {
+            if (portalManager != null) {
+                portalManager.tick(tickCounter);
+            }
+        });
+        guarded("totem shutdown", () -> {
+            if (shutdownDirector != null) {
+                shutdownDirector.tick(tickCounter);
+            }
+        });
+        guarded("mission", () -> {
+            if (missionRunner != null) {
+                missionRunner.tick(tickCounter);
+            }
+        });
+        guarded("squad coordination", () -> {
+            if (coordinator != null) {
+                coordinator.tick(tickCounter);
+            }
+        });
         if (tickCounter % SWEEP_INTERVAL_TICKS == 0) {
             guarded("entity sweep", () -> {
                 if (entityRegistry != null) {
@@ -318,6 +414,7 @@ public final class NullArmyPlugin extends JavaPlugin {
             action.run();
         } catch (Throwable t) {
             int count = subsystemFailures.merge(what, 1, Integer::sum);
+            rememberTickError(what + ": " + Guard.describe(t));
             if (count <= 3 || count % 600 == 0) {
                 getLogger().log(Level.SEVERE, "[NullArmy] " + what + " failed (" + count
                         + " time(s)): " + Guard.describe(t), t);
@@ -376,6 +473,9 @@ public final class NullArmyPlugin extends JavaPlugin {
      */
     public boolean reloadPluginConfig() {
         try {
+            // prepare() creates the file when it is missing, and when it exists it
+            // appends every setting this build ships that the file does not have
+            // yet - with a backup, and without touching a single owner value.
             ConfigBootstrap.prepare(this);
             PluginConfig fresh = buildConfig();
             if (fresh == null) {
@@ -388,6 +488,10 @@ public final class NullArmyPlugin extends JavaPlugin {
             for (Reloadable reloadable : reloadables) {
                 Guard.attempt(getLogger(), "reloading " + reloadable.getClass().getSimpleName(),
                         () -> reloadable.onConfigReloaded(fresh));
+            }
+            if (adapter != null) {
+                Guard.attempt(getLogger(), "applying the tab-list setting",
+                        () -> adapter.setTabListing(fresh.nullsInTabList()));
             }
             // An explicit reload is also the way to re-arm the NMS breaker after
             // a fix; the plugin says so in chat when it fires.
@@ -415,6 +519,36 @@ public final class NullArmyPlugin extends JavaPlugin {
 
     /** The chat interface: orders by voice, private channels, AI replies. */
     public ChatDirector chat() { return chatDirector; }
+
+    /** Real, temporary arrival portals: build, lifetime and containment. */
+    public PortalManager portals() { return portalManager; }
+
+    /** Default equipment for the Commander and every Null. */
+    public KitService kits() { return kitService; }
+
+    /** Watches for the Totem Of Null being consumed or destroyed. */
+    public TotemWatcher totems() { return totemWatcher; }
+
+    /** The sequential shutdown a destroyed totem starts. */
+    public ShutdownDirector shutdown() { return shutdownDirector; }
+
+    /** The Commander's view of the squad, and the AI action gate. */
+    public SquadCoordinator coordinator() { return coordinator; }
+
+    /** The original mission system. */
+    public MissionRunner missions() { return missionRunner; }
+
+    /** The Paper runtime smoke test, run from the console or {@code /null selftest}. */
+    public SelfTest selfTest() { return selfTest; }
+
+    /**
+     * What the last config migration did, for {@code /null reload} and
+     * {@code /null debug}.
+     *
+     * <p>This is the answer to "the reload does not update config.yml": it does
+     * now, and this says exactly which keys were appended.</p>
+     */
+    public ConfigMigration.Report lastMigration() { return ConfigBootstrap.lastReport(); }
     public TickBudget pathBudget() { return pathBudget; }
     public TickBudget blockInspectionBudget() { return blockInspectionBudget; }
     public long currentTick() { return tickCounter; }
@@ -424,6 +558,30 @@ public final class NullArmyPlugin extends JavaPlugin {
 
     /** The latched guard around NMS spawning, for {@code /null status} and {@code /null debug}. */
     public Guard.Breaker spawnBreaker() { return spawnBreaker; }
+
+    /** Keeps the last few tick failures for the smoke test, bounded. */
+    private void rememberTickError(String line) {
+        synchronized (tickErrors) {
+            tickErrors.addLast(line);
+            while (tickErrors.size() > 16) {
+                tickErrors.removeFirst();
+            }
+        }
+    }
+
+    /**
+     * Drains the tick failures recorded since the last call.
+     *
+     * <p>Used by {@code /null selftest} so a server exception during the test is
+     * reported as a failed check rather than being logged and forgotten.</p>
+     */
+    public List<String> selfTestErrors() {
+        synchronized (tickErrors) {
+            List<String> out = new ArrayList<>(tickErrors);
+            tickErrors.clear();
+            return out;
+        }
+    }
 
     /** Snapshot of subsystem failure counters, for {@code /null debug}. */
     public Map<String, Integer> subsystemFailures() {
@@ -439,5 +597,46 @@ public final class NullArmyPlugin extends JavaPlugin {
     public File configFile() {
         File folder = getDataFolder();
         return folder == null ? null : new File(folder, ConfigBootstrap.FILE_NAME);
+    }
+
+    /**
+     * Keeps clients able to see Nulls that already existed when they joined.
+     *
+     * <p>A client drops the add-entity packet for a player UUID it has no
+     * player-info entry for, and the entries are broadcast when a Null spawns -
+     * so anybody who joins afterwards would see an empty world. This sends them
+     * the entries for every live Null once they are in.</p>
+     */
+    static final class ViewerListener implements org.bukkit.event.Listener {
+
+        private final NullArmyPlugin plugin;
+
+        ViewerListener(NullArmyPlugin plugin) {
+            this.plugin = plugin;
+        }
+
+        @org.bukkit.event.EventHandler(priority = org.bukkit.event.EventPriority.MONITOR)
+        public void onJoin(org.bukkit.event.player.PlayerJoinEvent event) {
+            Guard.attempt(plugin.getLogger(), "announcing Nulls to a joining player", () -> {
+                if (event == null || event.getPlayer() == null) {
+                    return;
+                }
+                final java.util.UUID id = event.getPlayer().getUniqueId();
+                // One tick later: the client is still receiving its own join
+                // packets, and player-info sent now can be dropped by the client's
+                // login sequence.
+                org.bukkit.Bukkit.getScheduler().runTaskLater(plugin, () ->
+                        Guard.attempt(plugin.getLogger(), "refreshing a viewer", () -> {
+                            if (plugin.adapter() == null) {
+                                return;
+                            }
+                            int announced = plugin.adapter().refreshViewer(id);
+                            if (announced > 0) {
+                                plugin.getLogger().fine("[NullArmy] announced " + announced
+                                        + " Null(s) to a joining player.");
+                            }
+                        }), 5L);
+            });
+        }
     }
 }

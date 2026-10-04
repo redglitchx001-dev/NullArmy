@@ -6,6 +6,10 @@ import org.bukkit.entity.Player;
 
 import redglitchx.nullarmy.core.config.Caps;
 import redglitchx.nullarmy.core.math.Vec3d;
+import redglitchx.nullarmy.core.portal.PortalPlan;
+import redglitchx.nullarmy.core.squad.RoleAssignment;
+import redglitchx.nullarmy.core.squad.SquadRole;
+import redglitchx.nullarmy.plugin.portal.PortalBuilder;
 import redglitchx.nullarmy.core.ledger.ItemLedger;
 import redglitchx.nullarmy.core.nav.BlockView;
 import redglitchx.nullarmy.nms.LoadoutSlot;
@@ -87,6 +91,12 @@ public final class SquadManager implements Reloadable {
         private String formation = "line";
         /** How this squad fights: aggressive, balanced or defensive. */
         private String tactics = "balanced";
+        /** How this squad arrived: portals used, and what could not be built. */
+        private String arrivalNote = "";
+        /** Every spawn that did not happen, with its real reason. */
+        private final List<String> spawnFailures = new ArrayList<>();
+        /** One stored role per member, index-aligned with {@link #members}. */
+        private List<SquadRole> roles = Collections.emptyList();
 
         Squad(UUID owner, String worldName) {
             this.owner = owner;
@@ -101,6 +111,26 @@ public final class SquadManager implements Reloadable {
         public String targetLabel() { return targetLabel; }
         public String formation() { return formation; }
         public String tactics() { return tactics; }
+
+        /** How this squad walked in, for the summon message and {@code /null status}. */
+        public String arrivalNote() { return arrivalNote; }
+
+        /** Nulls that were requested but did not spawn, each with its reason. */
+        public List<String> spawnFailures() {
+            return Collections.unmodifiableList(new ArrayList<>(spawnFailures));
+        }
+
+        /** The stored role of one member, or null when the index is out of range. */
+        public SquadRole roleOf(int index) {
+            return index < 0 || index >= roles.size() ? null : roles.get(index);
+        }
+
+        /** The stored roles, index-aligned with {@link #members()}. */
+        public List<SquadRole> roles() { return roles; }
+
+        void setRoles(List<SquadRole> assigned) {
+            this.roles = assigned == null ? Collections.emptyList() : assigned;
+        }
 
         /** The designated commanders. Never more than two, and stable. */
         public List<NullBody> commanders() {
@@ -122,6 +152,15 @@ public final class SquadManager implements Reloadable {
     /** Stop distance for "come here" objectives. */
     private static final double ARRIVE_DISTANCE = 2.0;
 
+    /**
+     * Minimum distance between two planned spawn spots, in blocks.
+     *
+     * <p>A body is 0.6 wide, so anything under that puts two Nulls inside each
+     * other - and the adapter now refuses a spot another entity already occupies,
+     * which is what turned one tight doorway into a lost Null.</p>
+     */
+    private static final double MIN_SPOT_SPACING = 1.1;
+
     /** How close a Null must be to react to a greeting. */
     private static final double GREET_DISTANCE = 24.0;
 
@@ -134,6 +173,7 @@ public final class SquadManager implements Reloadable {
     private Caps caps;
 
     private boolean shutdownRequested;
+    private String lastArrivalNote = "";
 
     SquadManager(NullArmyPlugin plugin, VersionAdapter adapter, Caps caps, PluginConfig config) {
         this.plugin = plugin;
@@ -165,20 +205,150 @@ public final class SquadManager implements Reloadable {
     public Squad createSquad(UUID owner, String worldName, Vec3d origin, int count) {
         List<Squad> existing = preflight(owner, count);
 
-        List<Vec3d> spots = planSpawnSpots(worldName, origin, count);
-        if (spots.isEmpty()) {
+        // Real doorways first: a random number of temporary portals, a random
+        // split of the squad between them, and a validated exit spot per Null.
+        Arrival arrival = planArrival(worldName, origin, count);
+        if (arrival.spots.isEmpty()) {
             discardEmptyOwnerEntry(owner, existing);
-            throw new IllegalStateException("no collision-safe ground within "
-                    + config.spawnSearchRadius() + " blocks of you");
+            throw new IllegalStateException(arrival.failure == null
+                    ? "no collision-safe ground within " + config.spawnSearchRadius()
+                        + " blocks of you"
+                    : arrival.failure);
         }
 
-        Squad squad = spawnAll(owner, worldName, spots, false, existing);
+        Squad squad = spawnAll(owner, worldName, arrival.spots, false, existing);
+        squad.arrivalNote = arrival.describe(count);
+        lastArrivalNote = squad.arrivalNote;
 
-        // The portal is cosmetic and comes last: a Null is never hidden behind
-        // an exception thrown by a particle effect.
-        playPortals(worldName, origin);
+        // The particle effects are the last thing that happens, and only around
+        // the doorways that were really built: a Null is never hidden behind an
+        // exception thrown by a cosmetic effect, and an effect is never the only
+        // evidence that an arrival happened.
+        for (Vec3d mouth : arrival.mouths) {
+            playPortals(worldName, mouth);
+        }
         return squad;
     }
+
+    /** What one summon's arrival planning produced. */
+    private static final class Arrival {
+        private final List<Vec3d> spots = new ArrayList<>();
+        private final List<Vec3d> mouths = new ArrayList<>();
+        private int portalsBuilt;
+        private int throughPortals;
+        private int onOpenGround;
+        private String failure;
+        private String portalNote = "";
+
+        String describe(int requested) {
+            StringBuilder sb = new StringBuilder();
+            if (portalsBuilt > 0) {
+                sb.append(portalsBuilt).append(portalsBuilt == 1 ? " portal doorway" : " portal doorways")
+                        .append(" opened, ").append(throughPortals).append(" Null(s) walked out of them");
+            } else {
+                sb.append("no doorway could be built");
+            }
+            if (onOpenGround > 0) {
+                sb.append(portalsBuilt > 0 ? "; " : "; ").append(onOpenGround)
+                        .append(" arrived on verified open ground instead");
+            }
+            sb.append(" (").append(spots.size()).append('/').append(requested).append(" spawned spots)");
+            if (!portalNote.isEmpty()) {
+                sb.append(' ').append(portalNote);
+            }
+            return sb.toString();
+        }
+    }
+
+    /**
+     * Plans where a squad arrives.
+     *
+     * <p>Order of work: pick a random number of doorways up to the configured
+     * hard maximum, build the ones whose site is clear and whose exit spots are
+     * collision-safe and free of other entities, hand each doorway the Nulls the
+     * plan gave it, and put everything that has no doorway on the ordinary
+     * searched safe ground. A Null is never dropped to make the arithmetic
+     * work - {@code requested - spots.size()} is reported to the owner.</p>
+     */
+    private Arrival planArrival(String worldName, Vec3d origin, int count) {
+        Arrival arrival = new Arrival();
+        PortalPlan plan = plugin.portals() == null
+                ? PortalPlan.none(count) : plugin.portals().plan(count);
+
+        List<PortalBuilder.BuiltPortal> doorways = plan.portalCount() > 0 && plugin.portals() != null
+                ? plugin.portals().buildDoorways(worldName, origin, plan.portalCount())
+                : new ArrayList<>();
+        arrival.portalsBuilt = doorways.size();
+        if (plan.portalCount() > 0 && doorways.size() < plan.portalCount()) {
+            // Sites ran out: the Nulls of the doorways that were not built go to
+            // open ground rather than disappearing.
+            plan = shrink(plan, doorways.size());
+            arrival.portalNote = "(" + (plan.portalCount() == 0 ? "no site was clear"
+                    : "only " + doorways.size() + " site(s) were clear") + ")";
+        }
+
+        int assigned = 0;
+        for (int index = 0; index < doorways.size() && index < plan.distribution().size(); index++) {
+            PortalBuilder.BuiltPortal doorway = doorways.get(index);
+            int wanted = plan.nullsAt(index);
+            arrival.mouths.add(doorway.center());
+            for (int n = 0; n < wanted; n++) {
+                Vec3d spot = plugin.portals().takeExit(doorway, n % Math.max(1, doorway.exits().size()));
+                if (spot == null || arrival.spots.contains(spot)) {
+                    break; // this doorway is full; the rest go to open ground
+                }
+                arrival.spots.add(spot);
+                arrival.throughPortals++;
+                assigned++;
+            }
+        }
+
+        int remaining = count - assigned;
+        if (remaining > 0) {
+            // Open ground, searched the way it always was: rings of increasing
+            // radius, never a spot already taken - and now never within a body
+            // width of a doorway arrival either, which is what used to make the
+            // adapter refuse the spot and cost the summon a Null.
+            List<Vec3d> ground = planSpawnSpots(worldName, origin,
+                    remaining + arrival.spots.size() + 6);
+            for (Vec3d spot : ground) {
+                if (remaining <= 0) {
+                    break;
+                }
+                if (tooClose(arrival.spots, spot, MIN_SPOT_SPACING)) {
+                    continue;
+                }
+                arrival.spots.add(spot);
+                arrival.onOpenGround++;
+                remaining--;
+            }
+        }
+        if (arrival.spots.isEmpty()) {
+            arrival.failure = "no portal site was clear and no collision-safe ground within "
+                    + config.spawnSearchRadius() + " blocks of you";
+        }
+        if (plan.spill() > 0 && arrival.spots.size() < count) {
+            arrival.portalNote = "(" + (count - arrival.spots.size())
+                    + " of " + count + " could not be given a safe spot)";
+        }
+        return arrival;
+    }
+
+    /** Drops doorways from a plan until it matches what was really built. */
+    private PortalPlan shrink(PortalPlan plan, int built) {
+        PortalPlan current = plan;
+        while (current.portalCount() > built) {
+            PortalPlan next = current.withoutPortal(current.portalCount() - 1);
+            if (next.portalCount() == current.portalCount()) {
+                break;
+            }
+            current = next;
+        }
+        return current;
+    }
+
+    /** The arrival note of the most recent summon, for the message the owner gets. */
+    public String lastArrivalNote() { return lastArrivalNote; }
 
     /**
      * Creates a squad delivered out of the sky (the {@code /null airdrop} path).
@@ -210,6 +380,12 @@ public final class SquadManager implements Reloadable {
         if (shutdownRequested) {
             throw new IllegalStateException("the plugin is shutting down");
         }
+        if (plugin.shutdown() != null && plugin.shutdown().isRunning()) {
+            // A Totem Of Null is sending the army out one body at a time. Nothing
+            // new may appear until the last one has gone.
+            throw new IllegalStateException("a Totem Of Null shutdown is running ("
+                    + plugin.shutdown().remaining() + " Null(s) still to go)");
+        }
         if (count <= 0) {
             throw new IllegalStateException("the count must be at least 1");
         }
@@ -234,30 +410,117 @@ public final class SquadManager implements Reloadable {
         return existing;
     }
 
-    /** Spawns every Null of a new squad, rolling all of them back on failure. */
+    /**
+     * Spawns every Null of a new squad.
+     *
+     * <p>Each spawn is checked on its own. A body that the adapter created but
+     * that is not actually in the world - no packet listener, not alive, not
+     * tracked - is destroyed, is <b>not</b> counted, and its reason is kept for
+     * the owner. When the failure is systemic (the NMS breaker has latched) the
+     * rest are not attempted and everything this squad created is rolled back, so
+     * a broken server does not end up with half an army nobody can see.</p>
+     */
     private Squad spawnAll(UUID owner, String worldName, List<Vec3d> spots,
                            boolean airborne, List<Squad> existing) {
         Squad squad = new Squad(owner, worldName);
-        try {
-            for (Vec3d spot : spots) {
-                NullBody body = spawnOne(owner, worldName, spot, airborne);
-                squad.members.add(body);
+        for (Vec3d spot : spots) {
+            if (plugin.spawnBreaker().isOpen()) {
+                squad.spawnFailures.add("the NMS spawn path is latched off: "
+                        + plugin.spawnBreaker().reason());
+                break;
             }
-        } catch (RuntimeException e) {
-            // Roll back everything this squad created: a failed summon must
-            // leave the world exactly as it was.
+            try {
+                NullBody body = spawnOne(owner, worldName, spot, airborne);
+                String problem = verifyBody(body);
+                if (problem != null) {
+                    Guard.attempt(logger, "cleaning up an unusable Null", body::destroy);
+                    squad.spawnFailures.add(problem);
+                    continue;
+                }
+                equip(body, squad);
+                squad.members.add(body);
+            } catch (RuntimeException e) {
+                squad.spawnFailures.add(e.getMessage() == null
+                        ? Guard.describe(e) : e.getMessage());
+                if (plugin.spawnBreaker().isOpen()) {
+                    // Systemic: stop, and leave the world exactly as it was.
+                    break;
+                }
+            } catch (Throwable t) {
+                squad.spawnFailures.add(Guard.describe(t));
+                logger.log(Level.WARNING, "[NullArmy] a spawn attempt failed: " + Guard.describe(t));
+            }
+        }
+
+        if (squad.members.isEmpty()) {
             for (NullBody body : squad.members) {
-                Guard.attempt(logger, "rolling back a failed Null",
-                        () -> body.destroy());
+                Guard.attempt(logger, "rolling back a failed Null", body::destroy);
             }
             squad.members.clear();
             discardEmptyOwnerEntry(owner, existing);
-            throw e;
+            String reason = squad.spawnFailures.isEmpty()
+                    ? "the server created no Null at all" : squad.spawnFailures.get(0);
+            throw new IllegalStateException(reason);
         }
 
         assignCommanders(squad);
+        squad.setRoles(RoleAssignment.assign(squad.members.size(), !squad.commanderIds.isEmpty()));
         existing.add(squad);
         return squad;
+    }
+
+    /**
+     * Proves a body is really there.
+     *
+     * <p>A returned object is not a spawn. This is the plugin-side half of the
+     * check the adapter does at registration time: the body has to be alive, it
+     * has to have a packet listener (a {@code ServerPlayer} without one crashes
+     * {@code MinecraftServer.tickChildren}), and the server has to be tracking it
+     * so clients can see it.</p>
+     *
+     * @return null when the body is usable, otherwise the reason to report
+     */
+    private String verifyBody(NullBody body) {
+        if (body == null) {
+            return "the adapter returned no entity";
+        }
+        try {
+            if (!adapter.packetListenerReady(body)) {
+                return "the Null has no packet listener, so it was removed instead of"
+                        + " being registered (that is what crashed the server tick loop)";
+            }
+            if (!body.isAlive()) {
+                return "the Null was not alive immediately after registration";
+            }
+            if (!adapter.isTracked(body)) {
+                return "the server is not tracking the Null, so nobody would have been"
+                        + " able to see it; it was removed";
+            }
+        } catch (Throwable t) {
+            return "the Null could not be verified after registration: " + Guard.describe(t);
+        }
+        return null;
+    }
+
+    /**
+     * Puts the default kit on a new body and checks that it really landed.
+     *
+     * <p>A kit failure never costs the summon: the Null stays, and the shortfall
+     * is recorded so {@code /null kit} and the summon message can say so.</p>
+     */
+    private void equip(NullBody body, Squad squad) {
+        if (plugin.kits() == null) {
+            return;
+        }
+        try {
+            if (!plugin.kits().applyTo(body)) {
+                String problem = plugin.kits().verify(body);
+                squad.spawnFailures.add("a Null spawned without its full kit: "
+                        + (problem == null ? "unverified" : problem));
+            }
+        } catch (Throwable t) {
+            squad.spawnFailures.add("the default kit could not be applied: " + Guard.describe(t));
+        }
     }
 
     /** Removes an owner entry that was only created by a failed preflight. */
@@ -321,14 +584,25 @@ public final class SquadManager implements Reloadable {
         }
 
         VersionAdapter.SpawnRequest request = new VersionAdapter.SpawnRequest(
-                owner, NameGenerator.next(), worldName, spot, 36 * 64,
+                owner, uniqueProfileName(), worldName, spot, 36 * 64,
                 skinValue, skinSignature, airborne);
         try {
             NullBody body = adapter.spawnNull(request);
             if (body == null) {
                 throw new IllegalStateException("the adapter returned no entity");
             }
+            // Every Null this plugin creates gets the configured default kit, in
+            // the right slots, here - the one place an NPC is born. Applying it
+            // later (or only from the squad path) is how a Null ends up naked.
+            if (plugin.kits() != null && config != null && config.kitAppliesToNulls()) {
+                plugin.kits().applyTo(body);
+            }
             return body;
+        } catch (VersionAdapter.SpawnRefusedException refusal) {
+            // This position was wrong, not the server. Latching the whole spawn
+            // path for one bad spot would turn a single refused Null into "no
+            // Null can ever be created again this session".
+            throw refusal;
         } catch (Throwable t) {
             String reason = Guard.describe(t);
             plugin.spawnBreaker().trip(reason, t, logger,
@@ -336,6 +610,48 @@ public final class SquadManager implements Reloadable {
                             + " Restart or run /null reload to try again after fixing the cause.");
             throw new IllegalStateException("the server refused to create the NPC: " + reason);
         }
+    }
+
+    /**
+     * A random alphanumeric profile name that nobody else is using.
+     *
+     * <p>The configured skin account is the <b>texture</b> source only - it is
+     * never a Null's name, and two Nulls never share one. Names are checked
+     * against live Nulls, the Commander and every online player, because a
+     * duplicate shows up in the tab list as two identical entries and confuses
+     * anything that looks players up by name.</p>
+     */
+    private String uniqueProfileName() {
+        java.util.Set<String> taken = new java.util.HashSet<>();
+        try {
+            for (NullBody body : allMembers()) {
+                String name = body.profileName();
+                if (name != null) {
+                    taken.add(name.toLowerCase(Locale.ROOT));
+                }
+            }
+            if (plugin.commander() != null && plugin.commander().commanderName() != null) {
+                taken.add(plugin.commander().commanderName().toLowerCase(Locale.ROOT));
+            }
+            for (Player online : Bukkit.getOnlinePlayers()) {
+                if (online != null && online.getName() != null) {
+                    taken.add(online.getName().toLowerCase(Locale.ROOT));
+                }
+            }
+        } catch (Throwable t) {
+            logger.fine("[NullArmy] name uniqueness check skipped: " + Guard.describe(t));
+        }
+        for (int attempt = 0; attempt < 24; attempt++) {
+            String candidate = NameGenerator.next();
+            if (!taken.contains(candidate.toLowerCase(Locale.ROOT))) {
+                return candidate;
+            }
+        }
+        // Astronomically unlikely with a 62^16 space; suffixing keeps it legal and
+        // unique rather than handing out a name that is already taken.
+        String fallback = NameGenerator.next();
+        return fallback.substring(0, Math.min(12, fallback.length()))
+                + Long.toString(System.nanoTime() % 10000L);
     }
 
     /** Plays the summon portal effects. Cosmetic, throttled, never fatal. */
@@ -357,8 +673,9 @@ public final class SquadManager implements Reloadable {
         }
         int radius = Math.max(1, config == null ? 6 : config.spawnSearchRadius());
 
-        // Ring 0 is the summoner's own feet block: always try it first.
-        if (isSafe(worldName, origin)) {
+        // Ring 0 is the summoner's own feet block: always try it first, unless
+        // somebody (usually the summoner) is already standing in it.
+        if (isSafe(worldName, origin) && isFree(worldName, origin)) {
             out.add(origin);
         }
         double step = 1.5;
@@ -374,7 +691,7 @@ public final class SquadManager implements Reloadable {
                 if (alreadyUsed(out, candidate)) {
                     continue;
                 }
-                if (isSafe(worldName, candidate)) {
+                if (isSafe(worldName, candidate) && isFree(worldName, candidate)) {
                     out.add(candidate);
                 }
             }
@@ -382,11 +699,25 @@ public final class SquadManager implements Reloadable {
         return out;
     }
 
+    /** True when a candidate is too close to a spot that is already planned. */
     private static boolean alreadyUsed(List<Vec3d> used, Vec3d candidate) {
+        return tooClose(used, candidate, MIN_SPOT_SPACING);
+    }
+
+    /** True when any of {@code used} is within {@code minDistance} of the candidate. */
+    private static boolean tooClose(List<Vec3d> used, Vec3d candidate, double minDistance) {
+        if (used == null || candidate == null) {
+            return false;
+        }
+        double limit = minDistance * minDistance;
         for (Vec3d existing : used) {
+            if (existing == null) {
+                continue;
+            }
             double dx = existing.x() - candidate.x();
+            double dy = existing.y() - candidate.y();
             double dz = existing.z() - candidate.z();
-            if (dx * dx + dz * dz < 0.25) {
+            if (dx * dx + dy * dy + dz * dz < limit) {
                 return true;
             }
         }
@@ -399,6 +730,22 @@ public final class SquadManager implements Reloadable {
             return adapter.isSpawnSafe(worldName, position);
         } catch (Throwable t) {
             logger.fine("[NullArmy] spawn-safety check failed: " + Guard.describe(t));
+            return false;
+        }
+    }
+
+    /**
+     * Entity-occupancy check that can never throw.
+     *
+     * <p>Block safety alone lets two Nulls be planned into the same space; the
+     * adapter then refuses the second one, which is a lost Null the owner is told
+     * about. Checking first means the planner picks a different spot instead.</p>
+     */
+    public boolean isFree(String worldName, Vec3d position) {
+        try {
+            return adapter.isEntitySpaceFree(worldName, position);
+        } catch (Throwable t) {
+            logger.fine("[NullArmy] entity-space check failed: " + Guard.describe(t));
             return false;
         }
     }
@@ -417,6 +764,32 @@ public final class SquadManager implements Reloadable {
         }
     }
 
+    /**
+     * Stops every squad walking, without latching the plugin into shutdown.
+     *
+     * <p>This is what the Totem Of Null sequence uses: the Nulls should stand
+     * still while they go out one at a time, but the plugin has to accept summons
+     * again once the last one is gone. {@link #requestSafeShutdown} is the
+     * permanent version, for {@code onDisable} only.</p>
+     *
+     * @return how many Nulls were stopped
+     */
+    public int standDown() {
+        int stopped = 0;
+        for (Squad squad : allSquads()) {
+            squad.objective = Objective.NONE;
+            squad.targetId = null;
+            squad.point = null;
+            for (NullBody body : squad.members) {
+                if (Guard.attempt(logger, "standing a Null down",
+                        () -> body.applySteering(Vec3d.ZERO))) {
+                    stopped++;
+                }
+            }
+        }
+        return stopped;
+    }
+
     /** Spec 5: SAFE_SHUTDOWN is a state the Nulls walk into, not an instant delete. */
     public void requestSafeShutdown() {
         shutdownRequested = true;
@@ -430,6 +803,162 @@ public final class SquadManager implements Reloadable {
     }
 
     public boolean isShutdownRequested() { return shutdownRequested; }
+
+    /**
+     * Drops one body from whichever squad holds it.
+     *
+     * <p>Used by the sequential shutdown so the live count falls the moment a
+     * Null goes out, instead of a tick later when the reaper notices.</p>
+     *
+     * @return true when a squad was holding it
+     */
+    public boolean forget(NullBody body) {
+        if (body == null) {
+            return false;
+        }
+        boolean removed = false;
+        for (List<Squad> squads : byOwner.values()) {
+            for (Squad squad : squads) {
+                if (squad.members.remove(body)) {
+                    removed = true;
+                }
+            }
+        }
+        forgetAllEmpty();
+        return removed;
+    }
+
+    /** Drops squads that have no members left, and owners with no squads. */
+    public void forgetAllEmpty() {
+        for (java.util.Iterator<Map.Entry<UUID, List<Squad>>> owner = byOwner.entrySet().iterator();
+                owner.hasNext();) {
+            List<Squad> squads = owner.next().getValue();
+            squads.removeIf(squad -> squad.members.isEmpty());
+            if (squads.isEmpty()) {
+                owner.remove();
+            }
+        }
+    }
+
+    /**
+     * Bodies the adapter still knows about that no squad holds.
+     *
+     * <p>These are the ones a failed rollback, a chunk unload or a bug could leave
+     * behind. The shutdown director removes them too, so "every Null" really means
+     * every Null.</p>
+     */
+    public List<NullBody> orphanedBodies() {
+        List<NullBody> out = new ArrayList<>();
+        try {
+            if (adapter == null) {
+                return out;
+            }
+            List<NullBody> known = allMembers();
+            for (Squad squad : allSquads()) {
+                for (NullBody body : squad.members) {
+                    if (!known.contains(body)) {
+                        out.add(body);
+                    }
+                }
+            }
+            for (String worldName : worldNames()) {
+                for (NullBody body : adapter.activeIn(worldName)) {
+                    if (body != null && !known.contains(body) && !out.contains(body)) {
+                        out.add(body);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            logger.fine("[NullArmy] orphan scan skipped: " + Guard.describe(t));
+        }
+        return out;
+    }
+
+    /** The worlds that currently have squads in them. */
+    private List<String> worldNames() {
+        List<String> out = new ArrayList<>();
+        for (List<Squad> squads : byOwner.values()) {
+            for (Squad squad : squads) {
+                if (squad.worldName != null && !out.contains(squad.worldName)) {
+                    out.add(squad.worldName);
+                }
+            }
+        }
+        if (out.isEmpty()) {
+            for (org.bukkit.World world : Bukkit.getWorlds()) {
+                if (world != null) {
+                    out.add(world.getName());
+                }
+            }
+        }
+        return out;
+    }
+
+    /** The stored roles of an owner's first squad, for the AI coordinator. */
+    public List<SquadRole> rolesOf(UUID owner) {
+        Squad squad = find(owner);
+        return squad == null ? Collections.emptyList() : squad.roles();
+    }
+
+    /**
+     * Stores a role for every member of an owner's squads.
+     *
+     * <p>Roles are stored, not re-rolled per tick: the Commander's report, the AI
+     * coordinator and {@code /null roles} all read the same assignment.</p>
+     *
+     * @return how many Nulls now have a stored role
+     */
+    public int assignRoles(UUID owner) {
+        int assigned = 0;
+        for (Squad squad : squadsOf(owner)) {
+            if (squad.members.isEmpty()) {
+                continue;
+            }
+            squad.setRoles(RoleAssignment.assign(squad.members.size(),
+                    !squad.commanderIds.isEmpty()));
+            assigned += squad.members.size();
+        }
+        return assigned;
+    }
+
+    /** "1 commander, 2 guard, 1 scout, 1 ranged" for one owner. */
+    public String roleSummary(UUID owner) {
+        List<SquadRole> all = new ArrayList<>();
+        for (Squad squad : squadsOf(owner)) {
+            all.addAll(squad.roles());
+        }
+        return RoleAssignment.describe(all);
+    }
+
+    /** One line per role that is actually filled, saying what it does. */
+    public List<String> roleDuties(UUID owner) {
+        List<String> out = new ArrayList<>();
+        List<SquadRole> all = new ArrayList<>();
+        for (Squad squad : squadsOf(owner)) {
+            all.addAll(squad.roles());
+        }
+        Map<SquadRole, Integer> counts = RoleAssignment.counts(all);
+        for (Map.Entry<SquadRole, Integer> entry : counts.entrySet()) {
+            out.add(entry.getValue() + " " + entry.getKey().key() + ": "
+                    + entry.getKey().duty());
+        }
+        return out;
+    }
+
+    /**
+     * Points every Null with a role at what that role does.
+     *
+     * <p>Roles are not decoration: a scout walks further out, a medic closes in,
+     * ranged support keeps its distance. This turns the stored role into the
+     * standoff distance the steering loop uses.</p>
+     */
+    private double roleStandoff(Squad squad, int index) {
+        SquadRole role = squad.roleOf(index);
+        if (role == null) {
+            return standoff(squad);
+        }
+        return RoleAssignment.standoff(role);
+    }
 
     /** Live Nulls, counted from the squads: this can never drift. */
     public int liveCount() {
@@ -690,8 +1219,10 @@ public final class SquadManager implements Reloadable {
             Vec3d delta = target.sub(here);
             double distance = delta.horizontalLength();
 
-            // Tactics are not decoration: they change the standoff a Null keeps.
-            double standoff = standoff(squad);
+            // Tactics are not decoration: they change the standoff a Null keeps,
+            // and a stored role refines it (a scout works further out, a medic
+            // closes in, ranged support stays back).
+            double standoff = squad.roles().isEmpty() ? standoff(squad) : roleStandoff(squad, index);
             if (distance <= standoff) {
                 body.applySteering(Vec3d.ZERO);
                 if (squad.objective == Objective.ATTACK) {

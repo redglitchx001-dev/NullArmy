@@ -245,4 +245,97 @@ eval "set -- $(
         tr '\n' ' '
     )" '"$@"'
 
-exec "$JAVACMD" "$@"
+# ---------------------------------------------------------------------
+# NullArmy: surface build failures as GitHub check annotations.
+#
+# CI logs for this repository are stored on a host that is not reachable from
+# every environment, so a failed build could otherwise be invisible: "exit code
+# 1" and nothing else. Everything Gradle prints is still streamed to stdout
+# exactly as before (tee), the real exit status is preserved, and on failure the
+# interesting lines are re-emitted as ::error:: workflow commands, which GitHub
+# turns into annotations that can be read through the API.
+#
+# Nothing here changes what is built or how. Remove the block and restore the
+# single line  exec "$JAVACMD" "$@"  to get the stock wrapper back.
+# ---------------------------------------------------------------------
+NULLARMY_LOG="${TMPDIR:-/tmp}/nullarmy-build.$$.log"
+NULLARMY_STATUS="${TMPDIR:-/tmp}/nullarmy-build.$$.status"
+
+{
+    "$JAVACMD" "$@"
+    echo $? > "$NULLARMY_STATUS"
+} 2>&1 | tee "$NULLARMY_LOG"
+
+if [ -f "$NULLARMY_STATUS" ]; then
+    NULLARMY_EXIT=$(cat "$NULLARMY_STATUS")
+else
+    NULLARMY_EXIT=1
+fi
+
+# Always report the runtime smoke test's own verdict. "The build passed" says
+# nothing about whether a Null was actually visible on a live server, so the
+# verdict and the check lines are re-emitted as a notice annotation, readable
+# through the API and shown in the Checks UI. Failures and the verdict come
+# first: GitHub truncates a long annotation message.
+if [ -f "$NULLARMY_LOG" ]; then
+    awk '
+        /RUNTIME SMOKE: / {
+            line = $0; sub(/\r$/, "", line); gsub(/%/, "%%", line)
+            head = head line "%0A"; next
+        }
+        /\[NullArmy\]\[SELFTEST\] .*FAIL/ {
+            line = $0; sub(/\r$/, "", line); gsub(/%/, "%%", line)
+            head = head line "%0A"; next
+        }
+        /\[NullArmy\]\[SELFTEST\] (RESULT|starting|adapter|arrival|pairing path|shutdown progress|dismissed)/ {
+            line = $0; sub(/\r$/, "", line); gsub(/%/, "%%", line)
+            head = head line "%0A"; next
+        }
+        /\[NullArmy\]\[SELFTEST\] PASS/ {
+            line = $0; sub(/\r$/, "", line); gsub(/%/, "%%", line)
+            passes = passes line "%0A"; npass++; next
+        }
+        END {
+            body = head passes
+            if (length(body) > 3800) {
+                body = substr(body, 1, 3800) " %0A(truncated - the full list is in the server log artifact)"
+            }
+            if (npass + length(head) == 0) {
+                printf("::notice title=NullArmy runtime smoke test::no smoke test output - it did not run\n")
+            } else {
+                printf("::notice title=NullArmy runtime smoke test (%d PASS lines)::%s\n", npass, body)
+            }
+        }
+    ' "$NULLARMY_LOG"
+fi
+
+if [ "$NULLARMY_EXIT" -ne 0 ] && [ -f "$NULLARMY_LOG" ]; then
+    awk '
+        match($0, /\.java:[0-9]+: error:/) {
+            line = $0
+            sub(/\r$/, "", line)
+            n = index(line, ":")
+            file = substr(line, 1, n - 1)
+            rest = substr(line, n + 1)
+            m = index(rest, ":")
+            lineno = substr(rest, 1, m - 1)
+            msg = substr(rest, m + 2)
+            gsub(/%/, "%%", msg)
+            printf("::error file=%s,line=%s::%s\n", file, lineno, msg)
+            raw = $0
+            gsub(/%/, "%%", raw)
+            printf("::error::%s\n", raw)
+            next
+        }
+        /FAILURE: |What went wrong|^Caused by:|Execution failed for task|error:|BUILD FAILED|RUNTIME SMOKE: FAIL|RUNTIME SMOKE: BLOCKED|\[NullArmy\]\[SELFTEST\]|  FAIL  |^FAILURES:|^  - |^passed: / {
+            line = $0
+            sub(/\r$/, "", line)
+            gsub(/%/, "%%", line)
+            printf("::error::%s\n", line)
+        }
+    ' "$NULLARMY_LOG" | head -n 80
+    echo "::error::NullArmy build failed with exit code $NULLARMY_EXIT - see the annotations above"
+fi
+
+rm -f "$NULLARMY_LOG" "$NULLARMY_STATUS"
+exit "$NULLARMY_EXIT"

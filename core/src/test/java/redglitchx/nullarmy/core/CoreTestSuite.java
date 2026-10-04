@@ -106,6 +106,42 @@ public final class CoreTestSuite {
         run("registry rejects duplicate endpoint ids", CoreTestSuite::testRegistryDuplicateEndpoint);
         run("role lookup is case-insensitive and rejects unknown", CoreTestSuite::testRoleLookup);
         run("no agent role holds moderation authority", CoreTestSuite::testNoModerationRole);
+        run("portal plan honours the hard maximum and never builds an empty door",
+                CoreTestSuite::testPortalPlanLimits);
+        run("portal plan places every Null or reports the spill",
+                CoreTestSuite::testPortalPlanConservesNulls);
+        run("portal plan varies the count and the split between summons",
+                CoreTestSuite::testPortalPlanVaries);
+        run("portal plan redistributes when a site cannot be built",
+                CoreTestSuite::testPortalPlanWithoutPortal);
+        run("default kit carries the required items in the right slots",
+                CoreTestSuite::testDefaultKitSlots);
+        run("default kit config parsing round-trips and skips junk",
+                CoreTestSuite::testDefaultKitParsing);
+        run("re-applying a kit never duplicates an item",
+                CoreTestSuite::testKitReapplyNoDuplicates);
+        run("totem shutdown is one Null at a time with the Commander last",
+                CoreTestSuite::testShutdownSequence);
+        run("totem shutdown blocks new summons while it runs",
+                CoreTestSuite::testShutdownBlocksSpawns);
+        run("summon items are named exactly and recognised by tag after a rename",
+                CoreTestSuite::testSummonItemIdentity);
+        run("a plain Totem of Undying is not the Totem Of Null",
+                CoreTestSuite::testPlainTotemNotOurs);
+        run("config merge adds missing keys and keeps owner values",
+                CoreTestSuite::testConfigMerge);
+        run("role assignment gives every member exactly one role",
+                CoreTestSuite::testRoleAssignment);
+        run("AI actions are allowlisted and typed, everything else is refused",
+                CoreTestSuite::testSquadActionAllowlist);
+        run("AI actions that need a human are never auto-executed",
+                CoreTestSuite::testSquadActionConfirmation);
+        run("the AI policy gate denies closed gates and a running shutdown",
+                CoreTestSuite::testActionPolicyGates);
+        run("a mission starts, reports progress and stops safely",
+                CoreTestSuite::testMissionLifecycle);
+        run("missions never ask for destruction",
+                CoreTestSuite::testMissionsAreSafe);
 
         System.out.println();
         System.out.println("passed: " + passed + "  failed: " + failed);
@@ -1010,5 +1046,541 @@ public final class CoreTestSuite {
     private static final int SLOT_CHESTPLATE = 38;
     private static final int SLOT_HELMET = 39;
     private static final int SLOT_OFFHAND = 40;
+
+
+    // ===================================================================
+    //  Portal arrivals: random count, random distribution, no lost Nulls
+    // ===================================================================
+
+    private static void testPortalPlanLimits() {
+        java.util.Random random = new java.util.Random(7L);
+        for (int attempt = 0; attempt < 500; attempt++) {
+            redglitchx.nullarmy.core.portal.PortalPlan plan =
+                    redglitchx.nullarmy.core.portal.PortalPlan.of(12, 4, 6, random);
+            check(plan.portalCount() >= 1, "at least one portal is always built");
+            check(plan.portalCount() <= 4, "the configured maximum is a hard ceiling");
+            for (int i = 0; i < plan.portalCount(); i++) {
+                check(plan.nullsAt(i) >= 1, "a built portal always has a Null in it");
+                check(plan.nullsAt(i) <= 6, "a portal never exceeds its per-portal cap");
+            }
+        }
+        // A hard ceiling exists even when the config asks for something absurd.
+        redglitchx.nullarmy.core.portal.PortalPlan huge =
+                redglitchx.nullarmy.core.portal.PortalPlan.of(500, 9999, 4, new java.util.Random(3L));
+        check(huge.portalCount() <= redglitchx.nullarmy.core.portal.PortalPlan.HARD_PORTAL_CEILING,
+                "no summon may open more portals than the hard ceiling");
+    }
+
+    private static void testPortalPlanConservesNulls() {
+        java.util.Random random = new java.util.Random(11L);
+        for (int nulls = 1; nulls <= 40; nulls++) {
+            for (int maxPortals = 1; maxPortals <= 6; maxPortals++) {
+                redglitchx.nullarmy.core.portal.PortalPlan plan =
+                        redglitchx.nullarmy.core.portal.PortalPlan.of(nulls, maxPortals, 4, random);
+                checkEquals(nulls, plan.assigned() + plan.spill(),
+                        "every Null is either in a portal or reported as spill ("
+                                + nulls + " Nulls, " + maxPortals + " portals)");
+                if (plan.spill() > 0) {
+                int capacity = plan.portalCount() * 4;
+                check(nulls > capacity, "spill only happens when every doorway is full");
+                checkEquals(plan.portalCount(), Math.min(
+                                redglitchx.nullarmy.core.portal.PortalPlan.HARD_PORTAL_CEILING,
+                                Math.min(maxPortals, nulls)),
+                        "spill only happens when every allowed portal was built");
+            }
+            }
+        }
+    }
+
+    private static void testPortalPlanVaries() {
+        java.util.Set<Integer> portalCounts = new java.util.HashSet<>();
+        java.util.Set<String> shapes = new java.util.HashSet<>();
+        java.util.Random random = new java.util.Random(2026L);
+        for (int attempt = 0; attempt < 400; attempt++) {
+            redglitchx.nullarmy.core.portal.PortalPlan plan =
+                    redglitchx.nullarmy.core.portal.PortalPlan.of(9, 5, 9, random);
+            portalCounts.add(plan.portalCount());
+            shapes.add(plan.distribution().toString());
+        }
+        check(portalCounts.size() >= 3, "the portal count varies between summons, saw "
+                + portalCounts);
+        check(shapes.size() >= 5, "the split between portals varies, saw " + shapes.size()
+                + " shapes");
+    }
+
+    private static void testPortalPlanWithoutPortal() {
+        java.util.Random random = new java.util.Random(5L);
+        redglitchx.nullarmy.core.portal.PortalPlan plan =
+                redglitchx.nullarmy.core.portal.PortalPlan.of(8, 3, 4, random);
+        check(plan.portalCount() >= 2, "the fixture opens at least two portals");
+        redglitchx.nullarmy.core.portal.PortalPlan smaller = plan.withoutPortal(0);
+        checkEquals(plan.portalCount() - 1, smaller.portalCount(),
+                "one unbuildable site leaves one fewer portal");
+        checkEquals(plan.nulls(), smaller.assigned() + smaller.spill(),
+                "the Nulls of a lost doorway are redistributed, never dropped");
+        redglitchx.nullarmy.core.portal.PortalPlan last = smaller.withoutPortal(0);
+        redglitchx.nullarmy.core.portal.PortalPlan none = last.withoutPortal(0);
+        checkEquals(0, none.portalCount(), "doorways can run out");
+        checkEquals(plan.nulls(), none.spill(),
+                "with no doorway left every Null is reported for the fallback path");
+    }
+
+    // ===================================================================
+    //  Default equipment
+    // ===================================================================
+
+    private static void testDefaultKitSlots() {
+        java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> kit =
+                redglitchx.nullarmy.core.kit.DefaultKit.DEFAULT;
+        java.util.Map<Integer, String> slots = redglitchx.nullarmy.core.kit.DefaultKit.slotMap(kit);
+        checkEquals("IRON_CHESTPLATE", slots.get(38), "iron chestplate in the chestplate slot");
+        checkEquals("SHIELD", slots.get(40), "shield in the offhand slot");
+        checkEquals("IRON_SWORD", slots.get(0), "hotbar 0 holds the iron sword");
+        checkEquals("BOW", slots.get(1), "hotbar 1 holds the bow");
+        checkEquals("ARROW", slots.get(2), "hotbar 2 holds arrows");
+        checkEquals("GOLDEN_APPLE", slots.get(3), "hotbar 3 holds golden apples");
+        checkEquals("COOKED_BEEF", slots.get(4), "hotbar 4 holds cooked food");
+        checkEquals("IRON_PICKAXE", slots.get(5), "hotbar 5 holds the iron pickaxe");
+        checkEquals("ENDER_PEARL", slots.get(6), "hotbar 6 holds ender pearls");
+        checkEquals("WATER_BUCKET", slots.get(7), "hotbar 7 holds the water bucket");
+        checkEquals("TORCH", slots.get(8), "hotbar 8 holds torches");
+        for (redglitchx.nullarmy.core.kit.DefaultKit.Item item : kit) {
+            check(item.slot() >= 0 && item.slot() <= 40, "every kit slot is a real player slot");
+            check(item.count() >= 1 && item.count() <= 64, "every count is a legal stack size");
+        }
+    }
+
+    private static void testDefaultKitParsing() {
+        java.util.List<String> errors = new java.util.ArrayList<>();
+        java.util.List<String> lines = java.util.Arrays.asList(
+                "0:IRON_SWORD", "38:iron_chestplate:1", "40:SHIELD:1",
+                "not a kit line", "99:STONE:1", "");
+        java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> kit =
+                redglitchx.nullarmy.core.kit.DefaultKit.parse(lines, errors);
+        checkEquals(3, kit.size(), "three readable lines become three items");
+        checkEquals(2, errors.size(), "the junk line and the out-of-range slot are reported");
+        checkEquals("IRON_SWORD", kit.get(0).material(), "material names are normalised");
+        java.util.List<String> round = redglitchx.nullarmy.core.kit.DefaultKit.serialize(kit);
+        java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> again =
+                redglitchx.nullarmy.core.kit.DefaultKit.parse(round, null);
+        checkEquals(kit, again, "serialize then parse gives the same kit back");
+        // An empty or fully broken config falls back to the shipped kit rather
+        // than leaving a Null with nothing.
+        check(redglitchx.nullarmy.core.kit.DefaultKit.parse(null, null)
+                        == redglitchx.nullarmy.core.kit.DefaultKit.DEFAULT,
+                "no config means the default kit");
+        check(redglitchx.nullarmy.core.kit.DefaultKit.parse(
+                        java.util.Collections.singletonList("junk"), null)
+                        == redglitchx.nullarmy.core.kit.DefaultKit.DEFAULT,
+                "a broken config means the default kit");
+    }
+
+    private static void testKitReapplyNoDuplicates() {
+        java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> kit =
+                redglitchx.nullarmy.core.kit.DefaultKit.DEFAULT;
+        java.util.Map<Integer, String> empty = new java.util.LinkedHashMap<>();
+        checkEquals(kit.size(),
+                redglitchx.nullarmy.core.kit.DefaultKit.missingFrom(kit, empty).size(),
+                "a naked Null is missing the whole kit");
+
+        java.util.Map<Integer, String> equipped = redglitchx.nullarmy.core.kit.DefaultKit.slotMap(kit);
+        check(redglitchx.nullarmy.core.kit.DefaultKit.missingFrom(kit, equipped).isEmpty(),
+                "applying the same kit twice writes nothing, so nothing duplicates");
+
+        java.util.Map<Integer, String> edited = new java.util.LinkedHashMap<>(equipped);
+        edited.put(0, "NETHERITE_SWORD");
+        edited.remove(8);
+        java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> missing =
+                redglitchx.nullarmy.core.kit.DefaultKit.missingFrom(kit, edited);
+        checkEquals(2, missing.size(), "only the changed and the emptied slot are refilled");
+        boolean touchedOwnerChoice = false;
+        for (redglitchx.nullarmy.core.kit.DefaultKit.Item item : missing) {
+            if (item.slot() == 38 || item.slot() == 40) {
+                touchedOwnerChoice = true;
+            }
+        }
+        check(!touchedOwnerChoice, "an owner's edited slots are left alone");
+    }
+
+    // ===================================================================
+    //  Totem Of Null: sequential shutdown
+    // ===================================================================
+
+    private static void testShutdownSequence() {
+        java.util.List<redglitchx.nullarmy.core.totem.ShutdownSequence.Entry> entries =
+                new java.util.ArrayList<>();
+        entries.add(new redglitchx.nullarmy.core.totem.ShutdownSequence.Entry("Commander", true));
+        for (int i = 0; i < 5; i++) {
+            entries.add(new redglitchx.nullarmy.core.totem.ShutdownSequence.Entry("Null" + i, false));
+        }
+        java.util.List<redglitchx.nullarmy.core.totem.ShutdownSequence.Step> steps =
+                redglitchx.nullarmy.core.totem.ShutdownSequence.schedule(entries, 1000L, 10);
+        checkEquals(6, steps.size(), "every Null, including the Commander, gets one step");
+        check(steps.get(5).commander(), "the Commander goes last");
+        for (int i = 1; i < steps.size(); i++) {
+            checkEquals(10L, steps.get(i).atTick() - steps.get(i - 1).atTick(),
+                    "the delay between two Nulls is visible, never zero");
+        }
+        checkEquals(1000L, steps.get(0).atTick(), "the first step runs when it was asked to");
+        checkEquals(1050L,
+                redglitchx.nullarmy.core.totem.ShutdownSequence.endTick(steps, 1000L),
+                "the last step is the end of the sequence");
+        checkEquals(1, redglitchx.nullarmy.core.totem.ShutdownSequence.due(steps, 1005L).size(),
+                "only one Null is due after five ticks");
+        checkEquals(6, redglitchx.nullarmy.core.totem.ShutdownSequence.due(steps, 2000L).size(),
+                "everything is due once the sequence has run out");
+        // A zero delay would be a single-tick mass delete, which is the thing
+        // this sequence exists to avoid.
+        java.util.List<redglitchx.nullarmy.core.totem.ShutdownSequence.Step> noDelay =
+                redglitchx.nullarmy.core.totem.ShutdownSequence.schedule(entries, 0L, 0);
+        check(noDelay.get(1).atTick() > noDelay.get(0).atTick(),
+                "a configured delay of zero is raised to one tick");
+    }
+
+    private static void testShutdownBlocksSpawns() {
+        java.util.List<redglitchx.nullarmy.core.totem.ShutdownSequence.Entry> entries =
+                java.util.Arrays.asList(
+                        new redglitchx.nullarmy.core.totem.ShutdownSequence.Entry("a", false),
+                        new redglitchx.nullarmy.core.totem.ShutdownSequence.Entry("b", false),
+                        new redglitchx.nullarmy.core.totem.ShutdownSequence.Entry("c", false));
+        java.util.List<redglitchx.nullarmy.core.totem.ShutdownSequence.Step> steps =
+                redglitchx.nullarmy.core.totem.ShutdownSequence.schedule(entries, 500L, 20);
+        check(!redglitchx.nullarmy.core.totem.ShutdownSequence.isRunning(steps, 500L, 499L),
+                "before it starts, summons are still allowed");
+        check(redglitchx.nullarmy.core.totem.ShutdownSequence.isRunning(steps, 500L, 500L),
+                "the first tick of the sequence refuses new summons");
+        check(redglitchx.nullarmy.core.totem.ShutdownSequence.isRunning(steps, 500L, 540L),
+                "mid-sequence refuses new summons");
+        check(!redglitchx.nullarmy.core.totem.ShutdownSequence.isRunning(steps, 500L, 541L),
+                "after the last step the plugin accepts summons again");
+        check(!redglitchx.nullarmy.core.totem.ShutdownSequence.isRunning(
+                        java.util.Collections.emptyList(), 500L, 500L),
+                "an empty plan blocks nothing");
+    }
+
+    // ===================================================================
+    //  Summon item identity
+    // ===================================================================
+
+    private static void testSummonItemIdentity() {
+        checkEquals("Null", redglitchx.nullarmy.core.item.SummonItemSpec.HORN_DISPLAY_NAME,
+                "the Call Horn keeps the name Null");
+        checkEquals("The Totem Of Null",
+                redglitchx.nullarmy.core.item.SummonItemSpec.TOTEM_DISPLAY_NAME,
+                "the totem is named exactly The Totem Of Null");
+        checkEquals("vanishing_curse",
+                redglitchx.nullarmy.core.item.SummonItemSpec.VANISHING_CURSE_KEY,
+                "the totem carries the real Curse of Vanishing");
+        checkEquals("nullarmy:totem_of_null",
+                redglitchx.nullarmy.core.item.SummonItemSpec.tagKey(
+                        redglitchx.nullarmy.core.item.SummonItemSpec.TOTEM_TAG),
+                "the persistent-data key is stable across renames and moves");
+
+        // Renamed, repaired, moved: the tag still identifies it.
+        checkEquals(redglitchx.nullarmy.core.item.SummonItemSpec.TOTEM_TAG,
+                redglitchx.nullarmy.core.item.SummonItemSpec.kindOf("TOTEM_OF_UNDYING",
+                        "Whatever The Player Typed", false, true),
+                "a renamed totem is still recognised by its tag");
+        checkEquals(redglitchx.nullarmy.core.item.SummonItemSpec.HORN_TAG,
+                redglitchx.nullarmy.core.item.SummonItemSpec.kindOf("GOAT_HORN",
+                        "renamed horn", true, false),
+                "a renamed horn is still recognised by its tag");
+        // Older builds named the items without tags; those items must keep working.
+        checkEquals(redglitchx.nullarmy.core.item.SummonItemSpec.TOTEM_TAG,
+                redglitchx.nullarmy.core.item.SummonItemSpec.kindOf("TOTEM_OF_UNDYING",
+                        "Totem Of Null", false, false),
+                "the legacy totem name is still recognised");
+        checkEquals("", redglitchx.nullarmy.core.item.SummonItemSpec.kindOf("GOAT_HORN",
+                        "The Totem Of Null", false, false),
+                "a horn named like the totem is not a totem");
+    }
+
+    private static void testPlainTotemNotOurs() {
+        checkEquals("", redglitchx.nullarmy.core.item.SummonItemSpec.kindOf("TOTEM_OF_UNDYING",
+                        null, false, false),
+                "an unnamed vanilla totem is not ours");
+        checkEquals("", redglitchx.nullarmy.core.item.SummonItemSpec.kindOf("TOTEM_OF_UNDYING",
+                        "Totem of Undying", false, false),
+                "a vanilla-named totem is not ours");
+        checkEquals("", redglitchx.nullarmy.core.item.SummonItemSpec.kindOf("DIAMOND",
+                        "The Totem Of Null", false, true),
+                "the right name on the wrong item is not ours");
+        check(redglitchx.nullarmy.core.item.SummonItemSpec.isLegalProfileName("uH3WR2v0ti0uTHJ"),
+                "a 16-character alphanumeric profile name is legal");
+        // Built from a counted alphabet so the fixture cannot be off by one.
+        String sixteen = "abcdefghijklmnop";
+        checkEquals(16, sixteen.length(), "the fixture is exactly 16 characters");
+        check(redglitchx.nullarmy.core.item.SummonItemSpec.isLegalProfileName(sixteen),
+                "16 characters is a legal profile name");
+        check(!redglitchx.nullarmy.core.item.SummonItemSpec.isLegalProfileName(sixteen + "q"),
+                "17 characters is not a legal profile name");
+        check(!redglitchx.nullarmy.core.item.SummonItemSpec.isLegalProfileName("has space"),
+                "a profile name may not contain a space");
+        check(!redglitchx.nullarmy.core.item.SummonItemSpec.isLegalProfileName("§cColored"),
+                "a profile name may not contain formatting");
+    }
+
+    // ===================================================================
+    //  Config migration
+    // ===================================================================
+
+    private static void testConfigMerge() {
+        java.util.Map<String, Object> existing = new java.util.LinkedHashMap<>();
+        existing.put("limits.max-live-npcs", 100);
+        existing.put("policy.griefing-enabled", Boolean.TRUE);
+        existing.put("legacy.key-i-made-up", "keep me");
+        java.util.Map<String, Object> shipped = new java.util.LinkedHashMap<>();
+        shipped.put("limits.max-live-npcs", 64);
+        shipped.put("limits.summon-hard-cap", 100);
+        shipped.put("policy.griefing-enabled", Boolean.FALSE);
+        shipped.put("portals.max-per-summon", 4);
+
+        redglitchx.nullarmy.core.config.ConfigMerge.Result result =
+                redglitchx.nullarmy.core.config.ConfigMerge.merge(existing, shipped);
+        check(result.changed(), "a file missing new keys has to be written back");
+        checkEquals(2, result.addedCount(), "exactly the two new keys are added");
+        check(result.additions().containsKey("limits.summon-hard-cap"), "the new cap is added");
+        check(result.additions().containsKey("portals.max-per-summon"), "the new section is added");
+        check(!result.additions().containsKey("limits.max-live-npcs"),
+                "an owner value is never overwritten");
+        check(!result.additions().containsKey("policy.griefing-enabled"),
+                "an owner's true stays true even when the shipped default is false");
+        check(result.unknownKeys().contains("legacy.key-i-made-up"),
+                "a key the build no longer ships is reported, not deleted");
+
+        redglitchx.nullarmy.core.config.ConfigMerge.Result none =
+                redglitchx.nullarmy.core.config.ConfigMerge.merge(shipped, shipped);
+        check(!none.changed(), "an up-to-date file is left alone");
+        check(redglitchx.nullarmy.core.config.ConfigMerge.describe(none).contains("already"),
+                "the report says the file needed nothing");
+        check(redglitchx.nullarmy.core.config.ConfigMerge.isLeaf(Boolean.FALSE),
+                "a boolean is a leaf value");
+        check(!redglitchx.nullarmy.core.config.ConfigMerge.isLeaf(
+                        new java.util.LinkedHashMap<String, Object>()),
+                "a section is not a leaf");
+    }
+
+    // ===================================================================
+    //  Squad roles and AI coordination
+    // ===================================================================
+
+    private static void testRoleAssignment() {
+        for (int size = 1; size <= 24; size++) {
+            java.util.List<redglitchx.nullarmy.core.squad.SquadRole> roles =
+                    redglitchx.nullarmy.core.squad.RoleAssignment.assign(size, true);
+            checkEquals(size, roles.size(), "every member gets exactly one role");
+            checkEquals(redglitchx.nullarmy.core.squad.SquadRole.COMMANDER, roles.get(0),
+                    "index 0 is the Commander");
+            for (redglitchx.nullarmy.core.squad.SquadRole role : roles) {
+                check(role != null, "no member is left without a role");
+            }
+            if (size >= 3) {
+                check(roles.contains(redglitchx.nullarmy.core.squad.SquadRole.SCOUT),
+                        "a squad of " + size + " has a scout");
+                check(roles.contains(redglitchx.nullarmy.core.squad.SquadRole.GUARD),
+                        "a squad of " + size + " has a guard");
+            }
+            if (size >= 7) {
+                check(roles.contains(redglitchx.nullarmy.core.squad.SquadRole.MEDIC),
+                        "a squad of " + size + " has a medic");
+            }
+        }
+        // Deterministic: the same size gives the same layout, so a report cannot
+        // disagree with the squad.
+        check(redglitchx.nullarmy.core.squad.RoleAssignment.assign(9, true)
+                        .equals(redglitchx.nullarmy.core.squad.RoleAssignment.assign(9, true)),
+                "role assignment is stable");
+        check(redglitchx.nullarmy.core.squad.RoleAssignment.describe(
+                        redglitchx.nullarmy.core.squad.RoleAssignment.assign(6, true))
+                .contains("guard"), "the report names the roles it assigned");
+    }
+
+    private static void testSquadActionAllowlist() {
+        checkEquals(redglitchx.nullarmy.core.ai.SquadAction.Kind.FORMATION,
+                redglitchx.nullarmy.core.ai.SquadAction.parse("formation line").kind(),
+                "a plain order parses");
+        checkEquals("line",
+                redglitchx.nullarmy.core.ai.SquadAction.parse("formation line").argument(),
+                "the argument is carried with the action");
+        checkEquals(redglitchx.nullarmy.core.ai.SquadAction.Kind.GUARD,
+                redglitchx.nullarmy.core.ai.SquadAction.parse("guard: hold the gate").kind(),
+                "the colon form parses");
+        checkEquals(redglitchx.nullarmy.core.ai.SquadAction.Kind.TACTICS,
+                redglitchx.nullarmy.core.ai.SquadAction.parse(
+                        "{\"action\": \"tactics\", \"argument\": \"defensive\"}").kind(),
+                "the JSON form parses");
+        checkEquals("defensive",
+                redglitchx.nullarmy.core.ai.SquadAction.parse(
+                        "{\"action\": \"tactics\", \"argument\": \"defensive\"}").argument(),
+                "the JSON argument parses");
+        check(redglitchx.nullarmy.core.ai.SquadAction.parse("op ban Steve").isRefusal(),
+                "a console command is not an action");
+        check(redglitchx.nullarmy.core.ai.SquadAction.parse("kill all players").isRefusal(),
+                "killing players is not in the allowlist");
+        check(redglitchx.nullarmy.core.ai.SquadAction.parse("griefing-enabled true").isRefusal(),
+                "a policy toggle is not an action");
+        check(redglitchx.nullarmy.core.ai.SquadAction.parse("").isRefusal(),
+                "an empty answer is a refusal");
+        check(redglitchx.nullarmy.core.ai.SquadAction.parse(null).isRefusal(),
+                "a null answer is a refusal");
+        check(!redglitchx.nullarmy.core.ai.SquadAction.allowlist().contains("ban"),
+                "no moderation action is allowlisted");
+        check(!redglitchx.nullarmy.core.ai.SquadAction.allowlist().contains("kill"),
+                "no kill action is allowlisted");
+    }
+
+    private static void testSquadActionConfirmation() {
+        check(redglitchx.nullarmy.core.ai.SquadAction.Kind.CANNON.needsHumanConfirmation(),
+                "the cannon always needs a human yes");
+        check(redglitchx.nullarmy.core.ai.SquadAction.Kind.AIRDROP.needsHumanConfirmation(),
+                "an air drop always needs a human yes");
+        check(redglitchx.nullarmy.core.ai.SquadAction.Kind.DISMISS.needsHumanConfirmation(),
+                "dismissing the squad always needs a human yes");
+        check(!redglitchx.nullarmy.core.ai.SquadAction.Kind.REPORT.needsHumanConfirmation(),
+                "a read-only report does not");
+        check(!redglitchx.nullarmy.core.ai.SquadAction.Kind.FOLLOW.needsHumanConfirmation(),
+                "walking to the owner does not");
+    }
+
+    private static void testActionPolicyGates() {
+        //        ai  perm squad portal airdrop cannon missions running stopping shutdown
+        final boolean[] gates = {true, true, true, false, true, true, false, true, false, false};
+        redglitchx.nullarmy.core.ai.ActionPolicy.View open = policyView(gates);
+        check(redglitchx.nullarmy.core.ai.ActionPolicy.check(
+                        redglitchx.nullarmy.core.ai.SquadAction.of(
+                                redglitchx.nullarmy.core.ai.SquadAction.Kind.REPORT, "", ""), open)
+                .allowed(), "a report is always allowed");
+        check(redglitchx.nullarmy.core.ai.ActionPolicy.check(
+                        redglitchx.nullarmy.core.ai.SquadAction.of(
+                                redglitchx.nullarmy.core.ai.SquadAction.Kind.FORMATION, "line", ""), open)
+                .allowed(), "a formation order passes with the gates open");
+        check(!redglitchx.nullarmy.core.ai.ActionPolicy.check(
+                        redglitchx.nullarmy.core.ai.SquadAction.of(
+                                redglitchx.nullarmy.core.ai.SquadAction.Kind.FORMATION, "pyramid", ""), open)
+                .allowed(), "an invented formation is refused");
+        check(redglitchx.nullarmy.core.ai.ActionPolicy.check(
+                        redglitchx.nullarmy.core.ai.SquadAction.of(
+                                redglitchx.nullarmy.core.ai.SquadAction.Kind.CANNON, "", ""), open)
+                .needsConfirmation(), "the cannon needs confirmation even when it is enabled");
+        check(!redglitchx.nullarmy.core.ai.ActionPolicy.check(
+                        redglitchx.nullarmy.core.ai.SquadAction.of(
+                                redglitchx.nullarmy.core.ai.SquadAction.Kind.PORTAL, "Steve", ""), open)
+                .allowed(), "portal travel is refused while mechanics.portal-travel is false");
+
+        // Shutdown running: nothing is ordered and nothing is created.
+        boolean[] shutting = gates.clone();
+        shutting[9] = true;
+        check(!redglitchx.nullarmy.core.ai.ActionPolicy.check(
+                        redglitchx.nullarmy.core.ai.SquadAction.of(
+                                redglitchx.nullarmy.core.ai.SquadAction.Kind.FOLLOW, "", ""),
+                        policyView(shutting)).allowed(),
+                "a Totem Of Null shutdown stops every AI action");
+
+        // No AI endpoint: the local fallback may report, and must not pretend.
+        boolean[] noAi = gates.clone();
+        noAi[0] = false;
+        check(redglitchx.nullarmy.core.ai.ActionPolicy.check(
+                        redglitchx.nullarmy.core.ai.SquadAction.of(
+                                redglitchx.nullarmy.core.ai.SquadAction.Kind.REPORT, "", ""),
+                        policyView(noAi)).allowed(),
+                "the deterministic report works with no endpoint configured");
+        check(!redglitchx.nullarmy.core.ai.ActionPolicy.check(
+                        redglitchx.nullarmy.core.ai.SquadAction.of(
+                                redglitchx.nullarmy.core.ai.SquadAction.Kind.HEAL, "", ""),
+                        policyView(noAi)).allowed(),
+                "a model-backed action is refused when no endpoint is configured");
+
+        // No permission: refused with the permission named.
+        boolean[] noPerm = gates.clone();
+        noPerm[1] = false;
+        redglitchx.nullarmy.core.ai.ActionPolicy.Decision denied =
+                redglitchx.nullarmy.core.ai.ActionPolicy.check(
+                        redglitchx.nullarmy.core.ai.SquadAction.of(
+                                redglitchx.nullarmy.core.ai.SquadAction.Kind.FOLLOW, "", ""),
+                        policyView(noPerm));
+        check(!denied.allowed(), "a missing permission refuses the action");
+        check(denied.reason().contains("nullarmy.follow"),
+                "the refusal names the permission that is missing");
+    }
+
+    /** Builds a policy view from a fixed flag array. */
+    private static redglitchx.nullarmy.core.ai.ActionPolicy.View policyView(final boolean[] g) {
+        return new redglitchx.nullarmy.core.ai.ActionPolicy.View() {
+            @Override public boolean aiUsable() { return g[0]; }
+            @Override public boolean hasPermission(String permission) { return g[1]; }
+            @Override public int liveNulls() { return 4; }
+            @Override public int maxLiveNulls() { return 100; }
+            @Override public boolean hasSquad() { return g[2]; }
+            @Override public boolean portalTravelEnabled() { return g[3]; }
+            @Override public boolean airdropUsable() { return g[4]; }
+            @Override public boolean cannonUsable() { return g[5]; }
+            @Override public boolean missionsEnabled() { return g[6]; }
+            @Override public boolean missionRunning() { return g[7]; }
+            @Override public boolean shutdownRunning() { return g[9]; }
+            @Override public boolean pluginStopping() { return g[8]; }
+        };
+    }
+
+    // ===================================================================
+    //  Original mission system
+    // ===================================================================
+
+    private static void testMissionLifecycle() {
+        redglitchx.nullarmy.core.mission.MissionBoard board =
+                new redglitchx.nullarmy.core.mission.MissionBoard();
+        check(!board.isRunning(), "nothing is running before a mission starts");
+        redglitchx.nullarmy.core.mission.Mission mission = board.start(
+                redglitchx.nullarmy.core.mission.MissionKind.SCOUT_OUTPOST, 100L, 6, null);
+        check(mission != null && board.isRunning(), "starting a mission puts it on the board");
+        checkEquals(6, mission.goal(), "the kind decides how much progress finishes it");
+        check(!board.advance(2, 120L), "two sectors do not finish a six-sector objective");
+        checkEquals(2, mission.progress(), "progress is recorded");
+        check(board.advance(4, 140L), "the last sector completes the mission");
+        check(!board.isRunning(), "a completed mission leaves the board");
+        check(board.history().get(0).state()
+                        == redglitchx.nullarmy.core.mission.Mission.State.COMPLETE,
+                "the completed mission is remembered");
+
+        // One objective at a time: starting a second stops the first safely.
+        board.start(redglitchx.nullarmy.core.mission.MissionKind.BANNER_HOLD, 200L, 4, null);
+        board.start(redglitchx.nullarmy.core.mission.MissionKind.NULL_TRIALS, 210L, 4, null);
+        check(board.history().get(0).state()
+                        == redglitchx.nullarmy.core.mission.Mission.State.STOPPED,
+                "the replaced mission was stopped, not lost");
+        check(board.stop(220L, "the owner said so"), "a mission can be stopped on command");
+        check(!board.stop(221L, "again"), "stopping twice is honest about doing nothing");
+
+        // Time runs out.
+        board.start(redglitchx.nullarmy.core.mission.MissionKind.GATE_VIGIL, 300L, 5, null);
+        check(!board.tick(301L), "a fresh mission is not out of time");
+        check(board.tick(300L + redglitchx.nullarmy.core.mission.MissionKind.GATE_VIGIL
+                        .durationTicks()),
+                "a mission that overruns its window stops itself");
+        check(!board.describe().isEmpty(), "the board always has something to report");
+        check(board.start(null, 1L, 1, null) == null, "an unknown kind starts nothing");
+    }
+
+    private static void testMissionsAreSafe() {
+        for (redglitchx.nullarmy.core.mission.MissionKind kind
+                : redglitchx.nullarmy.core.mission.MissionKind.values()) {
+            check(kind.goal() > 0, kind.key() + " has a measurable objective");
+            check(kind.durationTicks() >= 600, kind.key() + " gives the squad time to work");
+            check(!kind.title().isEmpty(), kind.key() + " has a name of its own");
+            check(!kind.briefing().isEmpty(), kind.key() + " explains itself");
+            check(redglitchx.nullarmy.core.squad.SquadRole.parse(kind.leadRole()) != null,
+                    kind.key() + " is led by a real squad role");
+            String text = (kind.title() + " " + kind.briefing()).toLowerCase(java.util.Locale.ROOT);
+            check(!text.contains("explode") && !text.contains("destroy") && !text.contains("grief"),
+                    kind.key() + " asks for nothing destructive");
+        }
+        check(redglitchx.nullarmy.core.mission.MissionKind.parse("banner-hold")
+                        == redglitchx.nullarmy.core.mission.MissionKind.BANNER_HOLD,
+                "a mission key parses");
+        check(redglitchx.nullarmy.core.mission.MissionKind.parse("Banner Hold")
+                        == redglitchx.nullarmy.core.mission.MissionKind.BANNER_HOLD,
+                "a mission title parses");
+        check(redglitchx.nullarmy.core.mission.MissionKind.parse("spawn tnt") == null,
+                "an invented mission is not a mission");
+    }
 
 }

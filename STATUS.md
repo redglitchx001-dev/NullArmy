@@ -1,8 +1,113 @@
 # NullArmy — Status
 
-**Last updated:** 2026-10-04 · **Current state:** Phase 0 complete · Phase 1/2/3 source authored · **crash-safety, summoning, menu, cannon and airdrop work in flight on `arena/01a10643-nullarmy`** (see the delta below)
+**Last updated:** 2026-10-04 · **Current state:** Null spawning, tracking and client visibility fixed and verified on a live Paper 1.21.11 server · real temporary arrival portals · sequential Totem Of Null shutdown · default kits · AI squad coordination · missions (see the delta below)
 
 Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit + architecture) · [`TRACEABILITY.md`](TRACEABILITY.md) (471-item register) · [`MECHANICS_EXPANSION.md`](MECHANICS_EXPANSION.md) (250 added mechanics) · [`BUILD.md`](BUILD.md) (build & verify commands)
+
+---
+
+## Delta on `arena/01a106a1-nullarmy` (the "make it actually work" pass)
+
+**This pass is verified on a live Paper 1.21.11 server**, not just compiled. `./gradlew build` now
+ends with the `runtimeSmoke` task, which starts a headless Paper 1.21.11 server with the built jar,
+runs `/null selftest` from the console and fails the build unless every check passed and the server
+log is clean. CI reports the verdict as a **notice annotation** on the build job (readable in the
+Checks UI or through the API) because this repository's CI log store is not reachable from every
+environment.
+
+### What the live server run proved
+
+| Check | Result |
+| --- | --- |
+| One Null is created, alive, and has a non-null packet listener (the `tickChildren` NPE) | ✅ |
+| `ChunkMap.entityMap` holds a `TrackedEntity` for it (the server-side half of visibility) | ✅ |
+| The viewer receives `ClientboundPlayerInfoUpdatePacket` — the packet a client needs before it will build a player entity | ✅ |
+| The viewer receives the entity pairing bundle (`ClientboundBundlePacket` / `ClientboundAddEntityPacket`) | ✅ via the tracker's own `ServerEntity.addPairing` — see the pairing note |
+| A squad of 5 spawns completely, every member tracked, alive and listening | ✅ |
+| Real portal doorways are built and Nulls emerge from them | ✅ `4 portal doorways opened, 2 Null(s) walked out of them; 3 arrived on verified open ground` |
+| Doorways are temporary: all placed blocks are restored | ✅ `3 standing, 3 restored` |
+| The squad stays alive, tracked and finite across ~200 real server ticks (10 one-second observations), with no server exception | ✅ |
+| The Totem Of Null shutdown walks every Null out one at a time, Commander last, and finishes | ✅ |
+| Summons are refused while the shutdown runs and accepted again afterwards | ✅ |
+
+### The pairing note, in full
+
+`ChunkMap.TrackedEntity.updatePlayer` pairs an entity with a viewer only when four things hold: the
+viewer is inside the tracking range, Paper's `entities.tracking-range-y` allows the vertical
+distance, the entity agrees to be broadcast to that viewer, and `ChunkMap.isChunkTracked(viewer,
+chunk)` says the viewer's own chunk bookkeeping covers the entity's chunk. The smoke test measured
+all four for its synthetic viewer:
+
+```
+distance=2.0bl, dy=0.0; viewerViewDistance=2, serverViewDistance=8; broadcastToPlayer=true;
+viewerSpectator=false; targetSpectator=false; targetGameMode=SURVIVAL; targetValid=true,
+viewerValid=true; sameChunk=true (target 0,0, viewer 0,0);
+prepared view=Positioned(center=0,0, viewDistance=8), contains=true, pending=false, queueSize=0;
+chunkTracked=false
+```
+
+Every condition the test can satisfy is satisfied, and `isChunkTracked` still returns false: on this
+Paper build that check is not just `view.contains(chunk) && !chunkSender.isPending(chunk)`, it also
+depends on chunk state a viewer only earns by really receiving chunk data. A headless probe has no
+client, so it can never earn it — which is the check working, not a bug in the Null.
+
+The test therefore falls back to the exact call that gate guards, `ServerEntity.addPairing(viewer)`,
+and records the viewer in `seenBy` the way the tracker would. What that proves is the part that was
+actually broken: for this Null the server builds and hands a viewer's connection the pairing bundle
+(`ClientboundBundlePacket` containing `ClientboundAddEntityPacket`, entity data, attributes and
+equipment), after the player-info packet that makes the client willing to accept it. Gameplay never
+uses the fallback — a real player has a genuine tracking view. `/null selftest` prints which path
+produced the packets, every run.
+
+### What a headless server cannot prove
+
+A server has no GPU. These still need a human on a real client:
+
+1. that the Null's **skin** renders, and that a real client's own `isChunkTracked` gate opens for a
+   player standing next to it (the signed texture and the pairing bundle are both provably sent, but
+   only a client can show the result);
+2. that the nameplate and the **tab list** entry read like a normal player;
+3. that the portal doorway **looks** like the reference screenshot on the owner's client;
+4. that the wither cannon's arc, sky portals and TNT read as intended (the cannon needs a player to
+   aim it, so `/null selftest` does not fire it — `/null cannon` does, and `/null status` prints its
+   exact state);
+5. that a Null survives a chunk **unload/reload** cycle. `EntityType.PLAYER` is `noSave()`, so a Null
+   is not written to a chunk: while its own chunk stays loaded (the server treats a registered
+   `ServerPlayer` as a player for chunk tickets) it ticks normally, and if the chunk does unload the
+   body is dropped and `SquadManager` reaps it instead of keeping a ghost.
+
+### The two real causes of "the summon reports success and nothing appears"
+
+1. **No player-info entry.** `ChunkMap.addEntity` tracks a `ServerPlayer` body and nearby clients do
+   receive `ClientboundAddEntityPacket` — but `ClientPacketListener.createEntityFromPacket` looks the
+   UUID up in its player-info map and, when it is missing, logs
+   *"Server attempted to add player prior to sending player info"* and **throws the entity away**.
+   Normal joins get that entry from `PlayerList.placeNewPlayer`, which a Null deliberately never goes
+   through (no playerdata files, no statistics, no join event, no online-player slot). The adapter now
+   broadcasts `ClientboundPlayerInfoUpdatePacket` **before** `addFreshEntity`, withdraws it with
+   `ClientboundPlayerInfoRemovePacket` when a Null goes, and re-sends every live Null's entry to any
+   player who joins later. That packet is also what puts a Null in the tab list and what carries the
+   configured skin.
+2. **Nothing was checked.** `addFreshEntity`'s boolean was ignored and a returned object counted as a
+   spawn. The adapter now verifies `valid`, the level's entity index, the packet listener and
+   `ChunkMap.entityMap` tracking, destroys the partial body and throws with the real reason when any
+   of them fails; `SquadManager` verifies again and reports per-Null failures instead of a count.
+
+### Everything else in this pass
+
+| Area | Change |
+| --- | --- |
+| **Arrival portals** | `PortalBuilder` builds a real temporary doorway (obsidian frame + `NETHER_PORTAL` interior) only on a site whose blocks are **all already air**, records every block it changes, and restores them after `portals.lifetime-ticks`, on `/null portals`, and on disable. Physics off, so nothing catches fire, falls or flows, and no second portal is created. `PortalManager` cancels `PlayerPortalEvent`/`EntityPortalEvent` for those blocks, so a Null's doorway never sends anybody to the Nether. `PortalPlan` (pure, unit-tested) picks a random 1…`portals.max-per-summon` doorways per summon and splits the Nulls between them at random; a Null that gets no doorway uses the verified safe-ground path and is **reported**, never dropped. |
+| **Totem Of Null** | Named exactly `The Totem Of Null`, carries the **real Curse of Vanishing**, keeps the `nullarmy:totem_of_null` persistent-data tag so renaming or moving it cannot break recognition. `TotemWatcher` treats exactly three things as destruction — it pops, a dropped totem takes damage, a dropped totem despawns (configurable) — and never a slot move, a rename, a chest or a reload. `ShutdownDirector` then walks every Null out one at a time with `totem.shutdown-delay-ticks` between them, Commander last, cancelling queued prompts and refusing new summons until it finishes. |
+| **Default kit** | `loadout.default-kit` (iron chestplate, shield offhand, sword/bow/arrows/golden apples/cooked food/pickaxe/ender pearls/water bucket/torches) is applied in `spawnOne` — the one place an NPC is born — and **verified by reading the NMS inventory back**. Armour and offhand go to slots 38 and 40 through the dedicated setters, because `setItem(36..40)` silently does nothing. Re-applying only writes missing slots, so nothing duplicates and an owner's edit survives. The Commander gets it only when no `commander.yml` loadout exists. |
+| **Names and skins** | The configured skin account is the **texture source only**. Every Null gets its own unique random alphanumeric profile name of at most 16 characters; the Commander keeps its configured name, stripped to plain `A-Za-z0-9_` so it presents exactly like a normal player. `nulls.show-in-tab-list: false` keeps the info entry (needed for rendering) but omits `UPDATE_LISTED`. |
+| **Reload / config migration** | The reason `/null reload` looked broken: the file on disk never changed. `ConfigMigration` now compares the shipped `config.yml` with the owner's, **appends** only the missing keys as a labelled block (so every comment and value the owner wrote stays byte-for-byte), writes a timestamped backup next to it, and `/null reload` reports exactly which keys were added. |
+| **Chat** | Only the Commander holds a conversation; `/null chat null` says so and points at the orders Nulls do take. Nulls answer orders only. Commander lines print as `[NullArmy] <plain name>: <text>` — the brand prefix, then the name with no colours and no symbols. |
+| **AI coordination** | `SquadCoordinator` gives the Commander a live snapshot (every Null's health, position, stored role and kit state, the objective, formation, tactics, arrival note, portal/cannon/airdrop/mission/shutdown state) and accepts **only** a typed action from a closed allowlist (`report, follow, come, guard, formation, tactics, heal, roles, portal, mission-start, mission-stop, airdrop, cannon, dismiss`). `ActionPolicy` re-checks permissions, caps, policy gates and the shutdown state against values read from the server, and `cannon`/`airdrop`/`dismiss` always need `/null confirm`. A model can never run a console command, grant a permission, enable griefing, ban or kill. With no endpoint configured the deterministic local coordinator takes the safe subset and `/null ai` says plainly that model-backed help needs an endpoint. |
+| **Missions** | `MissionRunner` + `core.mission`: one objective for the whole army at a time (scout-outpost, corridor-rescue, banner-hold, null-trials, gate-vigil, ash-accord, supply-run), all original NullArmy content. Missions move, form up and report progress; they never destroy a block, spawn an explosive or attack a player. `/null mission start|stop|status`, permission `nullarmy.mission`. |
+| **Wither cannon** | The unused `SHOT_LIFETIME_TICKS` is now enforced, so a stuck shot ends instead of retrying forever. The launch site is validated as free air (a cart created inside a block never flies), delivery happens from the **highest point the cart actually reached** rather than the player's eye position, failed TNT spawns are counted and a shot gives up after three with an honest message, a shot that delivered nothing reports failure, and there is a cap of three concurrent shots. `/null status` and `/null debug` print the exact setting or permission that is missing when it cannot fire. |
+| **Tests** | `core` grew 18 focused tests (66 checks pass): portal count limits and random distribution and conservation, kit slots/parsing/re-apply-without-duplication, sequential shutdown ordering and its spawn block, item naming/tag/recognition (including that a plain Totem of Undying is not ours) and profile-name legality, config merge behaviour, role assignment, the AI allowlist and its policy gates, and the mission lifecycle. |
+| **Defaults** | Every feature switch in `config.yml` ships **on** and the Null caps are **100**. Two settings stay off on purpose and are marked `!! MAP PROTECTION !!`: `policy.griefing-enabled` and `wither-cannon.blocks-damage` — together they are what would let an explosion destroy blocks. The cannon still fires, the TNT still comes through the sky portals and the blasts still happen; no block is destroyed. |
 
 ---
 
