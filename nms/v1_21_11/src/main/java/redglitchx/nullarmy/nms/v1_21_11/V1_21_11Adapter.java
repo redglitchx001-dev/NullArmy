@@ -86,6 +86,20 @@ public final class V1_21_11Adapter implements VersionAdapter {
     /** Whether a Null's player-info entry is listed in the client's tab overlay. */
     private volatile boolean tabListed = true;
 
+    /** Rules every body applies inside vanilla code; replaced on reload. */
+    private volatile redglitchx.nullarmy.nms.BodySettings bodySettings =
+            redglitchx.nullarmy.nms.BodySettings.DEFAULTS;
+
+    @Override
+    public void applyBodySettings(redglitchx.nullarmy.nms.BodySettings settings) {
+        this.bodySettings = settings == null ? redglitchx.nullarmy.nms.BodySettings.DEFAULTS : settings;
+    }
+
+    @Override
+    public redglitchx.nullarmy.nms.BodySettings bodySettings() {
+        return bodySettings;
+    }
+
     @Override
     public void setTabListing(boolean listed) {
         this.tabListed = listed;
@@ -132,7 +146,7 @@ public final class V1_21_11Adapter implements VersionAdapter {
                         ? " - the air-drop position is not clear of blocks"
                         : " - no teleporting out of bad spots"));
         }
-        if (!isEntitySpaceFree(level, request.position())) {
+        if (!request.allowCrowding() && !isEntitySpaceFree(level, request.position())) {
             throw new SpawnRefusedException("refusing to spawn Null at " + request.position()
                     + " - another entity is already standing there");
         }
@@ -148,12 +162,20 @@ public final class V1_21_11Adapter implements VersionAdapter {
                     "profile name is longer than 16 characters: " + name);
         }
 
-        GameProfile profile = new GameProfile(UUID.randomUUID(), name);
+        // The profile's property map must be mutable: authlib's default one is
+        // immutable in 1.21.11 and writing a skin into it threw on every summon
+        // once a skin was cached (see SkinApplicator).
+        GameProfile profile = SkinApplicator.mutableProfile(UUID.randomUUID(), name);
         // Every Null and the Commander wear one configured skin. The request
         // carries it; if it is absent we fall back to whatever SkinConfig has,
-        // and if that is empty too the profile is left alone rather than faked
-        // (IMPLEMENTATION_PLAN.md A-05).
-        SkinApplicator.apply(profile, request.skinValue(), request.skinSignature());
+        // and if that is empty too the profile is left alone rather than faked.
+        // A skin problem never costs the spawn: the body keeps the default skin.
+        try {
+            SkinApplicator.apply(profile, request.skinValue(), request.skinSignature());
+        } catch (Throwable skinProblem) {
+            org.bukkit.Bukkit.getLogger().warning("[NullArmy] the skin could not be attached to "
+                    + name + " (" + describe(skinProblem) + "); it keeps the default skin.");
+        }
 
         NullPlayer npc = new NullPlayer(server, level, profile, request, this);
         if (npc.connection == null) {
@@ -186,8 +208,14 @@ public final class V1_21_11Adapter implements VersionAdapter {
         if (!added) {
             withdraw(npc);
             discardQuietly(npc);
-            throw new IllegalStateException("the server refused to add the Null to "
-                    + request.worldName() + " (addFreshEntity returned false)");
+            // Spot-specific, not a broken adapter: another plugin (a protected
+            // region, a spawn-control plugin) cancelled the add at this spot, or
+            // the chunk was not ready. The caller retries a neighbouring cell
+            // instead of latching summoning off for the session.
+            throw new SpawnRefusedException("the server refused to add the Null at "
+                    + request.position() + " in " + request.worldName()
+                    + " (addFreshEntity returned false - a protection or spawn-control"
+                    + " plugin, or an unloaded chunk)");
         }
 
         // 3. Verify. A returned object is not a spawn.
@@ -195,8 +223,12 @@ public final class V1_21_11Adapter implements VersionAdapter {
         if (failure != null) {
             withdraw(npc);
             discardQuietly(npc);
-            throw new IllegalStateException(failure);
+            if (npc.connection == null) {
+                throw new IllegalStateException(failure);
+            }
+            throw new SpawnRefusedException(failure);
         }
+        npc.afterRegistration();
 
         active.add(npc);
         return npc;
@@ -697,7 +729,91 @@ public final class V1_21_11Adapter implements VersionAdapter {
         active.remove(body);
         if (body instanceof NullPlayer) {
             withdraw((NullPlayer) body);
+            releasePlayerListState((NullPlayer) body);
         }
+    }
+
+    /**
+     * Drops the per-UUID state the server keeps for every ServerPlayer it ever
+     * constructed.
+     *
+     * <p>The {@code ServerPlayer} constructor registers a {@code PlayerAdvancements}
+     * and a {@code ServerStatsCounter} in {@code PlayerList}'s maps. Real players
+     * are removed from those maps when they quit; a Null never quits, so without
+     * this every summon left two objects behind for the rest of the session.
+     * Purely reflective and fail-quiet: the worst case is the old behaviour.</p>
+     */
+    private void releasePlayerListState(NullPlayer npc) {
+        try {
+            PlayerList players = minecraftServer().getPlayerList();
+            if (players == null) {
+                return;
+            }
+            UUID id = npc.getUUID();
+            for (Class<?> type = players.getClass(); type != null && type != Object.class;
+                 type = type.getSuperclass()) {
+                for (java.lang.reflect.Field field : type.getDeclaredFields()) {
+                    if (!java.util.Map.class.isAssignableFrom(field.getType())
+                            || java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
+                        continue;
+                    }
+                    try {
+                        field.setAccessible(true);
+                        Object map = field.get(players);
+                        if (!(map instanceof java.util.Map)) {
+                            continue;
+                        }
+                        Object value = ((java.util.Map<?, ?>) map).get(id);
+                        if (value instanceof net.minecraft.server.PlayerAdvancements
+                                || value instanceof net.minecraft.stats.ServerStatsCounter) {
+                            if (value instanceof net.minecraft.server.PlayerAdvancements) {
+                                ((net.minecraft.server.PlayerAdvancements) value).stopListening();
+                            }
+                            ((java.util.Map<?, ?>) map).remove(id);
+                        }
+                    } catch (Throwable ignored) {
+                        // One unreadable field must not stop the others.
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+            // Best effort by design.
+        }
+    }
+
+    // --------------------------------------------------------------- live skins
+
+    @Override
+    public boolean reapplySkin(NullBody body, String value, String signature) {
+        if (!(body instanceof NullPlayer)) {
+            return false;
+        }
+        NullPlayer npc = (NullPlayer) body;
+        if (!npc.isAlive()) {
+            return false;
+        }
+        boolean written = SkinApplicator.replace(npc.getGameProfile(), value, signature);
+        if (!written) {
+            return false;
+        }
+        // The client keys the skin by player-info entry and caches it on the
+        // entity, so: withdraw the entry, announce it again with the new
+        // texture, and re-pair the entity for everybody who can see it.
+        withdraw(npc);
+        boolean announced = announce(npc);
+        ServerLevel level = npc.serverLevelOrNull();
+        if (level != null) {
+            Tracking.repair(level, npc);
+        }
+        return announced;
+    }
+
+    @Override
+    public String[] skinOf(NullBody body) {
+        if (!(body instanceof NullPlayer)) {
+            return null;
+        }
+        return SkinApplicator.read(((NullPlayer) body).getGameProfile());
     }
 
     /**

@@ -211,6 +211,64 @@ final class Tracking {
         }
     }
 
+    /**
+     * Re-pairs an entity with everybody who currently sees it.
+     *
+     * <p>A client caches a player's skin on the entity it built from the first
+     * pairing, so a changed texture only shows once the entity is removed and
+     * added again. This is exactly what the tracker itself does when a viewer
+     * leaves and re-enters range ({@code ServerEntity.removePairing} then
+     * {@code addPairing}), applied to every current viewer.</p>
+     *
+     * @return how many viewers were re-paired
+     */
+    static int repair(ServerLevel level, net.minecraft.world.entity.Entity target) {
+        if (level == null || target == null) {
+            return 0;
+        }
+        Object tracked = trackedEntity(level, target.getId());
+        if (tracked == null) {
+            return 0;
+        }
+        Field seen = seenBy(tracked.getClass());
+        Field serverEntityField = declaredField(tracked.getClass(), "serverEntity");
+        if (seen == null || serverEntityField == null) {
+            return 0;
+        }
+        try {
+            Object serverEntity = serverEntityField.get(tracked);
+            Method remove = serverEntity.getClass().getMethod("removePairing", ServerPlayer.class);
+            Method add = serverEntity.getClass().getMethod("addPairing", ServerPlayer.class);
+            Object set = seen.get(tracked);
+            if (!(set instanceof java.util.Set<?>)) {
+                return 0;
+            }
+            List<ServerPlayer> viewers = new ArrayList<>();
+            for (Object connection : new ArrayList<>((java.util.Set<?>) set)) {
+                if (connection instanceof net.minecraft.server.network.ServerPlayerConnection spc) {
+                    ServerPlayer player = spc.getPlayer();
+                    if (player != null) {
+                        viewers.add(player);
+                    }
+                }
+            }
+            int done = 0;
+            for (ServerPlayer viewer : viewers) {
+                try {
+                    remove.invoke(serverEntity, viewer);
+                    add.invoke(serverEntity, viewer);
+                    done++;
+                } catch (Throwable perViewer) {
+                    lastError = "re-pairing one viewer failed: " + perViewer;
+                }
+            }
+            return done;
+        } catch (Throwable t) {
+            lastError = "re-pairing failed: " + t.getClass().getSimpleName() + ": " + t.getMessage();
+            return 0;
+        }
+    }
+
     /** Which path produced the last successful pairing, for the report. */
     static String lastPairPath() {
         return lastPairPath;

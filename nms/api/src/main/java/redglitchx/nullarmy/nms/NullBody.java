@@ -85,4 +85,87 @@ public interface NullBody {
      * inventory and hands the materials back to the world.</p>
      */
     List<LoadoutSlot> loadout();
+
+    // ------------------------------------------------------------- body control
+
+    /** No movement input this tick. */
+    int GAIT_STOP = 0;
+    /** An unhurried walk (about 60 % of normal walking input). */
+    int GAIT_WALK = 1;
+    /** Full walking input without sprinting - what a player gets holding W. */
+    int GAIT_RUN = 2;
+    /** Full input with the vanilla sprint modifier. */
+    int GAIT_SPRINT = 3;
+
+    /**
+     * The entity/profile UUID. The plugin resolves the body's Bukkit player
+     * through it (inventory, attributes, swings, item use) so every one of those
+     * actions runs through the same server code a real player's would.
+     */
+    default java.util.UUID uuid() { return null; }
+
+    /**
+     * The movement intent for the next ticks, shaped exactly like a client's
+     * input: a world-space horizontal direction whose length (0..1) is the
+     * throttle, a gait, a jump request and the sneak key.
+     *
+     * <p>The adapter turns it into vanilla travel input. Friction, gravity,
+     * collisions, step height, water, ladders and fall damage stay vanilla, so
+     * a Null can never fly, clip into a block or move faster than a player. An
+     * intent that is not refreshed expires after a few ticks: a Null whose
+     * brain stops sending orders stops walking.</p>
+     */
+    default void setMovement(double dirX, double dirZ, int gait, boolean jump, boolean sneak) {
+        applySteering(gait == GAIT_STOP ? Vec3d.ZERO : new Vec3d(dirX, 0.0, dirZ).scale(0.2));
+    }
+
+    /**
+     * Where the body should look. With {@code headOnly} the head turns but the
+     * travel frame does not, which is how a walking Null glances at a player.
+     * A null target clears the look so the head follows the movement again.
+     */
+    default void setLookTarget(Vec3d target, boolean headOnly) {
+        if (target != null) {
+            lookAt(target);
+        }
+    }
+
+    /** Head yaw in degrees, the value clients render. */
+    default float headYaw() { return 0.0F; }
+
+    /** Travel-frame yaw in degrees (the entity yaw that movement input is relative to). */
+    default float bodyYaw() { return 0.0F; }
+
+    /** Pitch in degrees. */
+    default float pitch() { return 0.0F; }
+
+    /** True when the body stands on a block (vanilla's own onGround flag). */
+    default boolean onGround() { return true; }
+
+    /** Current velocity in blocks per tick. */
+    default Vec3d velocity() { return Vec3d.ZERO; }
+
+    /** Accumulated fall distance in blocks; above zero only while falling. */
+    default double fallDistance() { return 0.0D; }
+
+    /** True while the body is in water. */
+    default boolean inWater() { return false; }
+
+    /** True when the last move was stopped by a block side (walking into a wall). */
+    default boolean horizontalCollision() { return false; }
+
+    /**
+     * Death progress: -1 while alive, ticks since death while the death
+     * animation plays, {@link Integer#MAX_VALUE} once the body has left the world.
+     */
+    default int deathTicks() { return isAlive() ? -1 : Integer.MAX_VALUE; }
+
+    /**
+     * Releases the item being used (draws a bow to completion and shoots), the
+     * way letting go of the use key does. Returns false when nothing is in use.
+     */
+    default boolean releaseUseItem() { return false; }
+
+    /** True for the self-test viewer probe. */
+    default boolean isProbe() { return false; }
 }
