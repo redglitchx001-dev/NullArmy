@@ -1307,7 +1307,9 @@ public final class CoreTestSuite {
                 "the right name on the wrong item is not ours");
         check(redglitchx.nullarmy.core.item.SummonItemSpec.isLegalProfileName("uH3WR2v0ti0uTHJ"),
                 "a 16-character alphanumeric profile name is legal");
-        check(!redglitchx.nullarmy.core.item.SummonItemSpec.isLegalProfileName("uH3WR2v0ti0uTHJx"),
+        check(redglitchx.nullarmy.core.item.SummonItemSpec.isLegalProfileName("uH3WR2v0ti0uTHJxy"),
+                "16 characters is still legal");
+        check(!redglitchx.nullarmy.core.item.SummonItemSpec.isLegalProfileName("uH3WR2v0ti0uTHJxyz"),
                 "17 characters is not a legal profile name");
         check(!redglitchx.nullarmy.core.item.SummonItemSpec.isLegalProfileName("has space"),
                 "a profile name may not contain a space");
