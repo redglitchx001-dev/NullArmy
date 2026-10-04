@@ -25,12 +25,10 @@ import java.util.UUID;
 /**
  * NullArmy adapter for Paper 1.21.11.
  *
- * <p><b>STATUS: UNVERIFIED.</b> This class has never been compiled or run. It
- * cannot be: the build environment has no JDK and no access to
- * {@code repo.papermc.io}, so the dev bundle is unavailable
- * (IMPLEMENTATION_PLAN.md blocker B-1). Treat every NMS signature here as a
- * hypothesis to confirm against a real 1.21.11 dev bundle during Phase 1
- * verification item V-04.</p>
+ * <p><b>STATUS: COMPILED; RUNTIME UNVERIFIED.</b> The GitHub Actions
+ * Paperweight build compiles this adapter against Paper 1.21.11. A live-server
+ * smoke test is still needed to verify Null spawning, ticking and packet
+ * tracking (IMPLEMENTATION_PLAN.md verification item V-04).</p>
  *
  * <p>Known deliberate choices:</p>
  * <ul>
@@ -104,6 +102,9 @@ public final class V1_21_11Adapter implements VersionAdapter {
 
         ServerPlayer npc = new NullPlayer(server, level, profile, request, this);
 
+        // NullPlayer installs a listener backed by a packet-discarding sink in its
+        // constructor. Never register a ServerPlayer with a null connection:
+        // Paper's server tick can send packets outside the entity tick guard.
         npc.setPos(request.position().x(), request.position().y(), request.position().z());
         level.addFreshEntity(npc);
 

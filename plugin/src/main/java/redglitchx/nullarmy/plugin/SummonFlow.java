@@ -19,6 +19,7 @@ import redglitchx.nullarmy.plugin.config.PluginConfig;
 import redglitchx.nullarmy.plugin.config.Reloadable;
 import redglitchx.nullarmy.plugin.item.SummonItems;
 import redglitchx.nullarmy.plugin.util.Guard;
+import redglitchx.nullarmy.plugin.util.PluginText;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -48,7 +49,7 @@ import java.util.UUID;
 public final class SummonFlow implements Listener, Reloadable {
 
     /** Every message this flow sends starts with this, as the spec requires. */
-    private static final String PREFIX = "[NullArmy] ";
+    private static final String PREFIX = PluginText.PREFIX;
 
     /** The exact question from spec 3. */
     private static final String QUESTION = "How many Nulls should come?";
@@ -119,8 +120,12 @@ public final class SummonFlow implements Listener, Reloadable {
         if (player == null) {
             return;
         }
-        // The horn is not a musical instrument here.
+        // Cancel vanilla item use so the horn does not start a second, unrelated
+        // interaction. Play the configured Call Goat Horn sound ourselves.
         event.setCancelled(true);
+        if (SummonItems.isCallHorn(item)) {
+            playCallSound(player);
+        }
 
         if (!player.hasPermission("nullarmy.summon")) {
             player.sendMessage(PREFIX + "You do not have permission to summon Nulls (nullarmy.summon).");
@@ -164,6 +169,18 @@ public final class SummonFlow implements Listener, Reloadable {
         player.sendMessage(PREFIX + QUESTION);
         player.sendMessage(PREFIX + "Type a number from 1 to " + caps.summonHardCap()
                 + " in chat. Type 'cancel' to stop.");
+    }
+
+    /** Plays the real Call Goat Horn sound without letting a cosmetic failure cancel summoning. */
+    private void playCallSound(Player player) {
+        try {
+            if (player == null || player.getWorld() == null) {
+                return;
+            }
+            player.getWorld().playSound(player.getLocation(), SummonItems.callHornSound(), 1.0f, 1.0f);
+        } catch (Throwable t) {
+            plugin.getLogger().fine("[NullArmy] Call Horn sound skipped: " + Guard.describe(t));
+        }
     }
 
     // ------------------------------------------------------------------- chat

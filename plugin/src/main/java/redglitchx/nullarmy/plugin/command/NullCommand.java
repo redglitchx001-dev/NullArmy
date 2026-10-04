@@ -27,6 +27,7 @@ import redglitchx.nullarmy.plugin.item.SummonItems;
 import redglitchx.nullarmy.plugin.spectacle.Airdrop;
 import redglitchx.nullarmy.plugin.spectacle.WitherCannon;
 import redglitchx.nullarmy.plugin.util.Guard;
+import redglitchx.nullarmy.plugin.util.PluginText;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -68,8 +69,8 @@ import java.util.Locale;
  */
 public final class NullCommand implements CommandExecutor, TabCompleter, Reloadable {
 
-    /** Every chat line the plugin sends starts with this. */
-    private static final String PREFIX = "[NullArmy] ";
+    /** Every chat line the plugin sends starts with the shared gradient brand. */
+    private static final String PREFIX = PluginText.PREFIX;
 
     /** Subcommands in help order. Aliases are resolved before this list is used. */
     private static final List<String> SUBCOMMANDS = Arrays.asList(
@@ -98,7 +99,7 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             new String[]{"version", "", "Plugin, adapter and server version."},
             new String[]{"features", "nullarmy.admin", "What works, and what needs an AI model."},
             new String[]{"debug", "nullarmy.admin", "Guard state, subsystem failures, tracked entities."},
-            new String[]{"horn", "nullarmy.summon", "Give yourself the Call Horn (asks how many Nulls)."},
+            new String[]{"horn", "nullarmy.summon", "Give yourself the item named Null (Call Goat Horn)."},
             new String[]{"totem", "nullarmy.summon", "Give yourself the Totem Of Null (same flow)."},
             new String[]{"commander", "nullarmy.commander", "Summon the Null Commander out of a portal."},
             new String[]{"respawn", "nullarmy.commander", "Bring the Commander back if it is gone."},
@@ -554,9 +555,13 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
         for (ItemStack rest : leftover.values()) {
             player.getWorld().dropItemNaturally(player.getLocation(), rest);
         }
-        String name = horn ? "Call Horn" : "Totem Of Null";
+        String name = horn ? "Null (Call Goat Horn)" : "Totem Of Null";
         sender.sendMessage(PREFIX + "Given: " + name + " (right-click it to summon Nulls).");
-        sender.sendMessage(PREFIX + "The horn asks how many Nulls should come; reply in chat, or type 'cancel'.");
+        if (horn) {
+            sender.sendMessage(PREFIX + "The Call horn sound plays, then you can enter a count in chat or type 'cancel'.");
+        } else {
+            sender.sendMessage(PREFIX + "Right-click the totem, then enter a count in chat or type 'cancel'.");
+        }
         return true;
     }
 

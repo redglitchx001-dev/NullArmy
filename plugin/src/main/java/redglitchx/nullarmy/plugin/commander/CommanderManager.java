@@ -7,8 +7,11 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.inventory.ItemStack;
 
 import redglitchx.nullarmy.core.combat.CombatSituation;
@@ -24,6 +27,7 @@ import redglitchx.nullarmy.plugin.config.Reloadable;
 import redglitchx.nullarmy.plugin.skin.SkinData;
 import redglitchx.nullarmy.plugin.skin.SkinResolver;
 import redglitchx.nullarmy.plugin.util.Guard;
+import redglitchx.nullarmy.plugin.util.PluginText;
 
 import java.io.File;
 import java.io.IOException;
@@ -53,8 +57,8 @@ public final class CommanderManager implements Listener, Reloadable {
     private static final String FILE_NAME = "commander.yml";
     private static final String DEFAULT_NAME = "NullCommander";
 
-    /** Every message this class sends starts here, per spec 2.1. */
-    private static final String PREFIX = "[NullArmy] ";
+    /** Every message starts with the shared gradient brand. */
+    private static final String PREFIX = PluginText.PREFIX;
 
     private final NullArmyPlugin plugin;
     private final SkinResolver skins;
@@ -286,23 +290,31 @@ public final class CommanderManager implements Listener, Reloadable {
         });
     }
 
-    /** Persists the loadout to commander.yml. */
-    public void save() {
+    /** Persists the current loadout to commander.yml. */
+    public void save() throws IOException {
+        save(loadout);
+    }
+
+    /** Writes a candidate snapshot without changing the live in-memory loadout. */
+    private void save(ItemStack[] state) throws IOException {
         YamlConfiguration yaml = new YamlConfiguration();
-        for (int i = 0; i < loadout.length; i++) {
-            if (loadout[i] != null) {
-                yaml.set("loadout." + i, loadout[i]);
+        for (int i = 0; i < LOADOUT_SLOTS && i < state.length; i++) {
+            if (state[i] != null) {
+                yaml.set("loadout." + i, state[i]);
             }
         }
-        try {
-            if (!plugin.getDataFolder().isDirectory()) {
-                plugin.getDataFolder().mkdirs();
-            }
-            yaml.save(file);
-        } catch (IOException e) {
-            plugin.getLogger().log(Level.WARNING,
-                    "[NullArmy] Could not save the Commander loadout: " + e.getMessage());
+        if (!plugin.getDataFolder().isDirectory()) {
+            plugin.getDataFolder().mkdirs();
         }
+        yaml.save(file);
+    }
+
+    private static ItemStack[] cloneLoadout(ItemStack[] source) {
+        ItemStack[] copy = new ItemStack[LOADOUT_SLOTS];
+        for (int i = 0; i < copy.length && i < source.length; i++) {
+            copy[i] = source[i] == null ? null : source[i].clone();
+        }
+        return copy;
     }
 
     /** Picks the technique the Commander uses for a situation. */
@@ -353,6 +365,12 @@ public final class CommanderManager implements Listener, Reloadable {
         if (!(event.getInventory().getHolder() instanceof CommanderInventoryGui)) {
             return;
         }
+        // Dropping an editor item would let a user duplicate a saved loadout
+        // entry by closing without saving (the editor is transactional).
+        if (event.getClick() == ClickType.DROP || event.getClick() == ClickType.CONTROL_DROP) {
+            event.setCancelled(true);
+            return;
+        }
         int slot = event.getRawSlot();
 
         // Clicks in the player's own inventory must behave normally.
@@ -369,29 +387,35 @@ public final class CommanderManager implements Listener, Reloadable {
             Player player = (Player) event.getWhoClicked();
             if (slot == CommanderInventoryGui.BUTTON_CLEAR) {
                 gui.clearWorking();
-                player.sendMessage("Loadout cleared. Press Save to keep it empty.");
+                player.sendMessage(PREFIX + "Loadout cleared. Press Save to keep it empty.");
             } else if (slot == CommanderInventoryGui.BUTTON_CANCEL) {
                 player.closeInventory();
             } else if (slot == CommanderInventoryGui.BUTTON_SAVE) {
-                // Each step is isolated: a failed save must still report the
-                // truth, and a failed apply must not lose the edit silently.
-                boolean copied = Guard.attempt(plugin.getLogger(), "reading the loadout editor",
-                        () -> {
-                            gui.commitFromView();
-                            ItemStack[] edited = gui.working();
-                            System.arraycopy(edited, 0, loadout, 0,
-                                    Math.min(edited.length, LOADOUT_SLOTS));
-                        });
-                boolean saved = copied
-                        && Guard.attempt(plugin.getLogger(), "saving the Commander loadout", this::save);
-                boolean applied = copied
-                        && Guard.attempt(plugin.getLogger(), "applying the Commander loadout",
-                                this::applyLoadout);
-                player.sendMessage(saved
-                        ? "Commander loadout saved."
-                        : "The loadout could not be saved - see the server log; nothing was changed.");
-                if (saved && !applied) {
-                    player.sendMessage("Saved, but the live Commander could not be re-equipped yet.");
+                // Save a detached candidate first. A disk failure must not
+                // change the in-memory loadout or equip an unsaved version.
+                final ItemStack[][] candidate = new ItemStack[1][];
+                boolean copied = Guard.attempt(plugin.getLogger(), "reading the loadout editor", () -> {
+                    gui.commitFromView();
+                    candidate[0] = cloneLoadout(gui.working());
+                });
+                if (!copied || candidate[0] == null) {
+                    player.sendMessage(PREFIX + "Could not read the loadout editor; it is still open.");
+                    return;
+                }
+                boolean saved = Guard.attempt(plugin.getLogger(), "saving the Commander loadout",
+                        () -> save(candidate[0]));
+                if (!saved) {
+                    player.sendMessage(PREFIX + "Save failed. Your current loadout is unchanged; "
+                            + "the editor is still open so you can retry or cancel.");
+                    return;
+                }
+                System.arraycopy(candidate[0], 0, loadout, 0, LOADOUT_SLOTS);
+                gui.markSaved();
+                boolean applied = Guard.attempt(plugin.getLogger(), "applying the Commander loadout",
+                        this::applyLoadout);
+                player.sendMessage(PREFIX + "Commander loadout saved.");
+                if (!applied) {
+                    player.sendMessage(PREFIX + "Saved, but the live Commander could not be re-equipped yet.");
                 }
                 player.closeInventory();
             }
@@ -404,6 +428,33 @@ public final class CommanderManager implements Listener, Reloadable {
     }
 
     @EventHandler
+    public void onInventoryDrag(InventoryDragEvent event) {
+        Guard.attempt(plugin.getLogger(), "Commander loadout drag", () -> {
+            if (event == null || event.getView() == null
+                    || !(event.getView().getTopInventory().getHolder() instanceof CommanderInventoryGui)) {
+                return;
+            }
+            for (int rawSlot : event.getRawSlots()) {
+                if (rawSlot < CommanderInventoryGui.SIZE && !CommanderInventoryGui.isEditable(rawSlot)) {
+                    event.setCancelled(true);
+                    return;
+                }
+            }
+        });
+    }
+
+    @EventHandler
+    public void onItemDrop(PlayerDropItemEvent event) {
+        Guard.attempt(plugin.getLogger(), "Commander loadout item drop", () -> {
+            if (event != null && event.getPlayer() != null
+                    && event.getPlayer().getOpenInventory().getTopInventory().getHolder()
+                            instanceof CommanderInventoryGui) {
+                event.setCancelled(true);
+            }
+        });
+    }
+
+    @EventHandler
     public void onInventoryClose(InventoryCloseEvent event) {
         Guard.attempt(plugin.getLogger(), "Commander loadout close", () -> {
             if (event == null || event.getInventory() == null) {
@@ -412,10 +463,17 @@ public final class CommanderManager implements Listener, Reloadable {
             if (!(event.getInventory().getHolder() instanceof CommanderInventoryGui)) {
                 return;
             }
-            // Closing without pressing Save discards the edit, so a mis-click
-            // can never silently overwrite a loadout the owner was happy with.
-            if (event.getPlayer() instanceof Player) {
-                ((Player) event.getPlayer()).sendMessage("Loadout editor closed without saving.");
+            // Closing without pressing Save discards the edit and restores the
+            // player's inventory snapshot. A successful Save also closes the
+            // screen, so never report that path as discarded.
+            CommanderInventoryGui gui = (CommanderInventoryGui) event.getInventory().getHolder();
+            if (!gui.wasSaved() && event.getPlayer() instanceof Player) {
+                Player player = (Player) event.getPlayer();
+                boolean restored = Guard.attempt(plugin.getLogger(), "restoring the pre-edit inventory",
+                        () -> gui.restorePlayerInventory(player));
+                player.sendMessage(PREFIX + (restored
+                        ? "Loadout editor closed without saving; your inventory was restored."
+                        : "Loadout editor closed, but your inventory could not be restored; check the server log."));
             }
         });
     }

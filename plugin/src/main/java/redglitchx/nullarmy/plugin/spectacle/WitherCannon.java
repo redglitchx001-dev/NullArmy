@@ -14,6 +14,7 @@ import redglitchx.nullarmy.plugin.NullArmyPlugin;
 import redglitchx.nullarmy.plugin.config.PluginConfig;
 import redglitchx.nullarmy.plugin.config.Reloadable;
 import redglitchx.nullarmy.plugin.util.Guard;
+import redglitchx.nullarmy.plugin.util.PluginText;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -343,12 +344,12 @@ public final class WitherCannon implements Reloadable {
         try {
             Player owner = Bukkit.getPlayer(shot.owner);
             if (owner != null && owner.isOnline()) {
-                owner.sendMessage("[NullArmy] Shot complete: " + shot.droppedByAir
+                owner.sendMessage(PluginText.PREFIX + "Shot complete: " + shot.droppedByAir
                         + " TNT delivered through the sky portals.");
                 if (config != null && config.witherCannonBlocksDamage()) {
-                    owner.sendMessage("[NullArmy] Block damage is enabled for this shot.");
+                    owner.sendMessage(PluginText.PREFIX + "Block damage is enabled for this shot.");
                 } else {
-                    owner.sendMessage("[NullArmy] Block damage is off: the blasts are visual only.");
+                    owner.sendMessage(PluginText.PREFIX + "Block damage is off: the blasts are visual only.");
                 }
             }
         } catch (Throwable ignored) {

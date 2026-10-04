@@ -1,10 +1,15 @@
 package redglitchx.nullarmy.nms.v1_21_11;
 
 import com.mojang.authlib.GameProfile;
+import io.netty.channel.ChannelFutureListener;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.network.CommonListenerCookie;
+import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.world.entity.MoverType;
 import net.minecraft.world.phys.Vec3;
 
@@ -22,9 +27,9 @@ import java.util.logging.Level;
 /**
  * The server-authoritative body of a Null on 1.21.11.
  *
- * <p><b>STATUS: UNVERIFIED.</b> Never compiled, never run - the build
- * environment has no JDK and no dev bundle (blocker B-1). Every NMS signature
- * here is a hypothesis for Phase 1 verification V-04.</p>
+ * <p><b>STATUS: COMPILED; RUNTIME UNVERIFIED.</b> The Paperweight build compiles
+ * this adapter against Paper 1.21.11. A live spawn, tick and packet-broadcast
+ * smoke test is still required before the connection shim is considered proven.</p>
  *
  * <h3>Why extend {@code ServerPlayer} at all</h3>
  * ADR-001: one entity means one hitbox, one inventory and one item ledger,
@@ -39,11 +44,13 @@ import java.util.logging.Level;
  * {@link MoverType#SELF}. So the no-teleport rule is enforced by the
  * interface, not by convention.
  *
- * <h3>Outstanding NMS risk</h3>
- * A {@code ServerPlayer} normally has a non-null {@code connection}, and parts
- * of {@code ServerPlayer#tick} assume one. Overriding {@link #tick()} below is
- * the mitigation, but this is the single riskiest unverified area of the
- * adapter (R-01, R-02, R-03). Confirm against a real server before trusting it.
+ * <h3>Connection safety</h3>
+ * A {@code ServerPlayer} may be visited by server tick and packet-broadcast
+ * paths even though this NPC has no client. A null {@code connection} crashes
+ * those paths outside this entity's {@link #tick()} guard. The constructor gives
+ * every Null a real packet-listener object with outbound sends discarded;
+ * those packets are never sent to another player or retained for a fake client.
+ * This must be smoke-tested on the target Paper build before release.
  *
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
  */
@@ -79,6 +86,40 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         super(server, level, profile, ClientInformation.createDefault());
         this.adapter = adapter;
         this.inventory = new ItemLedger(request.inventoryCapacity(), 200);
+
+        // The server's player work can send packets to this entity before its
+        // first entity tick. Install a non-null listener before registration,
+        // and discard packets for the client that does not exist.
+        this.connection = new ServerGamePacketListenerImpl(server,
+                new DiscardingConnection(), this,
+                CommonListenerCookie.createInitial(profile, false));
+    }
+
+    /**
+     * A real NMS connection with no channel; outbound sends are discarded
+     * rather than queued. The superclass is fully qualified because ServerPlayer
+     * inherits a nested {@code WaypointTransmitter.Connection} with the same name.
+     */
+    private static final class DiscardingConnection extends net.minecraft.network.Connection {
+
+        private DiscardingConnection() {
+            super(PacketFlow.SERVERBOUND);
+        }
+
+        @Override
+        public void send(Packet<?> packet) {
+            // A Null has no client. Do not queue or redirect its packets.
+        }
+
+        @Override
+        public void send(Packet<?> packet, ChannelFutureListener listener) {
+            // No channel exists, so there is no send future to complete.
+        }
+
+        @Override
+        public void send(Packet<?> packet, ChannelFutureListener listener, boolean flush) {
+            // Explicit-flush sends are discarded too.
+        }
     }
 
     // ------------------------------------------------------------ NullBody impl
@@ -189,13 +230,14 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     /**
      * Drives movement through vanilla physics.
      *
-     * <p>Overridden because a {@code ServerPlayer} with no client connection
-     * cannot rely on the normal player tick. We keep only what a Null needs:
-     * movement integration and living-entity upkeep.</p>
+     * <p>Overridden because a server-only {@code ServerPlayer} must not run
+     * normal client synchronization. We keep only what a Null needs: movement
+     * integration and living-entity upkeep. The discard-only listener exists
+     * for server-level packet sends; it does not make this a networked player.</p>
      *
-     * <p><b>UNVERIFIED.</b> The exact set of {@code super} calls needed to keep
-     * a connectionless {@code ServerPlayer} stable must be established
-     * empirically on a real server.</p>
+     * <p><b>UNVERIFIED.</b> The exact set of vanilla living-entity upkeep needed
+     * to keep this specialized player stable must be established on a real
+     * Paper server.</p>
      */
     @Override
     public void tick() {

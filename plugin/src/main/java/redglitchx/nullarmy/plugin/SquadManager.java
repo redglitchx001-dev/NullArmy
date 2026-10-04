@@ -15,6 +15,7 @@ import redglitchx.nullarmy.plugin.config.PluginConfig;
 import redglitchx.nullarmy.plugin.config.Reloadable;
 import redglitchx.nullarmy.plugin.skin.SkinData;
 import redglitchx.nullarmy.plugin.util.Guard;
+import redglitchx.nullarmy.plugin.util.PluginText;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -1114,7 +1115,7 @@ public final class SquadManager implements Reloadable {
         final int greeted = done;
         if (greeted > 0) {
             Guard.attempt(logger, "greeting message", () ->
-                    target.sendMessage("[NullArmy] " + greeted
+                    target.sendMessage(PluginText.PREFIX + greeted
                             + (greeted == 1 ? " Null" : " Nulls") + " raise a hand to you."));
         }
         return done;

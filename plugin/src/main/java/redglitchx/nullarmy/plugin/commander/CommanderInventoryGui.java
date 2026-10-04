@@ -6,6 +6,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.ItemMeta;
 
 import java.util.List;
@@ -62,6 +63,11 @@ public final class CommanderInventoryGui implements InventoryHolder {
 
     private final Inventory inventory;
     private final ItemStack[] working;
+    private boolean saved;
+    private ItemStack[] playerStorageBefore;
+    private ItemStack playerOffHandBefore;
+    private ItemStack playerCursorBefore;
+    private int heldSlotBefore;
 
     public CommanderInventoryGui(String title, ItemStack[] currentLoadout) {
         this.working = new ItemStack[CommanderManager.LOADOUT_SLOTS];
@@ -95,12 +101,12 @@ public final class CommanderInventoryGui implements InventoryHolder {
         inventory.setItem(BUTTON_SAVE, button(Material.LIME_STAINED_GLASS_PANE,
                 "Save and close", "Give the Commander this loadout."));
         inventory.setItem(BUTTON_CANCEL, button(Material.GRAY_STAINED_GLASS_PANE,
-                "Cancel", "Close without saving."));
+                "Cancel", "Discard edits and restore your inventory."));
         inventory.setItem(BUTTON_INFO, button(Material.BOOK,
                 "Commander loadout",
                 "Helmet / chest / legs / boots / offhand on the top row.",
                 "Storage below, hotbar on row 5.",
-                "Items you place here are what the Commander spawns with."));
+                "Save commits; Cancel restores your inventory."));
     }
 
     private void setTo(int guiSlot, ItemStack stack) {
@@ -193,8 +199,52 @@ public final class CommanderInventoryGui implements InventoryHolder {
         return working;
     }
 
+    void markSaved() {
+        saved = true;
+    }
+
+    boolean wasSaved() {
+        return saved;
+    }
+
+    /** Restores the player's pre-edit inventory when the editor closes unsaved. */
+    void restorePlayerInventory(Player viewer) {
+        if (saved || viewer == null || playerStorageBefore == null) {
+            return;
+        }
+        PlayerInventory playerInventory = viewer.getInventory();
+        playerInventory.setStorageContents(cloneStacks(playerStorageBefore));
+        playerInventory.setItemInOffHand(emptyIfNull(playerOffHandBefore));
+        viewer.setItemOnCursor(emptyIfNull(playerCursorBefore));
+        playerInventory.setHeldItemSlot(heldSlotBefore);
+    }
+
+    private static ItemStack[] cloneStacks(ItemStack[] source) {
+        ItemStack[] copy = new ItemStack[source.length];
+        for (int i = 0; i < source.length; i++) {
+            copy[i] = cloneStack(source[i]);
+        }
+        return copy;
+    }
+
+    private static ItemStack cloneStack(ItemStack stack) {
+        return stack == null ? null : stack.clone();
+    }
+
+    private static ItemStack emptyIfNull(ItemStack stack) {
+        return stack == null ? new ItemStack(Material.AIR) : stack.clone();
+    }
+
     /** Opens the screen for a player. */
     public void open(Player viewer) {
+        if (viewer == null) {
+            return;
+        }
+        PlayerInventory playerInventory = viewer.getInventory();
+        playerStorageBefore = cloneStacks(playerInventory.getStorageContents());
+        playerOffHandBefore = cloneStack(playerInventory.getItemInOffHand());
+        playerCursorBefore = cloneStack(viewer.getItemOnCursor());
+        heldSlotBefore = playerInventory.getHeldItemSlot();
         viewer.openInventory(inventory);
     }
 }

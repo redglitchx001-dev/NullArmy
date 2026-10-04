@@ -13,6 +13,7 @@ import redglitchx.nullarmy.plugin.command.NullCommand;
 import redglitchx.nullarmy.plugin.config.PluginConfig;
 import redglitchx.nullarmy.plugin.config.Reloadable;
 import redglitchx.nullarmy.plugin.util.Guard;
+import redglitchx.nullarmy.plugin.util.PluginText;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -51,7 +52,7 @@ import java.util.UUID;
  */
 public final class ChatDirector implements Listener, Reloadable {
 
-    private static final String PREFIX = "[NullArmy] ";
+    private static final String PREFIX = PluginText.PREFIX;
 
     /** Who a session is with. */
     public enum Speaker {

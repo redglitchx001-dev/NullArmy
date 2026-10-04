@@ -1,11 +1,14 @@
 package redglitchx.nullarmy.plugin.item;
 
 import org.bukkit.Material;
+import org.bukkit.MusicInstrument;
 import org.bukkit.NamespacedKey;
+import org.bukkit.Sound;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.MusicInstrumentMeta;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
@@ -61,10 +64,10 @@ public final class SummonItems {
     /** The Call Horn: a real Goat Horn, named, enchanted, glinting and tagged. */
     public static ItemStack callHorn(Plugin plugin) {
         return build(plugin, Material.GOAT_HORN, HORN_KEY, LEGACY_HORN_NAME,
-                "Right-click to call the Nulls.",
-                "Then type how many should come in chat.",
+                "Call Goat Horn: right-click to sound the call.",
+                "Then type how many Nulls should come in chat.",
                 "They walk out of portal effects onto safe ground.",
-                "Owner-issued item. Never dropped, never granted.");
+                "Owner-issued item. Never granted spontaneously.");
     }
 
     /** The Totem Of Null: a real Totem of Undying, tagged the same way. */
@@ -96,6 +99,12 @@ public final class SummonItems {
             meta.customName(Component.text(DISPLAY_NAME)
                     .color(NamedTextColor.DARK_PURPLE)
                     .decoration(TextDecoration.ITALIC, false));
+
+            // The summon horn is specifically the vanilla "Call" instrument,
+            // not whichever goat-horn instrument happened to be on the item.
+            if (material == Material.GOAT_HORN && meta instanceof MusicInstrumentMeta) {
+                ((MusicInstrumentMeta) meta).setInstrument(MusicInstrument.CALL_GOAT_HORN);
+            }
 
             List<Component> lore = new ArrayList<>();
             for (String line : loreLines) {
@@ -167,6 +176,11 @@ public final class SummonItems {
     /** True when this exact stack is a Call Horn. */
     public static boolean isCallHorn(ItemStack item) {
         return HORN_KEY.equals(kindOf(item));
+    }
+
+    /** The exact vanilla sound belonging to the Call Goat Horn instrument. */
+    public static Sound callHornSound() {
+        return MusicInstrument.CALL_GOAT_HORN.getSound();
     }
 
     /** True when this exact stack is a Totem Of Null. */

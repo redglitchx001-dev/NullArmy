@@ -40,9 +40,11 @@ import java.util.logging.Level;
  *
  * <h2>The rule this class is built around</h2>
  * <p>Nothing may escape {@code onEnable}, {@code onDisable}, a command, a
- * listener or a tick. A single connectionless {@code ServerPlayer} that NPEs
- * inside the server's entity tick does not throw a nice chat message - it takes
- * the whole server down and writes a crash report. So:</p>
+ * listener or a tick. A fake {@code ServerPlayer} with a null packet listener
+ * can crash the server's own packet-send loop, outside the NPC tick guard. The
+ * version adapter installs a non-null listener that discards outgoing sends
+ * before registering each Null; the plugin still guards the spawn
+ * path and all other risky work. So:</p>
  * <ul>
  *   <li>{@link #onEnable()} is wrapped as a whole, and each step is wrapped
  *       individually, so one broken subsystem cannot stop the rest;</li>
