@@ -1703,27 +1703,27 @@ public final class CoreTestSuite {
         java.util.Map<String, Integer> stock = new java.util.LinkedHashMap<>();
         stock.put("COBBLESTONE", 64);
         stock.put("DEEPSLATE", 64);
-        redglitchx.nullarmy.core.build.FallbackPlanner.Plan bridge =
-                redglitchx.nullarmy.core.build.FallbackPlanner.plan("build a 6 block bridge", 0, 0, 0, 0, stock);
+        redglitchx.nullarmy.core.construct.FallbackPlanner.Plan bridge =
+                redglitchx.nullarmy.core.construct.FallbackPlanner.plan("build a 6 block bridge", 0, 0, 0, 0, stock);
         check(bridge != null, "a bridge is planned");
         checkEquals(6, bridge.placements(), "the bridge is 6 blocks long");
         int expectedZ = 1;
-        for (redglitchx.nullarmy.core.build.BuildStep step : bridge.steps()) {
-            if (step.action() == redglitchx.nullarmy.core.build.BuildStep.Action.PLACE) {
+        for (redglitchx.nullarmy.core.construct.BuildStep step : bridge.steps()) {
+            if (step.action() == redglitchx.nullarmy.core.construct.BuildStep.Action.PLACE) {
                 checkEquals(-1, step.y(), "bridge blocks are at floor level");
                 checkEquals(expectedZ++, step.z(), "bridge blocks run forward one after another");
             }
         }
-        redglitchx.nullarmy.core.build.FallbackPlanner.Plan hut =
-                redglitchx.nullarmy.core.build.FallbackPlanner.plan("a small hut", 0, 0, 0, 2, stock);
+        redglitchx.nullarmy.core.construct.FallbackPlanner.Plan hut =
+                redglitchx.nullarmy.core.construct.FallbackPlanner.plan("a small hut", 0, 0, 0, 2, stock);
         check(hut != null, "a hut is planned");
         checkEquals(71, hut.placements(), "5x5 hut: 46 wall blocks (door gap) + 25 roof");
         checkEquals(0, hut.shortfall(), "128 blocks are enough for the hut");
         int lastY = Integer.MIN_VALUE;
         java.util.Set<String> seen = new java.util.HashSet<>();
         boolean moved = false;
-        for (redglitchx.nullarmy.core.build.BuildStep step : hut.steps()) {
-            if (step.action() == redglitchx.nullarmy.core.build.BuildStep.Action.MOVE) {
+        for (redglitchx.nullarmy.core.construct.BuildStep step : hut.steps()) {
+            if (step.action() == redglitchx.nullarmy.core.construct.BuildStep.Action.MOVE) {
                 moved = true;
                 continue;
             }
@@ -1733,18 +1733,18 @@ public final class CoreTestSuite {
             check(step.z() <= 0, "facing north (2) puts the hut at negative z");
         }
         check(moved, "the hut plan walks between placements");
-        java.util.List<String> problems = redglitchx.nullarmy.core.build.BuildPlanValidator.validate(
+        java.util.List<String> problems = redglitchx.nullarmy.core.construct.BuildPlanValidator.validate(
                 hut.steps(), 50, -8, 24, 400, java.util.Collections.emptySet(), b -> true);
         check(problems.isEmpty(), "the fallback hut passes the validator: " + problems);
         java.util.List<int[]> logs = java.util.Arrays.asList(new int[] {10, 0, 0}, new int[] {3, 0, 1},
                 new int[] {3, 1, 1}, new int[] {20, 0, 5});
-        redglitchx.nullarmy.core.build.FallbackPlanner.Plan gather =
-                redglitchx.nullarmy.core.build.FallbackPlanner.gather(logs, 0, 0, 0, 3);
+        redglitchx.nullarmy.core.construct.FallbackPlanner.Plan gather =
+                redglitchx.nullarmy.core.construct.FallbackPlanner.gather(logs, 0, 0, 0, 3);
         checkEquals(9, gather.steps().size(), "3 logs: move, break, pick up each");
         checkEquals(3, gather.steps().get(1).x(), "the nearest log is chopped first");
-        checkEquals(redglitchx.nullarmy.core.build.BuildStep.Action.PICKUP, gather.steps().get(2).action(),
+        checkEquals(redglitchx.nullarmy.core.construct.BuildStep.Action.PICKUP, gather.steps().get(2).action(),
                 "the drop is picked up after the break");
-        check(redglitchx.nullarmy.core.build.FallbackPlanner.plan("dance", 0, 0, 0, 0, stock) == null,
+        check(redglitchx.nullarmy.core.construct.FallbackPlanner.plan("dance", 0, 0, 0, 0, stock) == null,
                 "an unknown goal is not a plan");
     }
 
@@ -1752,47 +1752,47 @@ public final class CoreTestSuite {
         String reply = "Sure! Here is the plan:\n```json\n{\"steps\":[{\"null\":\"Kr4v\",\"action\":\"MOVE\","
                 + "\"x\":1,\"y\":0,\"z\":2},{\"action\":\"place\",\"x\":1,\"y\":0,\"z\":3,"
                 + "\"block\":\"minecraft:cobblestone\"},{\"action\":\"WAIT\",\"ticks\":10}]}\n```";
-        redglitchx.nullarmy.core.build.BuildPlanParser.Result ok =
-                redglitchx.nullarmy.core.build.BuildPlanParser.parse(reply, 400);
+        redglitchx.nullarmy.core.construct.BuildPlanParser.Result ok =
+                redglitchx.nullarmy.core.construct.BuildPlanParser.parse(reply, 400);
         check(ok.ok(), "fenced JSON is read: " + ok.error());
         checkEquals(3, ok.steps().size(), "three steps");
         checkEquals("Kr4v", ok.steps().get(0).nullName(), "null name kept");
         checkEquals("COBBLESTONE", ok.steps().get(1).block(), "block normalised");
         checkEquals(10, ok.steps().get(2).ticks(), "wait ticks read");
-        check(!redglitchx.nullarmy.core.build.BuildPlanParser.parse("{\"steps\":[{\"action\":\"PASTE\","
+        check(!redglitchx.nullarmy.core.construct.BuildPlanParser.parse("{\"steps\":[{\"action\":\"PASTE\","
                 + "\"x\":0,\"y\":0,\"z\":0}]}", 400).ok(), "an unknown action is refused");
-        check(!redglitchx.nullarmy.core.build.BuildPlanParser.parse("{\"steps\":[{\"action\":\"PLACE\","
+        check(!redglitchx.nullarmy.core.construct.BuildPlanParser.parse("{\"steps\":[{\"action\":\"PLACE\","
                 + "\"x\":0,\"y\":0,\"z\":0}]}", 400).ok(), "PLACE without a block is refused");
-        check(!redglitchx.nullarmy.core.build.BuildPlanParser.parse("{\"steps\":[{\"action\":\"MOVE\","
+        check(!redglitchx.nullarmy.core.construct.BuildPlanParser.parse("{\"steps\":[{\"action\":\"MOVE\","
                 + "\"x\":0.5,\"y\":0,\"z\":0}]}", 400).ok(), "fractional coordinates are refused");
-        check(!redglitchx.nullarmy.core.build.BuildPlanParser.parse("no json here", 400).ok(),
+        check(!redglitchx.nullarmy.core.construct.BuildPlanParser.parse("no json here", 400).ok(),
                 "prose is refused");
-        check(!redglitchx.nullarmy.core.build.BuildPlanParser.parse(
+        check(!redglitchx.nullarmy.core.construct.BuildPlanParser.parse(
                 "[{\"action\":\"WAIT\"},{\"action\":\"WAIT\"}]", 1).ok(), "max-steps is enforced");
-        String json = redglitchx.nullarmy.core.build.BuildPlanParser.toJson(ok.steps());
-        checkEquals(ok.steps(), redglitchx.nullarmy.core.build.BuildPlanParser.parse(json, 400).steps(),
+        String json = redglitchx.nullarmy.core.construct.BuildPlanParser.toJson(ok.steps());
+        checkEquals(ok.steps(), redglitchx.nullarmy.core.construct.BuildPlanParser.parse(json, 400).steps(),
                 "steps round-trip through JSON");
     }
 
     private static void testBuildPlanValidator() {
         java.util.Set<String> names = new java.util.HashSet<>(java.util.Arrays.asList("Kr4v", "Zed"));
-        java.util.List<redglitchx.nullarmy.core.build.BuildStep> good = java.util.Arrays.asList(
-                redglitchx.nullarmy.core.build.BuildStep.move(2, 0, 2).forNull("kr4v"),
-                redglitchx.nullarmy.core.build.BuildStep.place(3, 0, 2, "COBBLESTONE"));
-        check(redglitchx.nullarmy.core.build.BuildPlanValidator.validate(good, 50, -8, 24, 400, names,
+        java.util.List<redglitchx.nullarmy.core.construct.BuildStep> good = java.util.Arrays.asList(
+                redglitchx.nullarmy.core.construct.BuildStep.move(2, 0, 2).forNull("kr4v"),
+                redglitchx.nullarmy.core.construct.BuildStep.place(3, 0, 2, "COBBLESTONE"));
+        check(redglitchx.nullarmy.core.construct.BuildPlanValidator.validate(good, 50, -8, 24, 400, names,
                 b -> b.equals("COBBLESTONE")).isEmpty(), "a sane plan passes");
-        java.util.List<redglitchx.nullarmy.core.build.BuildStep> bad = java.util.Arrays.asList(
-                redglitchx.nullarmy.core.build.BuildStep.place(51, 0, 0, "COBBLESTONE"),
-                redglitchx.nullarmy.core.build.BuildStep.place(1, 40, 0, "COBBLESTONE"),
-                redglitchx.nullarmy.core.build.BuildStep.place(2, 0, 0, "DIAMOND_SWORD"),
-                redglitchx.nullarmy.core.build.BuildStep.place(3, 0, 0, "COBBLESTONE").forNull("Ghost"),
-                redglitchx.nullarmy.core.build.BuildStep.place(4, 0, 0, "COBBLESTONE"),
-                redglitchx.nullarmy.core.build.BuildStep.place(4, 0, 0, "COBBLESTONE"));
-        java.util.List<String> problems = redglitchx.nullarmy.core.build.BuildPlanValidator.validate(
+        java.util.List<redglitchx.nullarmy.core.construct.BuildStep> bad = java.util.Arrays.asList(
+                redglitchx.nullarmy.core.construct.BuildStep.place(51, 0, 0, "COBBLESTONE"),
+                redglitchx.nullarmy.core.construct.BuildStep.place(1, 40, 0, "COBBLESTONE"),
+                redglitchx.nullarmy.core.construct.BuildStep.place(2, 0, 0, "DIAMOND_SWORD"),
+                redglitchx.nullarmy.core.construct.BuildStep.place(3, 0, 0, "COBBLESTONE").forNull("Ghost"),
+                redglitchx.nullarmy.core.construct.BuildStep.place(4, 0, 0, "COBBLESTONE"),
+                redglitchx.nullarmy.core.construct.BuildStep.place(4, 0, 0, "COBBLESTONE"));
+        java.util.List<String> problems = redglitchx.nullarmy.core.construct.BuildPlanValidator.validate(
                 bad, 50, -8, 24, 400, names, b -> b.equals("COBBLESTONE"));
         checkEquals(5, problems.size(), "outside zone, too high, not a block, unknown Null, duplicate: "
                 + problems);
-        check(!redglitchx.nullarmy.core.build.BuildPlanValidator.validate(good, 50, -8, 24, 1, names,
+        check(!redglitchx.nullarmy.core.construct.BuildPlanValidator.validate(good, 50, -8, 24, 1, names,
                 b -> true).isEmpty(), "a plan longer than max-steps is refused");
     }
 

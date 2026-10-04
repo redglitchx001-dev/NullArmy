@@ -639,6 +639,15 @@ public final class SquadManager implements Reloadable {
         }
     }
 
+    /**
+     * Spawns a squad at exact spots, without doorways - used by the self test,
+     * which needs bodies in known places (a 3x3 crowd, a formation anchor).
+     */
+    public Squad spawnSquadAt(UUID owner, String worldName, List<Vec3d> spots) {
+        List<Squad> existing = preflight(owner, spots.size());
+        return spawnAll(owner, worldName, spots, false, existing);
+    }
+
     /** Spread in the air under a sky mouth: rings of eight, capped at 3 blocks. */
     public List<Vec3d> planAirSpots(String worldName, Vec3d mouth, int count) {
         List<Vec3d> out = new ArrayList<>();

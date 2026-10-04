@@ -333,6 +333,13 @@ public final class SummonFlow implements Listener, Reloadable {
     }
 
     /** True when this player owes an answer to the prompt. */
+    /** Drops an open prompt without a message (self test clean-up). */
+    public void clearPending(UUID player) {
+        if (player != null) {
+            pending.remove(player);
+        }
+    }
+
     public boolean hasPending(UUID player) {
         return player != null && pending.containsKey(player);
     }

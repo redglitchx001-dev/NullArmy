@@ -17,10 +17,10 @@ import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 
-import redglitchx.nullarmy.core.build.BuildPlanParser;
-import redglitchx.nullarmy.core.build.BuildPlanValidator;
-import redglitchx.nullarmy.core.build.BuildStep;
-import redglitchx.nullarmy.core.build.FallbackPlanner;
+import redglitchx.nullarmy.core.construct.BuildPlanParser;
+import redglitchx.nullarmy.core.construct.BuildPlanValidator;
+import redglitchx.nullarmy.core.construct.BuildStep;
+import redglitchx.nullarmy.core.construct.FallbackPlanner;
 import redglitchx.nullarmy.core.json.Json;
 import redglitchx.nullarmy.core.math.Vec3d;
 import redglitchx.nullarmy.nms.NullBody;
