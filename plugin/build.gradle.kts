@@ -1,9 +1,11 @@
 /*
- * plugin - Bukkit bootstrap. Commands, configuration, persistence, lifecycle.
+ * plugin - Paper bootstrap. Commands, configuration, persistence, lifecycle.
  *
- * Depends on the Paper API (provided by the server at runtime - NOT a plugin
- * dependency, so the "zero runtime dependencies" rule is preserved).
+ * Paper is provided by the server. The project modules are compiled into the
+ * final plugin jar; Paper API and NMS/server classes are never bundled.
  */
+import org.gradle.api.file.DuplicatesStrategy
+
 plugins {
     java
 }
@@ -26,7 +28,25 @@ java {
 }
 
 tasks.processResources {
-    filesMatching("paper-plugin.yml") {
+    inputs.property("version", project.version.toString())
+    filteringCharset = "UTF-8"
+    filesMatching("plugin.yml") {
         expand("version" to project.version.toString())
+    }
+}
+
+// The plugin loader does not resolve Gradle project dependencies from its
+// plugins/ directory. Merge only our own module classes; never shade Paper/NMS.
+val bundledModules = listOf(":core", ":nms:api", ":nms:v1_21_11")
+
+tasks.jar {
+    archiveBaseName.set("NullArmy")
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    dependsOn(bundledModules.map { "$it:classes" })
+    from(bundledModules.map { modulePath ->
+        project(modulePath).layout.buildDirectory.dir("classes/java/main")
+    })
+    manifest {
+        attributes(mapOf("paperweight-mappings-namespace" to "mojang"))
     }
 }

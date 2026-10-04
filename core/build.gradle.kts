@@ -19,3 +19,17 @@ java {
     }
     withSourcesJar()
 }
+
+// CoreTestSuite is deliberately dependency-free and uses a main method instead
+// of JUnit. Wire it into `check` so a normal clean build actually executes it.
+val coreTestSuite by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Runs the dependency-free core test suite."
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("redglitchx.nullarmy.core.CoreTestSuite")
+}
+
+tasks.named("check") {
+    dependsOn(coreTestSuite)
+}

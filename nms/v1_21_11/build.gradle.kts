@@ -1,25 +1,27 @@
 /*
  * nms/v1_21_11 - the Paper 1.21.11 adapter.
  *
- * paperweight-userdev is the ONLY supported way to use NMS on Paper
- * (see IMPLEMENTATION_PLAN.md section 3.1), which is why Gradle is mandatory.
- *
- * VERIFY BEFORE RELYING ON THIS (IMPLEMENTATION_PLAN.md V-05, V-02):
- *   - paperweight plugin version and dev-bundle coordinates must be pinned to
- *     a real published pair for 1.21.11.
- *   - Per A-14 we ship Mojang-mapped, NOT reobfuscated, because Paper 1.21.11
- *     build 17060+ removed runtime plugin remapping.
+ * paperweight-userdev is the supported way to access Paper NMS. This adapter
+ * is compiled in Mojang mappings and is only intended to run on Paper.
  */
 plugins {
     java
-    id("io.papermc.paperweight.userdev")
+    id("io.papermc.paperweight.userdev") version "2.0.0-beta.24"
+}
+
+repositories {
+    maven("https://repo.papermc.io/repository/maven-public/")
 }
 
 dependencies {
-    paperweight.paperDevBundle("io.papermc.paper:dev-bundle:1.21.11-R0.1-SNAPSHOT")
+    paperweight.paperDevBundle("1.21.11-R0.1-SNAPSHOT")
     implementation(project(":nms:api"))
     implementation(project(":core"))
 }
+
+// The final plugin jar is Mojang-mapped and targets Paper, not Spigot.
+paperweight.reobfArtifactConfiguration =
+    io.papermc.paperweight.userdev.ReobfArtifactConfiguration.MOJANG_PRODUCTION
 
 java {
     toolchain { languageVersion.set(JavaLanguageVersion.of(21)) }

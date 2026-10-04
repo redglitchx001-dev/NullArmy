@@ -1,0 +1,46 @@
+# Bukkit-style descriptor is used intentionally: it provides command metadata
+# to JavaPlugin#getCommand while the Paper-only NMS adapter is Mojang-mapped.
+name: NullArmy
+version: ${version}
+main: redglitchx.nullarmy.plugin.NullArmyPlugin
+api-version: '1.21.11'
+authors: [RedGlitchX]
+description: Version-specific Paper plugin for physically simulated Null NPCs.
+website: https://github.com/redglitchx001-dev/NullArmy
+
+commands:
+  null:
+    description: Manage NullArmy squads and plugin features.
+    usage: "/null <gui|commander|loadout|skin|features|chat|attack|attackx|follow|build|status|stop|dismiss|ban|kill>"
+
+permissions:
+  nullarmy.summon:
+    description: Summon Nulls with a Call Horn or Totem Of Null.
+    default: op
+  nullarmy.gui:
+    description: Open the Commander loadout editor.
+    default: op
+  nullarmy.commander:
+    description: Summon the Null Commander out of a portal.
+    default: op
+  nullarmy.admin:
+    description: View NullArmy diagnostics and manage all squads.
+    default: op
+  nullarmy.chat:
+    description: Toggle Null chat.
+    default: op
+  nullarmy.attack:
+    description: Set a physical pursuit/combat objective.
+    default: op
+  nullarmy.attackx:
+    description: Use the adaptive extreme-combat profile.
+    default: op
+  nullarmy.follow:
+    description: Make Nulls follow you.
+    default: op
+  nullarmy.build:
+    description: Command Nulls to build.
+    default: op
+  nullarmy.moderation:
+    description: Moderation actions; never usable by an AI agent.
+    default: false
