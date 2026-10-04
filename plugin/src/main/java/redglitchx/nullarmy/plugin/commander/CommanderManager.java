@@ -18,6 +18,8 @@ import redglitchx.nullarmy.nms.LoadoutSlot;
 import redglitchx.nullarmy.nms.NullBody;
 import redglitchx.nullarmy.nms.VersionAdapter;
 import redglitchx.nullarmy.plugin.NullArmyPlugin;
+import redglitchx.nullarmy.plugin.config.PluginConfig;
+import redglitchx.nullarmy.plugin.config.Reloadable;
 import redglitchx.nullarmy.plugin.skin.SkinData;
 import redglitchx.nullarmy.plugin.skin.SkinResolver;
 
@@ -41,7 +43,7 @@ import java.util.logging.Level;
  *
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
  */
-public final class CommanderManager implements Listener {
+public final class CommanderManager implements Listener, Reloadable {
 
     /** 36 storage + 4 armour + 1 offhand, matching a player inventory. */
     public static final int LOADOUT_SLOTS = 41;
@@ -127,6 +129,17 @@ public final class CommanderManager implements Listener {
     public SkinData skin() { return skin; }
     public String commanderName() { return name; }
     public ItemStack[] loadout() { return loadout; }
+
+    /**
+     * A config reload does not change anything the Commander is already
+     * wearing: the loadout lives in {@code commander.yml} and is edited through
+     * the GUI, never in {@code config.yml}. The hook exists so {@code /null
+     * reload} can tell every subsystem in one pass without special cases.
+     */
+    @Override
+    public void onConfigReloaded(PluginConfig config) {
+        // Intentionally empty: see the note above.
+    }
 
     public boolean isSpawned() {
         return commander != null && commander.isAlive();
