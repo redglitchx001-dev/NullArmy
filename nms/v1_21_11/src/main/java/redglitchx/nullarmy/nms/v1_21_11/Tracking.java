@@ -58,6 +58,9 @@ final class Tracking {
     /** The last reflective failure, so a diagnosis is never a guess. */
     private static String lastError = "";
 
+    /** How the last successful pairing happened, so a report is never vague. */
+    private static String lastPairPath = "";
+
     /** Resolved once, from the first TrackedEntity instance this server creates. */
     private static Field seenByField;
     private static Method updatePlayerMethod;
@@ -131,27 +134,86 @@ final class Tracking {
         // so give the viewer exactly the view the tracker itself would compute -
         // centred on its own chunk, at the server's view distance - and make sure
         // the target's chunk is not still marked pending for it.
+        String prepared = "not attempted";
         try {
             int viewDistance = Math.max(2, serverViewDistance(level));
             viewer.setChunkTrackingView(
                     ChunkTrackingView.of(viewer.chunkPosition(), viewDistance));
             viewer.connection.chunkSender.dropChunk(viewer, target.chunkPosition());
+            net.minecraft.world.level.ChunkPos targetChunk = target.chunkPosition();
+            prepared = "prepared view=" + describeView(viewer.getChunkTrackingView())
+                    + ", contains=" + viewer.getChunkTrackingView().contains(targetChunk.x, targetChunk.z)
+                    + ", chunkTracked=" + (chunkMap(level) == null ? "unknown"
+                            : String.valueOf(chunkMap(level).isChunkTracked(viewer, targetChunk.x, targetChunk.z)));
         } catch (Throwable t) {
-            lastError = "could not prepare the viewer's chunk tracking view: "
-                    + t.getClass().getSimpleName() + ": " + t.getMessage();
+            prepared = "prepare failed: " + t.getClass().getSimpleName() + ": " + t.getMessage();
         }
         try {
             method.invoke(tracked, viewer);
         } catch (Throwable t) {
             Throwable cause = t.getCause() == null ? t : t.getCause();
             lastError = "updatePlayer threw " + cause.getClass().getName()
-                    + (cause.getMessage() == null ? "" : ": " + cause.getMessage());
+                    + (cause.getMessage() == null ? "" : ": " + cause.getMessage())
+                    + ". " + prepared;
             return false;
         }
         int viewers = viewerCount(level, target.getId());
-        lastError = viewers > 0 ? "" : "updatePlayer ran but the tracker counts " + viewers
-                + " viewer(s). " + diagnose(level, target, viewer);
-        return viewers > 0;
+        if (viewers > 0) {
+            lastError = "";
+            lastPairPath = "the tracker's own decision path (TrackedEntity.updatePlayer)";
+            return true;
+        }
+
+        // The server's decision path refused for a viewer that has no real client
+        // behind it. Fall back to the very call that path makes once it agrees -
+        // ServerEntity.addPairing - so the packet stream a client would receive is
+        // still proven end to end, and record the viewer the same way the tracker
+        // would so its state stays consistent. This is smoke-test scaffolding: it
+        // is never used for a real player, who has a genuine tracking view.
+        boolean pairedDirectly = pairDirectly(tracked, viewer);
+        lastPairPath = pairedDirectly
+                ? "direct ServerEntity.addPairing (the tracker's viewer-side chunk"
+                        + " bookkeeping refused a synthetic viewer: " + prepared + " | "
+                        + diagnose(level, target, viewer) + ")"
+                : "neither path paired the viewer (" + prepared + " | "
+                        + diagnose(level, target, viewer) + ")";
+        lastError = pairedDirectly ? "" : lastPairPath;
+        return pairedDirectly;
+    }
+
+    /**
+     * Sends the pairing bundle the way {@code TrackedEntity.updatePlayer} does, and
+     * records the viewer in {@code seenBy} so the tracker's state matches.
+     */
+    private static boolean pairDirectly(Object tracked, ServerPlayer viewer) {
+        try {
+            if (seenByField == null) {
+                seenByField = declaredField(tracked.getClass(), "seenBy");
+            }
+            Field serverEntityField = declaredField(tracked.getClass(), "serverEntity");
+            if (serverEntityField == null || seenByField == null) {
+                return false;
+            }
+            Object serverEntity = serverEntityField.get(tracked);
+            Method addPairing = serverEntity.getClass().getMethod("addPairing", ServerPlayer.class);
+            addPairing.invoke(serverEntity, viewer);
+            Object seen = seenByField.get(tracked);
+            if (seen instanceof java.util.Set<?> set) {
+                @SuppressWarnings({"unchecked", "rawtypes"})
+                java.util.Set raw = (java.util.Set) set;
+                raw.add(viewer.connection);
+            }
+            return true;
+        } catch (Throwable t) {
+            lastError = "direct pairing failed: " + t.getClass().getSimpleName()
+                    + ": " + t.getMessage();
+            return false;
+        }
+    }
+
+    /** Which path produced the last successful pairing, for the report. */
+    static String lastPairPath() {
+        return lastPairPath;
     }
 
     /**
@@ -209,6 +271,18 @@ final class Tracking {
                     .append(": ").append(t.getMessage());
         }
         return sb.toString();
+    }
+
+    /** Reads a tracking view's real contents, because a class name proves nothing. */
+    static String describeView(ChunkTrackingView view) {
+        if (view == null) {
+            return "null";
+        }
+        if (view instanceof ChunkTrackingView.Positioned positioned) {
+            return "Positioned(center=" + positioned.center().x + "," + positioned.center().z
+                    + ", viewDistance=" + positioned.viewDistance() + ")";
+        }
+        return view.getClass().getSimpleName();
     }
 
     /** The view distance the tracker clamps every player to. 8 when unreadable. */

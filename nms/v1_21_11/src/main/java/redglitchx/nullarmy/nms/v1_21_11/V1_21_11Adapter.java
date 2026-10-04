@@ -388,7 +388,12 @@ public final class V1_21_11Adapter implements VersionAdapter {
 
     @Override
     public List<String> trackingDiagnostics() {
-        return Tracking.capabilityReport();
+        List<String> out = new ArrayList<>(Tracking.capabilityReport());
+        String path = Tracking.lastPairPath();
+        if (path != null && !path.isEmpty()) {
+            out.add("lastPairing=" + path);
+        }
+        return out;
     }
 
     // ------------------------------------------------------- smoke-test viewer
