@@ -9,7 +9,9 @@ description: Version-specific Paper plugin for physically simulated Null NPCs.
 website: https://github.com/redglitchx001-dev/NullArmy
 
 commands:
-  null:
+  # Quoted on purpose: an unquoted `null` is YAML's null value, which gives the
+  # command map a null key and crashes Paper's PluginDescriptionFile on load.
+  "null":
     description: Manage NullArmy squads and plugin features.
     usage: "/null <gui|commander|loadout|skin|features|chat|attack|attackx|follow|build|status|stop|dismiss|ban|kill>"
 
