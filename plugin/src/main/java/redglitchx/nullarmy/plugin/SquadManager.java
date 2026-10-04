@@ -584,7 +584,7 @@ public final class SquadManager implements Reloadable {
         }
 
         VersionAdapter.SpawnRequest request = new VersionAdapter.SpawnRequest(
-                owner, NameGenerator.next(), worldName, spot, 36 * 64,
+                owner, uniqueProfileName(), worldName, spot, 36 * 64,
                 skinValue, skinSignature, airborne);
         try {
             NullBody body = adapter.spawnNull(request);
@@ -610,6 +610,48 @@ public final class SquadManager implements Reloadable {
                             + " Restart or run /null reload to try again after fixing the cause.");
             throw new IllegalStateException("the server refused to create the NPC: " + reason);
         }
+    }
+
+    /**
+     * A random alphanumeric profile name that nobody else is using.
+     *
+     * <p>The configured skin account is the <b>texture</b> source only - it is
+     * never a Null's name, and two Nulls never share one. Names are checked
+     * against live Nulls, the Commander and every online player, because a
+     * duplicate shows up in the tab list as two identical entries and confuses
+     * anything that looks players up by name.</p>
+     */
+    private String uniqueProfileName() {
+        java.util.Set<String> taken = new java.util.HashSet<>();
+        try {
+            for (NullBody body : allMembers()) {
+                String name = body.profileName();
+                if (name != null) {
+                    taken.add(name.toLowerCase(Locale.ROOT));
+                }
+            }
+            if (plugin.commander() != null && plugin.commander().commanderName() != null) {
+                taken.add(plugin.commander().commanderName().toLowerCase(Locale.ROOT));
+            }
+            for (Player online : Bukkit.getOnlinePlayers()) {
+                if (online != null && online.getName() != null) {
+                    taken.add(online.getName().toLowerCase(Locale.ROOT));
+                }
+            }
+        } catch (Throwable t) {
+            logger.fine("[NullArmy] name uniqueness check skipped: " + Guard.describe(t));
+        }
+        for (int attempt = 0; attempt < 24; attempt++) {
+            String candidate = NameGenerator.next();
+            if (!taken.contains(candidate.toLowerCase(Locale.ROOT))) {
+                return candidate;
+            }
+        }
+        // Astronomically unlikely with a 62^16 space; suffixing keeps it legal and
+        // unique rather than handing out a name that is already taken.
+        String fallback = NameGenerator.next();
+        return fallback.substring(0, Math.min(12, fallback.length()))
+                + Long.toString(System.nanoTime() % 10000L);
     }
 
     /** Plays the summon portal effects. Cosmetic, throttled, never fatal. */

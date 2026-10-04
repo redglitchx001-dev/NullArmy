@@ -287,7 +287,7 @@ if [ -f "$NULLARMY_LOG" ]; then
             line = $0; sub(/\r$/, "", line); gsub(/%/, "%%", line)
             head = head line "%0A"; next
         }
-        /\[NullArmy\]\[SELFTEST\] (RESULT|starting|adapter|arrival|shutdown progress|dismissed)/ {
+        /\[NullArmy\]\[SELFTEST\] (RESULT|starting|adapter|arrival|pairing path|shutdown progress|dismissed)/ {
             line = $0; sub(/\r$/, "", line); gsub(/%/, "%%", line)
             head = head line "%0A"; next
         }

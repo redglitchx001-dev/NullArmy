@@ -876,13 +876,29 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
         for (ItemStack rest : leftover.values()) {
             player.getWorld().dropItemNaturally(player.getLocation(), rest);
         }
-        String name = horn ? "Null (Call Goat Horn)" : "Totem Of Null";
-        sender.sendMessage(PREFIX + "Given: " + name + " (right-click it to summon Nulls).");
         if (horn) {
-            sender.sendMessage(PREFIX + "The Call horn sound plays, then you can enter a count in chat or type 'cancel'.");
-        } else {
-            sender.sendMessage(PREFIX + "Right-click the totem, then enter a count in chat or type 'cancel'.");
+            sender.sendMessage(PREFIX + "Given: " + SummonItems.DISPLAY_NAME
+                    + " (Call Goat Horn) - right-click it to summon Nulls.");
+            sender.sendMessage(PREFIX + "The real Call horn sound plays, then you can enter a"
+                    + " count in chat or type 'cancel'.");
+            sender.sendMessage(PREFIX + "They arrive through real, temporary portal doorways:"
+                    + " a random 1-" + config.portalsMaxPerSummon() + " of them per summon.");
+            return true;
         }
+        sender.sendMessage(PREFIX + "Given: " + SummonItems.TOTEM_DISPLAY_NAME
+                + " (Curse of Vanishing, tagged " + SummonItems.TOTEM_KEY + ").");
+        sender.sendMessage(PREFIX + "Right-click it to summon, then enter a count in chat or"
+                + " type 'cancel'.");
+        // Documented here, not only in a javadoc: an owner has to know what ends
+        // the army before they carry the thing that ends it.
+        sender.sendMessage(PREFIX + "It counts as DESTROYED when: it pops (someone dies holding"
+                + " it), a dropped totem takes any damage (fire, lava, explosion, cactus), or a"
+                + " dropped totem despawns after five minutes.");
+        sender.sendMessage(PREFIX + "It does NOT count when: you move it between slots, put it in"
+                + " a chest, rename it, enchant it, drop it, or reload the plugin.");
+        sender.sendMessage(PREFIX + "Destroyed means every Null - Commander last - steps out one"
+                + " at a time, " + (config.totemShutdownDelayTicks() / 20.0) + "s apart, and no"
+                + " new Null answers the horn until the last one is gone.");
         return true;
     }
 
