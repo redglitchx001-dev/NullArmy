@@ -3,6 +3,8 @@ package redglitchx.nullarmy.nms;
 import redglitchx.nullarmy.core.ledger.ItemLedger;
 import redglitchx.nullarmy.core.math.Vec3d;
 
+import java.util.List;
+
 /**
  * The server-authoritative body of one Null.
  *
@@ -50,6 +52,15 @@ public interface NullBody {
     boolean isAlive();
     double health();
 
+    /**
+     * Restores health, capped at this body's maximum.
+     *
+     * <p>Never throws and never revives a dead body: {@code /null heal} on a
+     * squad that is already gone is a no-op with an honest message, not an
+     * error.</p>
+     */
+    void heal(double amount);
+
     /** The authoritative inventory. Never null. */
     ItemLedger inventory();
 
@@ -64,4 +75,14 @@ public interface NullBody {
      * arranged in the loadout GUI.</p>
      */
     void setLoadout(java.util.List<LoadoutSlot> slots);
+
+    /**
+     * The loadout currently worn, in the same slot numbering as
+     * {@link #setLoadout(List)}.
+     *
+     * <p>Empty slots are omitted, never returned as {@code null} entries and
+     * never invented. Used by {@code /null drop}, which empties a Null's
+     * inventory and hands the materials back to the world.</p>
+     */
+    List<LoadoutSlot> loadout();
 }

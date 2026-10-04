@@ -134,7 +134,7 @@ Every Null action must correspond to something a real survival-mode Java player 
 
 Forbidden: magical teleports, invisible movement, wall phasing, instant construction, giant fusions, fabricated loot, free ammunition, infinite durability, AI-generated items.
 
-The **NPC inventory is authoritative**, backed by an auditable item ledger. The `/null gui` loadout screen is a *blueprint*, not a duplicator — gear must come from items donated by the summoner, legitimate drops, real crafting, honest trades, or explicitly configured storage.
+The **NPC inventory is authoritative**, backed by an auditable item ledger. The `/null loadout` screen is a *blueprint*, not a duplicator — gear must come from items donated by the summoner, legitimate drops, real crafting, honest trades, or explicitly configured storage.
 
 ### 3. No clumping, stacking, or clipping
 
@@ -178,6 +178,28 @@ The most important table in this document. These are ideas that sound great and 
 
 ---
 
+## Talking To Them
+
+Two ways, and neither needs a slash:
+
+- **Orders.** Start a chat line with a wake word (`null`, `nulls` or `commander` by default -
+  `chat.wake-words` in `config.yml`) and the rest is treated as a subcommand:
+  `null attack Steve`, `null kill Steve`, `null ban Steve`, `null eliminate Steve`, `null come`,
+  `null stop`, `null heal`, `null menu`, `null follow me`, `null go away`. Natural phrases and
+  synonyms are mapped, the order goes through the **same** executor as typing `/null` (so
+  permissions, caps and policy gates are identical), and the line is removed from public chat.
+  Each player gets 20 orders a minute by default (`chat.commands-per-minute`).
+- **Conversation.** `/null chat commander` (or `/null chat null`) opens a private channel: your
+  next messages go to that character alone and it answers in its own voice, with a rolling
+  context of the last few turns. Say `exit`, or `/null chat off`, to end it.
+
+Conversation needs a model. **The plugin never requires one** - with `ai.enabled: false` the
+characters still answer a few lines locally("Commander on deck") and `/null ai` states plainly
+why the rest is unavailable. To switch a model on, add an endpoint under `ai.endpoints` and point
+`ai.default-endpoint` at it; the ChatCommander role uses the same config, key resolution, timeout
+and rate limiting as every other AI role. Replies are single-line, colour-code-stripped and length
+capped (`chat.max-reply-chars`) so a model can never inject formatting into chat.
+
 ## How Summoning Works
 
 1. **Trigger.** Use a real **Goat Horn** configured/named `Call Horn`, or a real **Totem of Undying** configured/named/tagged `Totem Of Null`. These are vanilla items — a usable summon item is only ever created by an explicit owner/admin action or a documented recipe/config. Never a spontaneous grant.
@@ -203,8 +225,25 @@ All commands are permission-checked with tab completion, clear feedback, and aud
 
 | Command | Permission | What it does |
 | --- | --- | --- |
-| `/null gui` | `nullarmy.gui` | Opens the inventory/loadout **planning** GUI. Selects equipment priorities and quantities, shows an explicit supply source and every deficit. **Never duplicates a displayed item.** |
-| `/null chat [on\|off]` | `nullarmy.chat` | Toggles Null chat and ChatCommander output. |
+| `/null menu` (aliases `/null m`, `/null gui`) | `nullarmy.gui` | Opens the NullArmy command menu: a real 54-slot chest GUI with its own holder, Adventure `Component` title, permission-filtered buttons and pagination. Every click and drag is cancelled, so **nothing in it can be taken, moved or duplicated**. Each button dispatches the same `/null …` command a player would type. |
+| `/null horn` | `nullarmy.summon` | Gives you the **Call Horn**: a real Goat Horn named `Null`, enchanted (Unbreaking I) with `HIDE_ENCHANTS` for the glint, with lore and a persistent-data tag. Right-clicking asks *"How many Nulls should come?"* in chat. |
+| `/null totem` | `nullarmy.summon` | The **Totem Of Null**: a real Totem of Undying made the same way, with the same chat-count flow. |
+| `/null reload` | `nullarmy.admin` | Re-reads `config.yml` without a restart, re-arms the NMS spawn breaker and tells every subsystem to re-read its settings. A missing `config.yml` is recreated; an existing one is **never** overwritten. |
+| `/null come` (aliases `/null tp`, `/null bring`) | `nullarmy.follow` | Walks your squad to your position. **Not a teleport** — spec 5 forbids teleporting Nulls, including as recovery. |
+| `/null guard` | `nullarmy.follow` | Holds position and watches. |
+| `/null formation <line\|square\|encircle\|turtle>` | `nullarmy.follow` | Arranges the squad around you in the chosen formation. |
+| `/null list` · `/null info <id\|name>` | `nullarmy.admin` | Every live Null with health and position; then one Null in detail. |
+| `/null heal` · `/null equip` · `/null drop` | `nullarmy.admin` | Top the squad up; hand your held item to your first Null (the item **leaves your hand**, so this cannot duplicate); empty the squad's inventories into the world as real drops. |
+| `/null portals` · `/null clearskins` | `nullarmy.admin` | Play the portal visual where you stand (cosmetic only); forget cached skins and resolve them again. |
+| `/null version` · `/null help` · `/null debug` | — / — / `nullarmy.admin` | Plugin, adapter and server version; the full command list; guard state, subsystem failures and tracked entities. |
+| `/null withercannon` (alias `/null cannon`) | `nullarmy.admin` | **Opt-in.** Fires a TNT minecart that arcs into the sky, opens portals at the apex and drops TNT. Off unless `wither-cannon.enabled` **and** `policy.explosives-enabled` **and** `policy.wither-enabled` are all true and you hold the configured permission. Block damage needs a fourth opt-in (`policy.griefing-enabled` **and** `wither-cannon.blocks-damage`); without it the blasts are visual only. |
+| `/null airdrop [count]` | `nullarmy.admin` | **Opt-in.** Sky portals open above you and ground portals around you, TNT drops from the sky, and the squad arrives. With `airdrop.drop-nulls-from-sky: true` the Nulls fall under real gravity and **do** take fall damage; with it false they emerge on ground the adapter verified as safe. |
+| `/null chat [null\|commander\|off\|status]` | `nullarmy.chat` | Opens a **private channel** with a Null or the Commander. Your next messages go only to that character and it answers in its own voice. With no model configured it still answers a few lines locally, and `/null ai` tells you exactly which of the two is happening. |
+| `/null ai` | `nullarmy.admin` | Whether a model is configured, enabled and actually reachable - and, when it is not, the reason in one line. |
+| `/null portal [player]` | `nullarmy.admin` | Your Nulls walk **through a portal** to you, or to a named player: effects at both ends, the arrival spot verified collision-safe first, nobody arrives mid-fall. The one deliberate, opt-in exception to the no-teleport rule (`mechanics.portal-travel`). |
+| `/null tactics <aggressive\|balanced\|defensive>` | `nullarmy.attack` | Changes the standoff a squad actually keeps: 1.2 / 2.0 / 4.5 blocks. Not cosmetic - the steering uses it. |
+| `/null emote <wave\|salute\|nod\|point\|dance\|sit>` · `/null greet [player]` | `nullarmy.admin` / `nullarmy.follow` | Visible body language: your Nulls turn, step and make the sounds a player would hear. A greeting only reaches 24 blocks, because a distant Null waving is a lie. |
+| `/null inv` | `nullarmy.admin` | What your Nulls are carrying, read-only - a summary per Null, never an editable inventory. |
 | `/null attack <player>` | `nullarmy.attack` | Sets a physical pursuit/combat objective. The target is **not** instantly damaged or moved. |
 | `/null attackx <player>` | `nullarmy.attackx` | Adaptive extreme-combat profile: faster tactical reassessment, tighter coordination, careful resource use, stronger counterplay. **No cheats, impossible reaction times, hidden information, bonus damage, or free items** — just a better-behaved squad. |
 | `/null follow me` | `nullarmy.follow` | Follows the issuing owner using a formation and personal-space rules. **Never teleports to catch up.** |

@@ -12,6 +12,7 @@ import redglitchx.nullarmy.core.brain.NullState;
 import redglitchx.nullarmy.core.brain.Objective;
 import redglitchx.nullarmy.core.brain.UtilityPlanner;
 import redglitchx.nullarmy.core.config.Caps;
+import redglitchx.nullarmy.core.config.SummonRules;
 import redglitchx.nullarmy.core.flock.BoidsSolver;
 import redglitchx.nullarmy.core.flock.SpatialHash;
 import redglitchx.nullarmy.core.json.Json;
@@ -79,6 +80,12 @@ public final class CoreTestSuite {
         run("planner prefers survival over objectives", CoreTestSuite::testPlannerSurvival);
         run("planner is deterministic (AC-8)", CoreTestSuite::testPlannerDeterminism);
         run("portal effect cap honours the spec floor of 15", CoreTestSuite::testPortalFloor);
+        run("summon count honours the hard cap", CoreTestSuite::testSummonHardCap);
+        run("summon count honours live capacity", CoreTestSuite::testSummonCapacity);
+        run("summon refuses when the server is full", CoreTestSuite::testSummonFull);
+        run("summon refuses non-positive counts", CoreTestSuite::testSummonNonPositive);
+        run("summon leaves a fitting request alone", CoreTestSuite::testSummonNoClamp);
+        run("partial spawn reports how many made it", CoreTestSuite::testSummonPartialSpots);
         run("endpoint validates endpoint/model-id/timeout", CoreTestSuite::testEndpointValidation);
         run("endpoint holds env:NAME, never the key itself", CoreTestSuite::testEndpointKeyIsEnvName);
         run("api-key accepts env:NAME or literal, never leaks", CoreTestSuite::testApiKeyForms);
@@ -571,6 +578,51 @@ public final class CoreTestSuite {
         }
         // Equal priority must resolve to the older objective (lower id) => PATROL.
         checkEquals(NullState.PATROL, first, "ties resolve to the older objective");
+    }
+
+    private static void testSummonHardCap() {
+        SummonRules.Decision d = SummonRules.decide(50, 24, 0, 64);
+        checkEquals(24, d.granted(), "granted");
+        check(d.clamped(), "must be reported as clamped");
+        check(!d.refused(), "a clamped request still spawns");
+        check(d.explanation().contains("24"), "the explanation must state the cap");
+    }
+
+    private static void testSummonCapacity() {
+        SummonRules.Decision d = SummonRules.decide(10, 24, 60, 64);
+        checkEquals(4, d.granted(), "granted");
+        check(d.clamped(), "must be reported as clamped");
+        check(d.explanation().contains("4"), "the explanation must state the real number");
+    }
+
+    private static void testSummonFull() {
+        SummonRules.Decision d = SummonRules.decide(5, 24, 64, 64);
+        checkEquals(0, d.granted(), "granted");
+        check(d.refused(), "a full server must refuse, not partially spawn");
+        check(d.explanation().length() > 0, "a refusal must say why");
+    }
+
+    private static void testSummonNonPositive() {
+        check(SummonRules.decide(0, 24, 0, 64).refused(), "zero is not a summon");
+        check(SummonRules.decide(-3, 24, 0, 64).refused(), "negative is not a summon");
+        check(SummonRules.decide(5, 0, 0, 64).refused(), "a zero hard cap disables summoning");
+    }
+
+    private static void testSummonNoClamp() {
+        SummonRules.Decision d = SummonRules.decide(3, 24, 5, 64);
+        checkEquals(3, d.granted(), "granted");
+        check(!d.clamped(), "a request that fits must not be clamped");
+    }
+
+    private static void testSummonPartialSpots() {
+        SummonRules.Decision d = SummonRules.decideSafeSpots(10, 4);
+        checkEquals(4, d.granted(), "granted");
+        check(d.clamped(), "partial spawn must be reported");
+        check(d.explanation().contains("4"), "the explanation must state how many spawned");
+        SummonRules.Decision none = SummonRules.decideSafeSpots(5, 0);
+        check(none.refused(), "no safe spot means nothing spawns");
+        checkEquals(0, SummonRules.remainingCapacity(70, 64), "live count above the cap is still 0 free");
+        checkEquals(64, SummonRules.remainingCapacity(0, 64), "an empty server has full capacity");
     }
 
     private static void testPortalFloor() {

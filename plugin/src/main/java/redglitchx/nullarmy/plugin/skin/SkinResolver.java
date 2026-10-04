@@ -135,6 +135,40 @@ public final class SkinResolver {
         });
     }
 
+    /**
+     * Forgets every cached skin - memory and disk - so the next lookup fetches
+     * fresh data. Used by {@code /null clearskins} after the owner changes the
+     * skin account.
+     *
+     * <p>Nothing here is fatal: a file that cannot be deleted is left alone and
+     * counted as not cleared. Bundled skins inside the jar are never deleted.</p>
+     *
+     * @return how many cached entries (memory + disk files) were cleared
+     */
+    public int clearCache() {
+        int cleared = cache.size();
+        cache.clear();
+        try {
+            if (Files.isDirectory(cacheDir)) {
+                try (java.util.stream.Stream<Path> files = Files.list(cacheDir)) {
+                    for (Path file : files.toList()) {
+                        try {
+                            if (Files.deleteIfExists(file)) {
+                                cleared++;
+                            }
+                        } catch (IOException ignored) {
+                            // A locked file is simply not cleared this time.
+                        }
+                    }
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            plugin.getLogger().log(Level.WARNING,
+                    "[NullArmy] Could not clear the skin cache directory: " + e.getMessage());
+        }
+        return cleared;
+    }
+
     /** Human-readable lookup trail, for {@code /null status}. Never contains keys. */
     public List<String> diagnostics() {
         List<String> out = new ArrayList<>();

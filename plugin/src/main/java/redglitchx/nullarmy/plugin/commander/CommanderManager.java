@@ -1,5 +1,6 @@
 package redglitchx.nullarmy.plugin.commander;
 
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -18,8 +19,11 @@ import redglitchx.nullarmy.nms.LoadoutSlot;
 import redglitchx.nullarmy.nms.NullBody;
 import redglitchx.nullarmy.nms.VersionAdapter;
 import redglitchx.nullarmy.plugin.NullArmyPlugin;
+import redglitchx.nullarmy.plugin.config.PluginConfig;
+import redglitchx.nullarmy.plugin.config.Reloadable;
 import redglitchx.nullarmy.plugin.skin.SkinData;
 import redglitchx.nullarmy.plugin.skin.SkinResolver;
+import redglitchx.nullarmy.plugin.util.Guard;
 
 import java.io.File;
 import java.io.IOException;
@@ -41,13 +45,16 @@ import java.util.logging.Level;
  *
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
  */
-public final class CommanderManager implements Listener {
+public final class CommanderManager implements Listener, Reloadable {
 
     /** 36 storage + 4 armour + 1 offhand, matching a player inventory. */
     public static final int LOADOUT_SLOTS = 41;
 
     private static final String FILE_NAME = "commander.yml";
     private static final String DEFAULT_NAME = "NullCommander";
+
+    /** Every message this class sends starts here, per spec 2.1. */
+    private static final String PREFIX = "[NullArmy] ";
 
     private final NullArmyPlugin plugin;
     private final SkinResolver skins;
@@ -128,6 +135,17 @@ public final class CommanderManager implements Listener {
     public String commanderName() { return name; }
     public ItemStack[] loadout() { return loadout; }
 
+    /**
+     * A config reload does not change anything the Commander is already
+     * wearing: the loadout lives in {@code commander.yml} and is edited through
+     * the GUI, never in {@code config.yml}. The hook exists so {@code /null
+     * reload} can tell every subsystem in one pass without special cases.
+     */
+    @Override
+    public void onConfigReloaded(PluginConfig config) {
+        // Intentionally empty: see the note above.
+    }
+
     public boolean isSpawned() {
         return commander != null && commander.isAlive();
     }
@@ -139,26 +157,59 @@ public final class CommanderManager implements Listener {
      * silently.</p>
      */
     public boolean spawn(Player owner) {
+        try {
+            return spawnChecked(owner);
+        } catch (Throwable t) {
+            // The Commander is created through NMS, so this is the one place in
+            // the class that really can take a server down: nothing may leave here.
+            plugin.getLogger().severe("[NullArmy] Commander spawn failed: " + Guard.describe(t));
+            if (owner != null) {
+                owner.sendMessage(PREFIX + "The Commander could not be summoned: " + Guard.describe(t));
+            }
+            return false;
+        }
+    }
+
+    /** The real spawn sequence, isolated so the failure can be contained. */
+    private boolean spawnChecked(Player owner) {
+        if (owner == null) {
+            return false;
+        }
+        // Creating an NPC is main-thread work only (spec 2.4); refuse politely
+        // rather than corrupting the world from another thread.
+        if (!Bukkit.isPrimaryThread()) {
+            owner.sendMessage(PREFIX + "The Commander must be summoned from the server thread.");
+            return false;
+        }
         VersionAdapter adapter = plugin.adapter();
         if (adapter == null) {
-            owner.sendMessage("The Commander needs a version adapter; none is loaded.");
+            owner.sendMessage(PREFIX + "The Commander needs a version adapter; none is loaded.");
             return false;
         }
         if (isSpawned()) {
-            owner.sendMessage("The Commander is already here. Use /null dismiss first.");
+            owner.sendMessage(PREFIX + "The Commander is already here. Use /null dismiss first.");
+            return false;
+        }
+        // Same latched guard the squads use: if NMS spawning has already failed
+        // once this session, do not try it again with a live server on the line.
+        if (plugin.spawnBreaker().isOpen()) {
+            owner.sendMessage(PREFIX + "Null creation is disabled for this session: "
+                    + plugin.spawnBreaker().reason());
+            owner.sendMessage(PREFIX + "Fix the cause, then run /null reload to re-arm it.");
             return false;
         }
 
         Location origin = owner.getLocation();
-        String world = origin.getWorld() == null ? null : origin.getWorld().getName();
+        String world = origin == null || origin.getWorld() == null ? null : origin.getWorld().getName();
         if (world == null) {
-            owner.sendMessage("Could not determine your world.");
+            owner.sendMessage(PREFIX + "Could not determine your world.");
             return false;
         }
 
         Vec3d spot = findSafeSpot(adapter, world, origin);
         if (spot == null) {
-            owner.sendMessage("No safe ground nearby for the Commander to step onto.");
+            owner.sendMessage(PREFIX + "No safe ground nearby for the Commander to step onto -"
+                    + " move to open ground and try again.");
             return false;
         }
 
@@ -168,17 +219,31 @@ public final class CommanderManager implements Listener {
         try {
             commander = adapter.spawnNull(new VersionAdapter.SpawnRequest(
                     owner.getUniqueId(), name, world, spot, 36 * 64, value, signature));
-        } catch (RuntimeException e) {
-            owner.sendMessage("The Commander could not be summoned: " + e.getMessage());
+        } catch (Throwable t) {
+            String reason = Guard.describe(t);
+            plugin.spawnBreaker().trip(reason, t, plugin.getLogger(),
+                    "Null creation is now latched off; the server is unaffected."
+                            + " Restart or run /null reload to try again after fixing the cause.");
+            owner.sendMessage(PREFIX + "The Commander could not be summoned: " + reason);
+            return false;
+        }
+        if (commander == null) {
+            owner.sendMessage(PREFIX + "The adapter returned no entity - nothing was summoned.");
             return false;
         }
 
-        // The portal is the whole point of the entrance: effects first, then the body.
-        adapter.playPortalEffects(world, spot,
-                Math.max(Caps.minPortalEffects(), plugin.pluginConfig().caps().portalEffectsPerSummon()));
+        // The portal is the whole point of the entrance. It is cosmetic, so it
+        // may fail without losing the Commander that already exists.
+        Guard.attempt(plugin.getLogger(), "Commander portal effects", () -> {
+            int effects = Math.max(Caps.minPortalEffects(),
+                    plugin.pluginConfig() == null ? Caps.minPortalEffects()
+                            : plugin.pluginConfig().caps().portalEffectsPerSummon());
+            adapter.playPortalEffects(world, spot, effects);
+        });
 
-        applyLoadout();
-        owner.sendMessage("The Commander steps out of the portal.");
+        Guard.attempt(plugin.getLogger(), "Commander loadout", this::applyLoadout);
+        owner.sendMessage(PREFIX + "The Commander steps out of the portal."
+                + " Use /null loadout to equip it.");
         return true;
     }
 
@@ -200,18 +265,25 @@ public final class CommanderManager implements Listener {
     }
 
     public boolean despawn() {
-        if (!isSpawned()) {
+        NullBody body = commander;
+        commander = null;
+        if (body == null) {
             return false;
         }
-        commander.destroy();
-        commander = null;
-        return true;
+        // The reference is dropped first so a failure cannot leave the manager
+        // thinking a body still exists.
+        return Guard.attempt(plugin.getLogger(), "despawning the Commander", body::destroy);
     }
 
     /** Opens the loadout editor for a player. */
     public void openLoadout(Player viewer) {
-        CommanderInventoryGui gui = new CommanderInventoryGui("Commander loadout", loadout);
-        gui.open(viewer);
+        if (viewer == null) {
+            return;
+        }
+        Guard.attempt(plugin.getLogger(), "opening the Commander loadout", () -> {
+            CommanderInventoryGui gui = new CommanderInventoryGui("Commander loadout", loadout);
+            gui.open(viewer);
+        });
     }
 
     /** Persists the loadout to commander.yml. */
@@ -268,6 +340,16 @@ public final class CommanderManager implements Listener {
 
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
+        // A listener is one of the four places an exception must never escape
+        // (spec 2.1): this GUI edits real items, so it is exactly where a
+        // surprise is most expensive.
+        Guard.attempt(plugin.getLogger(), "Commander loadout click", () -> handleClick(event));
+    }
+
+    private void handleClick(InventoryClickEvent event) {
+        if (event == null || event.getInventory() == null) {
+            return;
+        }
         if (!(event.getInventory().getHolder() instanceof CommanderInventoryGui)) {
             return;
         }
@@ -291,12 +373,26 @@ public final class CommanderManager implements Listener {
             } else if (slot == CommanderInventoryGui.BUTTON_CANCEL) {
                 player.closeInventory();
             } else if (slot == CommanderInventoryGui.BUTTON_SAVE) {
-                gui.commitFromView();
-                ItemStack[] edited = gui.working();
-                System.arraycopy(edited, 0, loadout, 0, Math.min(edited.length, LOADOUT_SLOTS));
-                save();
-                applyLoadout();
-                player.sendMessage("Commander loadout saved.");
+                // Each step is isolated: a failed save must still report the
+                // truth, and a failed apply must not lose the edit silently.
+                boolean copied = Guard.attempt(plugin.getLogger(), "reading the loadout editor",
+                        () -> {
+                            gui.commitFromView();
+                            ItemStack[] edited = gui.working();
+                            System.arraycopy(edited, 0, loadout, 0,
+                                    Math.min(edited.length, LOADOUT_SLOTS));
+                        });
+                boolean saved = copied
+                        && Guard.attempt(plugin.getLogger(), "saving the Commander loadout", this::save);
+                boolean applied = copied
+                        && Guard.attempt(plugin.getLogger(), "applying the Commander loadout",
+                                this::applyLoadout);
+                player.sendMessage(saved
+                        ? "Commander loadout saved."
+                        : "The loadout could not be saved - see the server log; nothing was changed.");
+                if (saved && !applied) {
+                    player.sendMessage("Saved, but the live Commander could not be re-equipped yet.");
+                }
                 player.closeInventory();
             }
             return;
@@ -309,14 +405,19 @@ public final class CommanderManager implements Listener {
 
     @EventHandler
     public void onInventoryClose(InventoryCloseEvent event) {
-        if (!(event.getInventory().getHolder() instanceof CommanderInventoryGui)) {
-            return;
-        }
-        // Closing without pressing Save discards the edit, so a mis-click can
-        // never silently overwrite a loadout the owner was happy with.
-        if (event.getPlayer() instanceof Player) {
-            ((Player) event.getPlayer()).sendMessage("Loadout editor closed without saving.");
-        }
+        Guard.attempt(plugin.getLogger(), "Commander loadout close", () -> {
+            if (event == null || event.getInventory() == null) {
+                return;
+            }
+            if (!(event.getInventory().getHolder() instanceof CommanderInventoryGui)) {
+                return;
+            }
+            // Closing without pressing Save discards the edit, so a mis-click
+            // can never silently overwrite a loadout the owner was happy with.
+            if (event.getPlayer() instanceof Player) {
+                ((Player) event.getPlayer()).sendMessage("Loadout editor closed without saving.");
+            }
+        });
     }
 
     /** True when the material is one we refuse to store (purely defensive). */

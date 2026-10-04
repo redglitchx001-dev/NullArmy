@@ -46,7 +46,22 @@ tasks.jar {
     from(bundledModules.map { modulePath ->
         project(modulePath).layout.buildDirectory.dir("classes/java/main")
     })
+
+    /*
+     * State the resources explicitly.
+     *
+     * plugin.yml and config.yml are what make the plugin loadable and able to
+     * create plugins/NullArmy/ on a cold start. Relying on the default
+     * source-set wiring is how a jar can end up with plugin.yml but no
+     * config.yml - which loads, then fails inside onEnable and leaves no data
+     * folder at all. Naming the resource directory here removes that whole
+     * class of surprise. (Duplicates are excluded above, so this cannot double
+     * an entry.)
+     */
+    from(sourceSets.getByName("main").resources)
+
     manifest {
         attributes(mapOf("paperweight-mappings-namespace" to "mojang"))
     }
+
 }
