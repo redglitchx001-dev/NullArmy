@@ -20,10 +20,14 @@ smoke test on Paper 1.21.11 before it is trusted.**
 | **P2 — menu** | `/null menu` (`/null m`, `/null gui`) opens a real 54-slot chest GUI with its own `InventoryHolder`, Adventure `Component` title, permission-filtered buttons, pagination, every click and drag cancelled, and every button dispatching the same `/null …` command executor path. Nothing in it can be taken. |
 | **P3 — spectacle (opt-in)** | `/null withercannon` (`/null cannon`) and `/null airdrop [count]` exist behind their own config blocks, the `policy.*` switches and a permission. Block damage needs a separate `blocks-damage` opt-in; without it the registered explosion handler empties each blast's block list. Every created entity is tracked so `/null stop`, `/null dismiss` and `onDisable` clean up. |
 | **P4 — commands** | The full tree is implemented with permission checks, usage lines and tab completion: `menu gui help status version features debug horn totem commander respawn loadout skin follow guard formation attack attackx come tp bring stop dismiss list info name heal equip drop portals clearskins reload wand build chat withercannon cannon airdrop ban kill`. Features that are not implemented say so and change nothing. |
+| **P5 — chat is an interface** | Wake-word orders in ordinary chat (`null attack Steve`, `null kill Steve`, `null eliminate Steve`, `null come`, `null stop`, `null heal` …) are stripped out of public chat and dispatched through the same `NullCommand` executor, so permissions, caps and policy gates are identical; per-player rate limit of 20 orders a minute; a player answering a summon prompt is never interrupted. `/null chat <null\|commander>` opens a private channel and `ChatBrain` drives the existing `ai.endpoints`/`ai.agents` config over the JDK HTTP client, off-thread, with the reply delivered on the main thread - and with no model configured the characters answer locally and `/null ai` says why. |
+| **P5 — movement and behaviour** | `/null portal [player]` walks Nulls through a visible portal (effects at both ends, verified arrival, opt-in via `mechanics.portal-travel`); `/null tactics` changes the real standoff (1.2/2.0/4.5 blocks); `/null emote`, `/null greet` and `/null inv` add body language and honesty; Nulls glance around and turn to face their owner on their own (`mechanics.idle-gestures`). |
 
 **Still unverified:** `nms/v1_21_11` cannot be type-checked in the authoring sandbox (no
 dev bundle); its compile status is proven by CI, and its runtime behaviour only by the
-live smoke test. The NMS additions in this pass are `SpawnRequest.airborne()` +
+live smoke test. The same is true of the chat/AI pass: HTTP behaviour against a real
+endpoint, and whether a portal arrival feels right, can only be judged on a running
+server. CI is green on this branch (build, JAR verification, checksum, artifact upload). The NMS additions in this pass are `SpawnRequest.airborne()` +
 `isAirborneSpawnSafe(...)`, `NullBody.heal(double)`/`loadout()`, and the tick guard.
 
 ---
