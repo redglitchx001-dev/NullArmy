@@ -1109,10 +1109,13 @@ public final class SquadManager implements Reloadable {
             }
         }
         playGestureSound(at, "wave");
-        if (done > 0) {
+        // A lambda cannot capture a variable that changes, so the count is
+        // frozen before the message is built.
+        final int greeted = done;
+        if (greeted > 0) {
             Guard.attempt(logger, "greeting message", () ->
-                    target.sendMessage("[NullArmy] " + done
-                            + (done == 1 ? " Null" : " Nulls") + " raise a hand to you."));
+                    target.sendMessage("[NullArmy] " + greeted
+                            + (greeted == 1 ? " Null" : " Nulls") + " raise a hand to you."));
         }
         return done;
     }

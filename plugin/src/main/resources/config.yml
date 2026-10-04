@@ -73,7 +73,9 @@ chat:
   # Who the characters are. {player} is replaced with the speaker's name.
   # Leave empty to use the built-in soldier voice.
   personas:
-    null: ""
+    # Quoted on purpose: an unquoted `null` key is YAML's null value, not the
+    # word, so the Null persona would silently never load.
+    "null": ""
     commander: ""
 
 # ---------------------------------------------------------------------
