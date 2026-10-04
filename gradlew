@@ -274,23 +274,36 @@ fi
 
 # Always report the runtime smoke test's own verdict. "The build passed" says
 # nothing about whether a Null was actually visible on a live server, so the
-# verdict and every check line are re-emitted as a notice annotation, which is
-# readable through the API and shown in the Checks UI.
+# verdict and the check lines are re-emitted as a notice annotation, readable
+# through the API and shown in the Checks UI. Failures and the verdict come
+# first: GitHub truncates a long annotation message.
 if [ -f "$NULLARMY_LOG" ]; then
     awk '
-        /RUNTIME SMOKE: |\[NullArmy\]\[SELFTEST\]/ {
-            line = $0
-            sub(/\r$/, "", line)
-            gsub(/%/, "%%", line)
-            gsub(/\n/, " ", line)
-            out = out line "%0A"
-            n++
+        /RUNTIME SMOKE: / {
+            line = $0; sub(/\r$/, "", line); gsub(/%/, "%%", line)
+            head = head line "%0A"; next
+        }
+        /\[NullArmy\]\[SELFTEST\] .*FAIL/ {
+            line = $0; sub(/\r$/, "", line); gsub(/%/, "%%", line)
+            head = head line "%0A"; next
+        }
+        /\[NullArmy\]\[SELFTEST\] (RESULT|starting|adapter|arrival|shutdown progress|dismissed)/ {
+            line = $0; sub(/\r$/, "", line); gsub(/%/, "%%", line)
+            head = head line "%0A"; next
+        }
+        /\[NullArmy\]\[SELFTEST\] PASS/ {
+            line = $0; sub(/\r$/, "", line); gsub(/%/, "%%", line)
+            passes = passes line "%0A"; npass++; next
         }
         END {
-            if (n > 0) {
-                printf("::notice title=NullArmy runtime smoke test::%s\n", out)
+            body = head passes
+            if (length(body) > 3800) {
+                body = substr(body, 1, 3800) " %0A(truncated - the full list is in the server log artifact)"
+            }
+            if (npass + length(head) == 0) {
+                printf("::notice title=NullArmy runtime smoke test::no smoke test output - it did not run\n")
             } else {
-                printf("::notice title=NullArmy runtime smoke test::the runtime smoke test produced no output - it did not run\n")
+                printf("::notice title=NullArmy runtime smoke test (%d PASS lines)::%s\n", npass, body)
             }
         }
     ' "$NULLARMY_LOG"

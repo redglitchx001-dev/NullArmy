@@ -395,6 +395,22 @@ public final class V1_21_11Adapter implements VersionAdapter {
             // The pairing call below reports whether it worked.
         }
         Tracking.clearPendingChunks(probe.connection);
+        // And the same thing through the public API: ChunkMap.isChunkTracked
+        // refuses to pair an entity that sits in a chunk still marked pending for
+        // the viewer, and registering the probe queued its whole view.
+        try {
+            net.minecraft.world.level.ChunkPos centre = probe.chunkPosition();
+            for (int dx = -3; dx <= 3; dx++) {
+                for (int dz = -3; dz <= 3; dz++) {
+                    probe.connection.chunkSender.dropChunk(probe,
+                            new net.minecraft.world.level.ChunkPos(centre.x + dx, centre.z + dz));
+                }
+            }
+        } catch (Throwable t) {
+            org.bukkit.Bukkit.getLogger().warning("[NullArmy] the viewer probe could not drop"
+                    + " its pending chunks: " + describe(t));
+        }
+        Tracking.clearPendingChunks(probe.connection);
         probe.clearRecordedPackets();
         active.add(probe);
         return probe;

@@ -578,6 +578,12 @@ public final class SquadManager implements Reloadable {
             if (body == null) {
                 throw new IllegalStateException("the adapter returned no entity");
             }
+            // Every Null this plugin creates gets the configured default kit, in
+            // the right slots, here - the one place an NPC is born. Applying it
+            // later (or only from the squad path) is how a Null ends up naked.
+            if (plugin.kits() != null && config != null && config.kitAppliesToNulls()) {
+                plugin.kits().applyTo(body);
+            }
             return body;
         } catch (Throwable t) {
             String reason = Guard.describe(t);
@@ -665,6 +671,32 @@ public final class SquadManager implements Reloadable {
         for (int i = 0; i < wanted; i++) {
             squad.commanderIds.add(squad.members.get(i).id());
         }
+    }
+
+    /**
+     * Stops every squad walking, without latching the plugin into shutdown.
+     *
+     * <p>This is what the Totem Of Null sequence uses: the Nulls should stand
+     * still while they go out one at a time, but the plugin has to accept summons
+     * again once the last one is gone. {@link #requestSafeShutdown} is the
+     * permanent version, for {@code onDisable} only.</p>
+     *
+     * @return how many Nulls were stopped
+     */
+    public int standDown() {
+        int stopped = 0;
+        for (Squad squad : allSquads()) {
+            squad.objective = Objective.NONE;
+            squad.targetId = null;
+            squad.point = null;
+            for (NullBody body : squad.members) {
+                if (Guard.attempt(logger, "standing a Null down",
+                        () -> body.applySteering(Vec3d.ZERO))) {
+                    stopped++;
+                }
+            }
+        }
+        return stopped;
     }
 
     /** Spec 5: SAFE_SHUTDOWN is a state the Nulls walk into, not an instant delete. */

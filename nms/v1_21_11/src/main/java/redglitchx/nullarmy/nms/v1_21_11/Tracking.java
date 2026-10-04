@@ -51,6 +51,9 @@ final class Tracking {
     /** {@code LivingEntity.detectEquipmentUpdates()}: private in vanilla. */
     private static Method detectEquipmentUpdates;
 
+    /** The last reflective failure, so a diagnosis is never a guess. */
+    private static String lastError = "";
+
     /** Resolved once, from the first TrackedEntity instance this server creates. */
     private static Field seenByField;
     private static Method updatePlayerMethod;
@@ -106,18 +109,32 @@ final class Tracking {
     static boolean pair(ServerLevel level, int entityId, ServerPlayer viewer) {
         Object tracked = trackedEntity(level, entityId);
         if (tracked == null || viewer == null) {
+            lastError = tracked == null ? "no TrackedEntity for entity " + entityId
+                    : "no viewer was given";
             return false;
         }
         Method method = updatePlayer(tracked.getClass());
         if (method == null) {
+            lastError = "TrackedEntity.updatePlayer(ServerPlayer) is not reachable";
             return false;
         }
         try {
             method.invoke(tracked, viewer);
         } catch (Throwable t) {
+            Throwable cause = t.getCause() == null ? t : t.getCause();
+            lastError = "updatePlayer threw " + cause.getClass().getName()
+                    + (cause.getMessage() == null ? "" : ": " + cause.getMessage());
             return false;
         }
-        return viewerCount(level, entityId) > 0;
+        int viewers = viewerCount(level, entityId);
+        if (viewers <= 0) {
+            lastError = "updatePlayer ran but the tracker still counts " + viewers
+                    + " viewer(s): the viewer is out of range, its chunk is still"
+                    + " pending for it, or the entity refuses to broadcast";
+        } else {
+            lastError = "";
+        }
+        return viewers > 0;
     }
 
     /**
@@ -181,6 +198,9 @@ final class Tracking {
         out.add("trackedEntity.seenBy=" + (seenByField != null));
         out.add("trackedEntity.updatePlayer=" + (updatePlayerMethod != null));
         out.add("livingEntity.detectEquipmentUpdates=" + (detectEquipmentUpdates != null));
+        if (!lastError.isEmpty()) {
+            out.add("lastError=" + lastError);
+        }
         if (memberLookupFailed) {
             out.add("trackedEntityMembers=not resolved yet (no Null has been spawned)");
         }

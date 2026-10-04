@@ -132,9 +132,11 @@ public final class ShutdownDirector implements Reloadable {
         completed = false;
 
         // Clear objectives first: a Null that is walking somewhere should stop
-        // before it goes out, not mid-stride two chunks away.
-        Guard.attempt(plugin.getLogger(), "stopping the squad for shutdown",
-                () -> plugin.squads().requestSafeShutdown());
+        // before it goes out, not mid-stride two chunks away. This is a
+        // stand-down, NOT the plugin's permanent safe-shutdown latch - the horn
+        // has to answer again once the last Null has gone.
+        Guard.attempt(plugin.getLogger(), "standing the squad down for shutdown",
+                () -> plugin.squads().standDown());
 
         plugin.getLogger().info("[NullArmy] " + reason + ": shutting down " + bodies.size()
                 + " Null(s) one at a time, " + delayTicks() + " tick(s) apart.");

@@ -119,6 +119,8 @@ public final class SelfTest {
 
         say("starting on " + worldName + " at " + (int) safe.x() + "," + (int) safe.y()
                 + "," + (int) safe.z() + " (server " + Bukkit.getMinecraftVersion() + ")");
+        say("adapter " + adapter.minecraftVersion() + ", tracking internals: "
+                + adapter.trackingDiagnostics());
 
         steps.add(this::stepSingleSpawn);
         steps.add(this::stepProbeVisibility);
@@ -132,9 +134,11 @@ public final class SelfTest {
         steps.add(this::stepPortalRestored);
         steps.add(this::stepSquadCleanup);
         steps.add(this::stepShutdownSequence);
-        steps.add(this::stepShutdownWait);
-        steps.add(this::stepShutdownWait);
-        steps.add(this::stepShutdownWait);
+        // The sequence spends its configured delay between bodies, so it needs
+        // more ticks than one step: wait until it is done rather than hoping.
+        for (int i = 0; i < 12; i++) {
+            steps.add(this::stepShutdownWait);
+        }
         steps.add(this::stepShutdownResult);
         steps.add(this::stepSummary);
         scheduleNext();
@@ -225,7 +229,8 @@ public final class SelfTest {
         boolean announced = plugin.adapter().announceTo(probe, single);
         check(announced, "the player-info packet was accepted for the Null");
         boolean paired = plugin.adapter().pairProbe(probe, single);
-        check(paired, "the tracker paired the Null with the viewer");
+        check(paired, "the tracker paired the Null with the viewer"
+                + (paired ? "" : " - " + plugin.adapter().trackingDiagnostics()));
 
         List<String> packets = plugin.adapter().probePackets(probe);
         check(packets.contains("ClientboundPlayerInfoUpdatePacket"),
@@ -372,13 +377,22 @@ public final class SelfTest {
         check(summonAllowedNow(), "summons are accepted again after the shutdown");
     }
 
+    /**
+     * True when the plugin would accept a summon right now.
+     *
+     * <p>Asks for zero Nulls on purpose: the preflight refuses that with its real
+     * reason, so the answer distinguishes "a shutdown is blocking summons" from
+     * "summons work".</p>
+     */
     private boolean summonAllowedNow() {
         try {
             plugin.squads().createSquad(squadOwner, worldName, origin, 0);
             return true;
         } catch (IllegalStateException refusal) {
             String message = refusal.getMessage() == null ? "" : refusal.getMessage();
-            return !message.contains("Totem Of Null shutdown");
+            boolean blockedByShutdown = message.contains("Totem Of Null shutdown")
+                    || message.contains("the plugin is shutting down");
+            return !blockedByShutdown;
         } catch (Throwable t) {
             return true;
         }
