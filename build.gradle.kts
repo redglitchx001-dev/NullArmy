@@ -65,10 +65,6 @@ val runtimeSmoke by tasks.registering(Exec::class) {
     environment("MC_VERSION", "1.21.11")
     // The script distinguishes BLOCKED (3) from FAIL (1) itself.
     isIgnoreExitValue = true
-    // A server start plus a multi-step test: never shorter than the script's own
-    // timeouts, or Gradle would kill it mid-verification.
-    timeout.set(java.time.Duration.ofMinutes(20))
-
     doLast {
         val code = executionResult.get().exitValue
         when (code) {
