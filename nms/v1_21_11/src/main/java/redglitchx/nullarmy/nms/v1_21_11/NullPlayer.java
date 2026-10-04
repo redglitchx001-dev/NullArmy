@@ -1,10 +1,7 @@
 package redglitchx.nullarmy.nms.v1_21_11;
 
 import com.mojang.authlib.GameProfile;
-import io.netty.channel.ChannelFutureListener;
 import net.minecraft.network.Connection;
-import net.minecraft.network.protocol.Packet;
-import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
@@ -20,6 +17,7 @@ import redglitchx.nullarmy.nms.LoadoutSlot;
 import redglitchx.nullarmy.nms.NullBody;
 import redglitchx.nullarmy.nms.VersionAdapter;
 
+import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -88,36 +86,70 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         this.adapter = adapter;
         this.inventory = new ItemLedger(request.inventoryCapacity(), 200);
 
-        // The server's player work can send packets to this entity
-        // before NullPlayer.tick() is reached. Install a non-null listener
-        // before the entity is registered, but never attach it to a real client
-        // or let its sends accumulate in Connection's pre-channel queue.
-        this.connection = new DiscardingPacketListener(server, this, profile);
+        // The server's player work can send packets to this entity before its
+        // first entity tick. Install a non-null listener before registration,
+        // and discard packets for the client that does not exist.
+        this.connection = new ServerGamePacketListenerImpl(server,
+                createDiscardingConnection(), this,
+                CommonListenerCookie.createInitial(profile, false));
     }
 
     /**
-     * Satisfies server code that assumes every ServerPlayer has a listener,
-     * without pretending this server-only NPC has a client. Packet delivery to
-     * the Null itself is discarded; viewers receive entity-tracking packets
-     * through their own real connections.
+     * Makes an inert implementation of Paper's connection interface. Outbound
+     * packets sent by server maintenance are discarded; viewers still receive
+     * entity-tracking packets through their own real connections.
      */
-    private static final class DiscardingPacketListener extends ServerGamePacketListenerImpl {
+    private static Connection createDiscardingConnection() {
+        return (Connection) Proxy.newProxyInstance(
+                Connection.class.getClassLoader(),
+                new Class<?>[] {Connection.class},
+                (proxy, method, arguments) -> {
+                    if (method.getDeclaringClass() == Object.class) {
+                        switch (method.getName()) {
+                            case "toString":
+                                return "NullArmyDiscardingConnection";
+                            case "hashCode":
+                                return System.identityHashCode(proxy);
+                            case "equals":
+                                return proxy == (arguments == null ? null : arguments[0]);
+                            default:
+                                break;
+                        }
+                    }
+                    return defaultReturnValue(method.getReturnType());
+                });
+    }
 
-        private DiscardingPacketListener(MinecraftServer server, ServerPlayer player,
-                                         GameProfile profile) {
-            super(server, new Connection(PacketFlow.SERVERBOUND), player,
-                    CommonListenerCookie.createInitial(profile, false));
+    /** Returns a harmless default for methods on the no-network connection. */
+    private static Object defaultReturnValue(Class<?> type) {
+        if (!type.isPrimitive()) {
+            return null;
         }
-
-        @Override
-        public void send(Packet<?> packet) {
-            // The NPC has no client. Do not queue or redirect this packet.
+        if (type == boolean.class) {
+            return false;
         }
-
-        @Override
-        public void send(Packet<?> packet, ChannelFutureListener listener) {
-            // No network send means there is no ChannelFuture to notify.
+        if (type == byte.class) {
+            return (byte) 0;
         }
+        if (type == short.class) {
+            return (short) 0;
+        }
+        if (type == int.class) {
+            return 0;
+        }
+        if (type == long.class) {
+            return 0L;
+        }
+        if (type == float.class) {
+            return 0.0F;
+        }
+        if (type == double.class) {
+            return 0.0D;
+        }
+        if (type == char.class) {
+            return (char) 0;
+        }
+        return null; // void
     }
 
     // ------------------------------------------------------------ NullBody impl

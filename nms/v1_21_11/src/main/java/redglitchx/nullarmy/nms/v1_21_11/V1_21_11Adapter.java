@@ -104,7 +104,7 @@ public final class V1_21_11Adapter implements VersionAdapter {
 
         ServerPlayer npc = new NullPlayer(server, level, profile, request, this);
 
-        // NullPlayer installs its packet listener (which discards sends) in its
+        // NullPlayer installs a listener backed by a packet-discarding sink in its
         // constructor. Never register a ServerPlayer with a null connection:
         // Paper's server tick can send packets outside the entity tick guard.
         npc.setPos(request.position().x(), request.position().y(), request.position().z());
