@@ -11,14 +11,15 @@
 
 # NullArmy
 
-**A Paper/Spigot plugin that spawns Nulls — physically simulated, player-like NPCs that fight, build, and survive using nothing but real vanilla mechanics.**
+**An early-stage Paper plugin for experimenting with physically simulated, player-like Null NPCs. The advertised gameplay is not yet complete or verified.**
 
 <br>
 
 ![Status](https://img.shields.io/badge/status-specification%20%2F%20pre--alpha-blue)
 ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
 ![Minecraft](https://img.shields.io/badge/minecraft-1.21.x%20%E2%86%92%201.21.11-3a7d3a?logo=minecraft&logoColor=white)
-![Platform](https://img.shields.io/badge/platform-Paper%20%2F%20Spigot-ff6b00)
+![Platform](https://img.shields.io/badge/platform-Paper%201.21.11-ff6b00)
+![Build](https://github.com/redglitchx001-dev/NullArmy/actions/workflows/build.yml/badge.svg)
 ![Copyright](https://img.shields.io/badge/%C2%A9-RedGlitchX-lightgrey)
 ![License](https://img.shields.io/badge/license-none%20declared%20yet-red)
 
@@ -98,7 +99,7 @@ The audit is done. These are its outputs:
 | [`BUILD_TUTORIAL.md`](BUILD_TUTORIAL.md) | Step-by-step: from a fresh machine to a running `NullArmy.jar` |
 | [`RELEASING.md`](RELEASING.md) | How to publish: versioning, CI workflow, checksums, GitHub releases, licence choice |
 
-> **Two blockers surfaced in Phase 0 and both need an owner decision:** the entire 1.21.x target range is **end-of-life** (Paper 1.21.11 support ended 2026-06-15), and this build environment has **no JDK, no Gradle, and no access to `repo.papermc.io`**. See the plan's [§8 Owner decisions](IMPLEMENTATION_PLAN.md#8-owner-decisions-required).
+> **Release warning:** the only adapter in this checkout targets Paper 1.21.11, which is end-of-life, and the code has not been verified on a live server. This sandbox has no JDK or access to the Paper Maven repository, so use the checked-in Gradle wrapper and GitHub Actions build for compilation. A green CI job is not a stable-release approval.
 
 ### ⚠️ Verification status of the code
 
@@ -123,7 +124,7 @@ Six rules that override every other feature request. A feature that breaks one o
 
 No Citizens. No ProtocolLib. No WorldEdit. No pathfinding library. No AI SDK. No shaded third-party JSON parser downloading itself at runtime.
 
-NullArmy talks to **Paper/Spigot APIs plus its own NMS and packet code**, and nothing else. The JDK HTTP client handles external AI calls. JSON is handled by a small, strictly bounded in-project codec. There is no hidden download, no runtime library install, no telemetry phone-home.
+NullArmy currently targets **Paper only**, using the Paper API plus its own NMS and packet code. The JDK HTTP client is reserved for future AI calls. JSON is handled by a small, strictly bounded in-project codec. There is no hidden download, no runtime library install, no telemetry phone-home.
 
 NMS code lives behind version adapters. **No single NMS package, mapping set, packet shape, or constructor is assumed to work across every 1.21 patch version** — each claimed version is built and tested separately.
 
@@ -297,17 +298,16 @@ nullarmy/
 
 ## Version Support
 
-Target: **Minecraft 1.21.x → 1.21.11** (Paper/Spigot).
+This source currently contains one **unverified Paper 1.21.11** adapter. Spigot compatibility and all
+other Minecraft versions are unsupported. Paper 1.21.11 is end-of-life.
 
-| Version | Adapter | Status |
-| --- | :-: | --- |
-| 1.21.x | `v1_21_R1` | ⬜ Not started |
-| … | … | ⬜ Not started |
-| 1.21.11 | `v1_21_Rn` | ⬜ Not started |
+| Server | Adapter | Status |
+| --- | --- | --- |
+| Paper 1.21.11 | `v1_21_11` | Source present; compile/runtime validation pending |
+| Other Paper versions / Spigot | — | Unsupported |
 
-**Verify each exact server build before claiming support.** NullArmy does **not** promise every patch version on the strength of one successful compile — each version is built and tested separately, and the mappings/builds actually tested are recorded here.
-
-Unsupported builds must **fail clearly**, not silently limp along.
+**Do not infer compatibility from a successful compile.** Each exact server build must be smoke-tested
+and recorded here before it is advertised.
 
 ---
 
@@ -489,23 +489,20 @@ Implementation runs in gated phases. Each phase ends with a handoff stating file
 
 ## Building
 
-**There is nothing to build yet.** Build instructions land with **Phase 1**, which is currently gated on two owner decisions (see [`IMPLEMENTATION_PLAN.md` §8](IMPLEMENTATION_PLAN.md#8-owner-decisions-required)).
-
-Two Phase 0 findings affect anyone about to try:
-
-- **The declared target range is end-of-life.** Paper 1.21.11 support ended 2026-06-15 and 1.21.10 ended 2026-01-17; every version from 1.21 → 1.21.11 is `UNSUPPORTED`. The current Minecraft release is 26.3.
-- **The reference sandbox cannot build this project.** No JDK, no Gradle, and network access limited to `github.com` — `repo.papermc.io` (which hosts the mandatory Paper dev bundle), Maven Central, Gradle distributions, and JDK downloads are all unreachable. Build/verify must happen on a properly provisioned machine.
-
-Expected shape once Phase 1 completes:
+The repository includes a Gradle wrapper and a GitHub Actions build. With JDK 21 and access to
+PaperMC's Maven repository, run:
 
 ```bash
-git clone https://github.com/redglitchx001-dev/NullArmy.git
-cd NullArmy
-./gradlew build          # requires JDK 21 (Paper 1.21+ baseline)
-# → build/libs/NullArmy-<version>.jar
+./gradlew clean build --no-daemon
+# → plugin/build/libs/NullArmy-<version>.jar
 ```
 
-The built JAR must contain **no** third-party runtime dependencies. If it does, that's a bug.
+The build runs the dependency-free core test suite and produces a Paper-only, Mojang-mapped plugin
+JAR. GitHub Actions uploads the JAR and SHA-256 checksum as a short-lived workflow artifact; it does
+not publish a GitHub Release. See [`BUILD.md`](BUILD.md) for verification steps.
+
+**A built JAR is not a finished plugin release.** The code still needs real-server testing, and most
+of the documented gameplay is not implemented. There is no stable v1.0.0 release.
 
 ---
 
@@ -547,5 +544,8 @@ The design brief lives in [`NullArmy_Master_Prompt.md`](NullArmy_Master_Prompt.m
 **Never fake success.**
 
 </div>
+
+
+/div>
 
 

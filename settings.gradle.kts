@@ -6,8 +6,15 @@
  *   core     - version-independent, NMS-free, Bukkit-free. Pure logic. Unit testable.
  *   nms/api  - the VersionAdapter SPI. Interfaces only.
  *   nms/vX   - one module per supported server version (paperweight-userdev).
- *   plugin   - Bukkit bootstrap, commands, configuration, persistence.
+ *   plugin   - Paper bootstrap, commands, configuration, persistence.
  */
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        maven("https://repo.papermc.io/repository/maven-public/")
+    }
+}
+
 rootProject.name = "NullArmy"
 
 include(":core")

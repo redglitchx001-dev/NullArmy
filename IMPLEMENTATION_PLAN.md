@@ -127,9 +127,9 @@ Two consequences that directly shape the architecture:
 
 Paper 1.21.11 **build 17060+ removed the runtime reflection remapping** that translated Spigot-mapped plugins to the Mojang-mapped runtime. This is a live, breaking change — it is what broke ProtocolLib (`NoSuchMethodError: CraftAttribute.minecraftToBukkit`).
 
-**Consequence for NullArmy:** a `reobfJar` (Spigot-mapped) artifact **will not work on recent 1.21.11 builds**, even though the official docs still describe reobfuscation "up to 1.21.11". The safe artifact for the whole 1.21.x range is **Mojang-mapped**, declared as a Paper plugin (`paper-plugin.yml`) so the loader assumes the Mojang namespace.
+**Consequence for NullArmy:** the release artifact must be Mojang-mapped for the Paper target. The build now selects Paperweight's `MOJANG_PRODUCTION` artifact configuration and places `paperweight-mappings-namespace: mojang` in the final JAR manifest. It uses the standard `plugin.yml` descriptor so Bukkit-style command metadata works; the artifact is Paper-only, not Spigot-compatible.
 
-> **Assumption A-14** — ship Mojang-mapped. This *contradicts* the literal reading of the Paper docs; it is the empirically safer choice given the remapping removal. **Must be verified against a real server in Phase 1** (V-02).
+> **Assumption A-14** — ship Mojang-mapped. The mapping choice is now explicit in Gradle and the JAR manifest, but **must still be verified against a real Paper 1.21.11 server** (V-02).
 
 ### 3.4 Creating the Null entity
 
@@ -350,7 +350,7 @@ The spec's Phase 0 requires resolving every ambiguity. These are **decisions tak
 | **A-11** | `/null gui` mechanics | Bukkit Inventory GUI, **planning-only**, read-only on real items | §4 — blueprint, not duplicator |
 | **A-12** | Commander count edge cases | squad ≥2 → **2** commanders; squad = 1 → 1; empty → 0; stable succession | §3 |
 | **A-13** | Adapter naming | By MC version (`v1_21_11`), **not** `R`-revision | CB relocation dropped in 1.20.5 (§3.2) |
-| **A-14** ⚠️ | Which artifact to ship | **Mojang-mapped** (`paper-plugin.yml`) | 1.21.11 b17060+ removed runtime remapping — see §3.3. *Contradicts literal docs; verify in P1* |
+| **A-14** ⚠️ | Which artifact to ship | **Mojang-mapped** (Paperweight `MOJANG_PRODUCTION` + manifest namespace) | 1.21.11 Paper target; runtime load remains to be verified — see §3.3 |
 | **A-15** | Folia / regionised scheduling | **Out of scope for v1** | Spec assumes a single main thread |
 
 ### 7.1 Proposed default caps (A-09)
@@ -426,7 +426,7 @@ This sandbox has no JDK, no Gradle, and no access to `repo.papermc.io`.
 
 | Phase | First files to create |
 | --- | --- |
-| **1** | `settings.gradle.kts`, root `build.gradle.kts`, `core/build.gradle.kts`, `nms/api/…/VersionAdapter.java`, `nms/v1_21_11/…`, `plugin/src/main/resources/paper-plugin.yml`, config classes, lifecycle |
+| **1** | `settings.gradle.kts`, root `build.gradle.kts`, `core/build.gradle.kts`, `nms/api/…/VersionAdapter.java`, `nms/v1_21_11/…`, `plugin/src/main/resources/plugin.yml`, config classes, lifecycle |
 | **2** | `NullEntity` (adapter-side), profile/skin, `NullRegistry`, persistence, commander selection, safe-spawn validation |
 | **3** | `CallHorn` / `TotemOfNull` triggers, chat count flow, portal effects, `/null gui`, command tree, permissions |
 | **4** | `Perception`, `AStar`, `Boids`, `FormationController`, stuck recovery |
