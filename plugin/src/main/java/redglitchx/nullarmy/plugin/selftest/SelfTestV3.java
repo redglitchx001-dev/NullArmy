@@ -230,7 +230,40 @@ final class SelfTestV3 {
 
     // ---------------------------------------------------------------- the plan
 
+    /**
+     * Removes hostile mobs around the test areas. The smoke server is a superflat
+     * world below y=40, where slimes spawn at any light level; a slime touching a
+     * Null hurts it, the Null rightly fights back (combat.retaliate), and a
+     * formation or a timed strike being measured is no longer what it was.
+     */
+    private void clearEnemies() {
+        if (world == null) {
+            return;
+        }
+        int removed = 0;
+        for (Entity e : world.getNearbyEntities(new Location(world, origin.x(), origin.y(), origin.z()), 72, 32, 72)) {
+            if (e instanceof org.bukkit.entity.Enemy && !(e instanceof Player)) {
+                e.remove();
+                removed++;
+            }
+        }
+        enemiesRemoved += removed;
+    }
+
+    private int enemiesRemoved;
+
     void enqueue(Deque<Runnable> steps) {
+        Deque<Runnable> plan = new java.util.ArrayDeque<>();
+        enqueuePlan(plan);
+        for (Runnable step : plan) {
+            steps.add(() -> {
+                clearEnemies();
+                step.run();
+            });
+        }
+    }
+
+    private void enqueuePlan(Deque<Runnable> steps) {
         steps.add(() -> {
             forbiddenAtStart = plugin.chatGate() == null ? 0 : plugin.chatGate().forbiddenBroadcasts();
             prepare(origin, 48);
@@ -303,7 +336,7 @@ final class SelfTestV3 {
         steps.add(this::b17BowCheck);
         steps.add(() -> {
             cleanup();
-            t.say("v3 checks finished");
+            t.say("v3 checks finished (" + enemiesRemoved + " hostile mob(s) cleared from the test areas)");
         });
     }
 

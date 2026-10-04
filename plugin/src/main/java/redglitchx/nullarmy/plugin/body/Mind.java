@@ -96,11 +96,17 @@ public final class Mind {
     /** True once the Null reached its formation cell (left only when pushed > 0.35 away). */
     boolean atCell;
 
+    private static String describeEntity(UUID id) {
+        org.bukkit.entity.Entity e = org.bukkit.Bukkit.getEntity(id);
+        return e == null ? "gone" : e.getType().name().toLowerCase(java.util.Locale.ROOT);
+    }
+
     /** One line for diagnostics. */
     public String describe() {
         return "order=" + (order == null ? "-" : order.verb) + " exit=" + (exitPoint == null ? "-"
                 : String.format(java.util.Locale.ROOT, "%.1f,%.1f,%.1f", exitPoint.x(), exitPoint.y(), exitPoint.z()))
-                + " exitUntil=" + exitUntil + " slide=" + (slideTo != null) + " fight=" + (combatTarget != null)
+                + " exitUntil=" + exitUntil + " slide=" + (slideTo != null) + " fight=" + (combatTarget == null ? "-"
+                : describeEntity(combatTarget))
                 + " detour=" + (detour != null) + " blocked=" + blockedTicks + " atCell=" + atCell
                 + " resting=" + resting + " eating=" + eating();
     }
