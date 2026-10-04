@@ -243,18 +243,43 @@ public final class CombatBrain {
         return intent;
     }
 
+    /** Last seen position of each aimed-at target: {x, y, z, tick}. */
+    private final java.util.Map<UUID, double[]> lastSeen = new java.util.HashMap<>();
+    private final java.util.Map<UUID, Vector> seenVelocity = new java.util.HashMap<>();
+
+    /**
+     * How fast a target really moves, in blocks per tick, from its position one
+     * tick ago. An entity's stored velocity is the value after ground friction -
+     * about half of what it actually covers per tick while walking - so leading
+     * with it would aim well behind a runner.
+     */
+    Vector observedVelocity(LivingEntity target) {
+        Location at = target.getLocation();
+        long now = brain.now();
+        double[] last = lastSeen.get(target.getUniqueId());
+        Vector velocity = seenVelocity.get(target.getUniqueId());
+        if (last == null || now - (long) last[3] > 5) {
+            velocity = target.getVelocity();
+        } else if (now > (long) last[3]) {
+            double dt = now - last[3];
+            velocity = new Vector((at.getX() - last[0]) / dt, (at.getY() - last[1]) / dt, (at.getZ() - last[2]) / dt);
+            seenVelocity.put(target.getUniqueId(), velocity);
+        }
+        if (last == null || now > (long) last[3]) {
+            lastSeen.put(target.getUniqueId(), new double[] {at.getX(), at.getY(), at.getZ(), now});
+        }
+        if (lastSeen.size() > 256) {
+            lastSeen.clear();
+            seenVelocity.clear();
+        }
+        return velocity == null ? new Vector() : velocity;
+    }
+
     /** The firing solution for a fully drawn bow at this target. */
     public Ballistics.Aim aimAt(Player handle, LivingEntity target) {
         Location eye = handle.getEyeLocation();
         Location at = target.getLocation();
-        Vector velocity = target.getVelocity();
-        if (plugin.adapter() != null && plugin.adapter().isNullEntity(target.getUniqueId())) {
-            NullBody body = plugin.adapter().bodyOf(target.getUniqueId());
-            if (body != null) {
-                Vec3d v = body.velocity();
-                velocity = new Vector(v.x(), v.y(), v.z());
-            }
-        }
+        Vector velocity = observedVelocity(target);
         double targetCentreY = at.getY() + target.getHeight() * 0.6D;
         return Ballistics.solve(eye.getX(), eye.getY(), eye.getZ(), at.getX(), targetCentreY, at.getZ(),
                 velocity.getX(), velocity.getY(), velocity.getZ(), Ballistics.FULL_DRAW_SPEED);

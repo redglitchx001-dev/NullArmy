@@ -1331,17 +1331,39 @@ final class SelfTestV3 {
         return new Vec3d(p.x(), p.y() + 1.6D, p.z());
     }
 
+    /** The last hit from {@code attacker} on {@code victim} since {@code since}, or null. */
+    private NullLifecycleListener.Hit hitBy(NullBody attacker, NullBody victim, long since) {
+        NullLifecycleListener.Hit found = null;
+        for (NullLifecycleListener.Hit hit : plugin.lifecycle().hitsSince(since)) {
+            if (attacker.uuid().equals(hit.attacker) && victim.uuid().equals(hit.victim)) {
+                found = hit;
+            }
+        }
+        return found;
+    }
+
+    private void armSword(Player attacker) {
+        ItemStack held = attacker.getInventory().getItemInMainHand();
+        if (held == null || held.getType() != Material.NETHERITE_SWORD || !held.getEnchantments().isEmpty()) {
+            attacker.getInventory().setItemInMainHand(new ItemStack(Material.NETHERITE_SWORD));
+        }
+    }
+
     private void b17Standing() {
         if (one == null) {
             return;
         }
         mark = plugin.currentTick();
         Player attacker = handle(one);
+        armSword(attacker);
+        notes.clear();
+        notes.add("hand=" + attacker.getInventory().getItemInMainHand().getType() + " cooldown="
+                + String.format(Locale.ROOT, "%.2f", attacker.getAttackCooldown()));
         attacker.swingMainHand();
         attacker.attack(handle(two));
-        List<NullLifecycleListener.Hit> hits = plugin.lifecycle().hitsSince(mark);
-        numberA = hits.isEmpty() ? 0.0D : hits.get(hits.size() - 1).baseDamage;
-        flag = !hits.isEmpty() && !hits.get(hits.size() - 1).critical;
+        NullLifecycleListener.Hit hit = hitBy(one, two, mark);
+        numberA = hit == null ? 0.0D : hit.baseDamage;
+        flag = hit != null && !hit.critical;
         t.gap(30);
     }
 
@@ -1359,6 +1381,10 @@ final class SelfTestV3 {
             }
             if (!body.onGround() && body.velocity().y() < 0.0D && body.fallDistance() > 0.0D) {
                 Player attacker = handle(body);
+                armSword(attacker);
+                notes.add("falling hand=" + attacker.getInventory().getItemInMainHand().getType() + " cooldown="
+                        + String.format(Locale.ROOT, "%.2f", attacker.getAttackCooldown()) + " fall="
+                        + String.format(Locale.ROOT, "%.2f", body.fallDistance()));
                 attacker.swingMainHand();
                 attacker.attack(handle(two));
                 counter = 1;
@@ -1372,13 +1398,13 @@ final class SelfTestV3 {
         if (one == null) {
             return;
         }
-        List<NullLifecycleListener.Hit> hits = plugin.lifecycle().hitsSince(mark);
-        double falling = hits.isEmpty() ? 0.0D : hits.get(hits.size() - 1).baseDamage;
-        boolean critical = !hits.isEmpty() && hits.get(hits.size() - 1).critical;
+        NullLifecycleListener.Hit hit = hitBy(one, two, mark);
+        double falling = hit == null ? 0.0D : hit.baseDamage;
+        boolean critical = hit != null && hit.critical;
         double ratio = numberA <= 0.0D ? 0.0D : falling / numberA;
         check("S-81", "B-17", flag && critical && ratio >= 1.4D, "a falling strike is a critical hit: "
                 + String.format(Locale.ROOT, "%.2f", falling) + " vs " + String.format(Locale.ROOT, "%.2f", numberA)
-                + " standing (x" + String.format(Locale.ROOT, "%.2f", ratio) + ")");
+                + " standing (x" + String.format(Locale.ROOT, "%.2f", ratio) + "; " + String.join(", ", notes) + ")");
     }
 
     private void b17Shield() {
@@ -1439,37 +1465,60 @@ final class SelfTestV3 {
         t.gap(90);
     }
 
+    private Vec3d previousTarget;
+    private Vector targetStep;
+
     private void b17BowAim() {
         if (one == null) {
             return;
         }
         Player shooter = handle(one);
+        int bow = Bodies.find(shooter.getInventory(), Material.BOW);
+        if (bow >= 0) {
+            Bodies.hold(shooter, bow);
+        }
         Vec3d p = two.bodyPosition();
         plugin.brain().order(List.of(two), Mind.Verb.SPRINT, new Vec3d(p.x(), p.y(), p.z() + 30.0D), null, null, 1);
         shooter.startUsingItem(EquipmentSlot.HAND);
+        notes.clear();
+        notes.add("drawing=" + shooter.isHandRaised() + " item=" + shooter.getInventory().getItemInMainHand().getType()
+                + " arrows=" + Bodies.count(shooter.getInventory(), Material.ARROW));
         mark = plugin.currentTick();
         counter = 0;
+        previousTarget = null;
+        targetStep = new Vector();
         final NullBody body = one;
         sampler = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
             if (counter > 0) {
                 return;
             }
             Player s = handle(body);
-            aim = plugin.brain().combat().aimAt(s, handle(two));
+            Vec3d tp = two.bodyPosition();
+            if (previousTarget != null) {
+                targetStep = new Vector(tp.x() - previousTarget.x(), 0.0D, tp.z() - previousTarget.z());
+            }
+            previousTarget = tp;
+            Location eye = s.getEyeLocation();
+            aim = Ballistics.solve(eye.getX(), eye.getY(), eye.getZ(), tp.x(), tp.y() + 1.0D, tp.z(),
+                    targetStep.getX(), 0.0D, targetStep.getZ(), Ballistics.FULL_DRAW_SPEED);
             Vec3d q = body.bodyPosition();
             double[] look = aim.lookPoint(q.x(), q.y() + 1.62D, q.z(), 10.0D);
             plugin.brain().forceLook(body, new Vec3d(look[0], look[1], look[2]), 5, false);
             boolean aligned = Math.abs(wrap(body.bodyYaw() - aim.yaw())) < 2.0D
                     && Math.abs(body.pitch() - aim.pitch()) < 2.0D;
-            if (plugin.currentTick() - mark >= 24 && aligned && two.velocity().horizontalLength() > 0.05D) {
-                numberA = two.bodyPosition().x();
-                numberB = two.bodyPosition().z();
-                vecA = two.velocity();
-                body.releaseUseItem();
+            long drawn = plugin.currentTick() - mark;
+            if ((drawn >= 24 && aligned && targetStep.length() > 0.12D) || drawn >= 60) {
+                numberA = tp.x();
+                numberB = tp.z();
+                vecA = new Vec3d(targetStep.getX(), 0.0D, targetStep.getZ());
+                boolean raised = s.isHandRaised();
+                boolean released = body.releaseUseItem();
+                notes.add("released=" + released + " stillDrawing=" + raised + " aligned=" + aligned + " after="
+                        + drawn + " targetSpeed=" + String.format(Locale.ROOT, "%.2f", targetStep.length()));
                 counter = 1;
             }
         }, 1L, 1L);
-        t.gap(50);
+        t.gap(70);
     }
 
     private void b17BowCheck() {
@@ -1494,7 +1543,8 @@ final class SelfTestV3 {
         check("S-83", "B-17", shot && lead > 0.5D && along, "a drawn bow leads a moving target (lead "
                 + String.format(Locale.ROOT, "%.2f", lead) + " blocks; launch yaw "
                 + String.format(Locale.ROOT, "%.1f", arrowYaw) + " vs aim "
-                + (aim == null ? "?" : String.format(Locale.ROOT, "%.1f", aim.yaw())) + ")");
+                + (aim == null ? "?" : String.format(Locale.ROOT, "%.1f", aim.yaw())) + "; shot=" + shot + "; "
+                + String.join(", ", notes) + ")");
         dismissAll();
     }
 
