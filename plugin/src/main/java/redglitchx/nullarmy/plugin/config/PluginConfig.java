@@ -38,6 +38,9 @@ import java.util.logging.Logger;
  */
 public final class PluginConfig {
 
+    /** Kept so the skin getters can read their keys lazily, at call time. */
+    private final FileConfiguration config;
+
     private final Caps caps;
 
     private final boolean griefingEnabled;
@@ -59,6 +62,7 @@ public final class PluginConfig {
         if (config == null) {
             throw new IllegalArgumentException("config must not be empty");
         }
+        this.config = config;
 
         this.caps = new Caps()
                 .withMaxLiveNpcs(config.getInt("limits.max-live-npcs", 64))
