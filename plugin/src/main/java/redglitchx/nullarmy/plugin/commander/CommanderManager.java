@@ -1,5 +1,6 @@
 package redglitchx.nullarmy.plugin.commander;
 
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -22,6 +23,7 @@ import redglitchx.nullarmy.plugin.config.PluginConfig;
 import redglitchx.nullarmy.plugin.config.Reloadable;
 import redglitchx.nullarmy.plugin.skin.SkinData;
 import redglitchx.nullarmy.plugin.skin.SkinResolver;
+import redglitchx.nullarmy.plugin.util.Guard;
 
 import java.io.File;
 import java.io.IOException;
@@ -50,6 +52,9 @@ public final class CommanderManager implements Listener, Reloadable {
 
     private static final String FILE_NAME = "commander.yml";
     private static final String DEFAULT_NAME = "NullCommander";
+
+    /** Every message this class sends starts here, per spec 2.1. */
+    private static final String PREFIX = "[NullArmy] ";
 
     private final NullArmyPlugin plugin;
     private final SkinResolver skins;
@@ -152,26 +157,59 @@ public final class CommanderManager implements Listener, Reloadable {
      * silently.</p>
      */
     public boolean spawn(Player owner) {
+        try {
+            return spawnChecked(owner);
+        } catch (Throwable t) {
+            // The Commander is created through NMS, so this is the one place in
+            // the class that really can take a server down: nothing may leave here.
+            plugin.getLogger().severe("[NullArmy] Commander spawn failed: " + Guard.describe(t));
+            if (owner != null) {
+                owner.sendMessage(PREFIX + "The Commander could not be summoned: " + Guard.describe(t));
+            }
+            return false;
+        }
+    }
+
+    /** The real spawn sequence, isolated so the failure can be contained. */
+    private boolean spawnChecked(Player owner) {
+        if (owner == null) {
+            return false;
+        }
+        // Creating an NPC is main-thread work only (spec 2.4); refuse politely
+        // rather than corrupting the world from another thread.
+        if (!Bukkit.isPrimaryThread()) {
+            owner.sendMessage(PREFIX + "The Commander must be summoned from the server thread.");
+            return false;
+        }
         VersionAdapter adapter = plugin.adapter();
         if (adapter == null) {
-            owner.sendMessage("The Commander needs a version adapter; none is loaded.");
+            owner.sendMessage(PREFIX + "The Commander needs a version adapter; none is loaded.");
             return false;
         }
         if (isSpawned()) {
-            owner.sendMessage("The Commander is already here. Use /null dismiss first.");
+            owner.sendMessage(PREFIX + "The Commander is already here. Use /null dismiss first.");
+            return false;
+        }
+        // Same latched guard the squads use: if NMS spawning has already failed
+        // once this session, do not try it again with a live server on the line.
+        if (plugin.spawnBreaker().isOpen()) {
+            owner.sendMessage(PREFIX + "Null creation is disabled for this session: "
+                    + plugin.spawnBreaker().reason());
+            owner.sendMessage(PREFIX + "Fix the cause, then run /null reload to re-arm it.");
             return false;
         }
 
         Location origin = owner.getLocation();
-        String world = origin.getWorld() == null ? null : origin.getWorld().getName();
+        String world = origin == null || origin.getWorld() == null ? null : origin.getWorld().getName();
         if (world == null) {
-            owner.sendMessage("Could not determine your world.");
+            owner.sendMessage(PREFIX + "Could not determine your world.");
             return false;
         }
 
         Vec3d spot = findSafeSpot(adapter, world, origin);
         if (spot == null) {
-            owner.sendMessage("No safe ground nearby for the Commander to step onto.");
+            owner.sendMessage(PREFIX + "No safe ground nearby for the Commander to step onto -"
+                    + " move to open ground and try again.");
             return false;
         }
 
@@ -181,17 +219,31 @@ public final class CommanderManager implements Listener, Reloadable {
         try {
             commander = adapter.spawnNull(new VersionAdapter.SpawnRequest(
                     owner.getUniqueId(), name, world, spot, 36 * 64, value, signature));
-        } catch (RuntimeException e) {
-            owner.sendMessage("The Commander could not be summoned: " + e.getMessage());
+        } catch (Throwable t) {
+            String reason = Guard.describe(t);
+            plugin.spawnBreaker().trip(reason, t, plugin.getLogger(),
+                    "Null creation is now latched off; the server is unaffected."
+                            + " Restart or run /null reload to try again after fixing the cause.");
+            owner.sendMessage(PREFIX + "The Commander could not be summoned: " + reason);
+            return false;
+        }
+        if (commander == null) {
+            owner.sendMessage(PREFIX + "The adapter returned no entity - nothing was summoned.");
             return false;
         }
 
-        // The portal is the whole point of the entrance: effects first, then the body.
-        adapter.playPortalEffects(world, spot,
-                Math.max(Caps.minPortalEffects(), plugin.pluginConfig().caps().portalEffectsPerSummon()));
+        // The portal is the whole point of the entrance. It is cosmetic, so it
+        // may fail without losing the Commander that already exists.
+        Guard.attempt(plugin.getLogger(), "Commander portal effects", () -> {
+            int effects = Math.max(Caps.minPortalEffects(),
+                    plugin.pluginConfig() == null ? Caps.minPortalEffects()
+                            : plugin.pluginConfig().caps().portalEffectsPerSummon());
+            adapter.playPortalEffects(world, spot, effects);
+        });
 
-        applyLoadout();
-        owner.sendMessage("The Commander steps out of the portal.");
+        Guard.attempt(plugin.getLogger(), "Commander loadout", this::applyLoadout);
+        owner.sendMessage(PREFIX + "The Commander steps out of the portal."
+                + " Use /null loadout to equip it.");
         return true;
     }
 
@@ -213,18 +265,25 @@ public final class CommanderManager implements Listener, Reloadable {
     }
 
     public boolean despawn() {
-        if (!isSpawned()) {
+        NullBody body = commander;
+        commander = null;
+        if (body == null) {
             return false;
         }
-        commander.destroy();
-        commander = null;
-        return true;
+        // The reference is dropped first so a failure cannot leave the manager
+        // thinking a body still exists.
+        return Guard.attempt(plugin.getLogger(), "despawning the Commander", body::destroy);
     }
 
     /** Opens the loadout editor for a player. */
     public void openLoadout(Player viewer) {
-        CommanderInventoryGui gui = new CommanderInventoryGui("Commander loadout", loadout);
-        gui.open(viewer);
+        if (viewer == null) {
+            return;
+        }
+        Guard.attempt(plugin.getLogger(), "opening the Commander loadout", () -> {
+            CommanderInventoryGui gui = new CommanderInventoryGui("Commander loadout", loadout);
+            gui.open(viewer);
+        });
     }
 
     /** Persists the loadout to commander.yml. */
