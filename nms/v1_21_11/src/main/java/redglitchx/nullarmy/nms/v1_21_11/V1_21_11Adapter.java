@@ -809,6 +809,21 @@ public final class V1_21_11Adapter implements VersionAdapter {
     }
 
     @Override
+    public NullBody bodyOf(UUID id) {
+        if (id == null) {
+            return null;
+        }
+        synchronized (active) {
+            for (NullBody body : active) {
+                if (body instanceof NullPlayer && id.equals(((NullPlayer) body).getUUID())) {
+                    return body;
+                }
+            }
+        }
+        return null;
+    }
+
+    @Override
     public String[] skinOf(NullBody body) {
         if (!(body instanceof NullPlayer)) {
             return null;

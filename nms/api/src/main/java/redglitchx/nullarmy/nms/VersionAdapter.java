@@ -321,4 +321,14 @@ public interface VersionAdapter {
      * {@code {value, signature}}; null when it has none.
      */
     default String[] skinOf(NullBody body) { return null; }
+
+    /**
+     * The body the adapter created with this entity UUID - including one that is
+     * dying - or null. Lets the plugin recognise its own bodies in Bukkit events
+     * (a dying body is no longer in {@link #activeIn}).
+     */
+    default NullBody bodyOf(UUID id) { return null; }
+
+    /** True when the UUID belongs to a body this adapter created (probes included). */
+    default boolean isNullEntity(UUID id) { return bodyOf(id) != null; }
 }

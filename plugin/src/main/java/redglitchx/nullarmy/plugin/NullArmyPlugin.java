@@ -98,6 +98,21 @@ public final class NullArmyPlugin extends JavaPlugin {
     private MissionRunner missionRunner;
     private SelfTest selfTest;
 
+    // v3
+    private redglitchx.nullarmy.plugin.chat.ChatGate chatGate;
+    private redglitchx.nullarmy.plugin.body.NullBrain brain;
+    private redglitchx.nullarmy.plugin.body.NullLifecycleListener lifecycle;
+    private redglitchx.nullarmy.plugin.skin.SkinChain skinChain;
+    private redglitchx.nullarmy.plugin.ai.builder.BuilderService builder;
+    private redglitchx.nullarmy.plugin.loadout.LoadoutService loadouts;
+    private redglitchx.nullarmy.plugin.zone.ZoneService zones;
+    private redglitchx.nullarmy.plugin.command.V3Commands v3Commands;
+
+    /** The last config.yml that parsed; what getConfig() returns. */
+    private org.bukkit.configuration.file.YamlConfiguration lastGoodConfig;
+    /** Why the last load of config.yml was not applied; null when it was. */
+    private redglitchx.nullarmy.core.config.YamlProblem lastConfigProblem;
+
     private TickBudget pathBudget;
     private TickBudget blockInspectionBudget;
 
@@ -138,6 +153,7 @@ public final class NullArmyPlugin extends JavaPlugin {
     }
 
     private void boot() {
+        this.chatGate = new redglitchx.nullarmy.plugin.chat.ChatGate(getLogger());
         // 1. Data folder + config, before anything reads a setting.
         final File configFile = ConfigBootstrap.prepare(this);
         this.pluginConfig = buildConfig();
@@ -179,6 +195,15 @@ public final class NullArmyPlugin extends JavaPlugin {
         // owner-edited loadout is left exactly as it was saved.
         Guard.attempt(getLogger(), "installing the Commander's default kit",
                 () -> kitService.installCommanderDefault(commander));
+        this.zones = new redglitchx.nullarmy.plugin.zone.ZoneService(this);
+        this.brain = new redglitchx.nullarmy.plugin.body.NullBrain(this, pluginConfig);
+        this.lifecycle = new redglitchx.nullarmy.plugin.body.NullLifecycleListener(this);
+        this.skinChain = new redglitchx.nullarmy.plugin.skin.SkinChain(this);
+        this.builder = new redglitchx.nullarmy.plugin.ai.builder.BuilderService(this, pluginConfig);
+        this.loadouts = new redglitchx.nullarmy.plugin.loadout.LoadoutService(this);
+        this.v3Commands = new redglitchx.nullarmy.plugin.command.V3Commands(this);
+        Guard.attempt(getLogger(), "installing the body rules",
+                () -> adapter.applyBodySettings(pluginConfig.v3().bodySettings()));
         this.entityRegistry = new EntityRegistry(this);
         this.witherCannon = new WitherCannon(this, entityRegistry);
         this.airdrop = new Airdrop(this, entityRegistry);
@@ -212,6 +237,8 @@ public final class NullArmyPlugin extends JavaPlugin {
         // After SummonFlow: a player answering "How many Nulls should come?"
         // must never have that answer read as conversation.
         registerListener(chatDirector, "chat interface");
+        registerListener(lifecycle, "Null lifecycle (deaths, hits, silence)");
+        registerListener(loadouts, "loadout editor");
 
         // 5. Commands. A missing command is a warning, not a crash: the rest of
         //    the plugin is still useful through the tick loop and the menu.
@@ -232,6 +259,7 @@ public final class NullArmyPlugin extends JavaPlugin {
 
         // 6. Warm the skin cache in the background. Cosmetic, never fatal.
         Guard.attempt(getLogger(), "warming the skin cache", () -> commander.preloadSkin());
+        Guard.attempt(getLogger(), "resolving the skin chain", () -> skinChain.refreshAsync(false));
 
         // 7. The tick loop. Its own try/catch sits one level above the
         //    per-subsystem guards in onTick().
@@ -257,6 +285,9 @@ public final class NullArmyPlugin extends JavaPlugin {
         this.reloadables.add(command);
         this.reloadables.add(menuManager);
         this.reloadables.add(chatDirector);
+        this.reloadables.add(brain);
+        this.reloadables.add(builder);
+        this.reloadables.add(skinChain);
 
         this.fullyEnabled = true;
         getLogger().info("NullArmy enabled on " + serverVersion
@@ -275,6 +306,9 @@ public final class NullArmyPlugin extends JavaPlugin {
             if (tickTask != null) {
                 Guard.attempt(getLogger(), "stopping the tick loop", () -> tickTask.cancel());
                 tickTask = null;
+            }
+            if (builder != null) {
+                Guard.attempt(getLogger(), "stopping builds", () -> builder.stopAll("the plugin is disabling"));
             }
             if (squads != null) {
                 Guard.attempt(getLogger(), "requesting safe shutdown",
@@ -321,6 +355,9 @@ public final class NullArmyPlugin extends JavaPlugin {
                 }
                 getLogger().info("[NullArmy] removed " + removed + " tracked entity/entities.");
             }
+            if (brain != null) {
+                Guard.attempt(getLogger(), "clearing Null minds", () -> brain.clear());
+            }
             getLogger().info("NullArmy disabled (no entity was left behind).");
         } catch (Throwable t) {
             getLogger().log(Level.SEVERE, "[NullArmy] onDisable problem: " + Guard.describe(t), t);
@@ -352,6 +389,16 @@ public final class NullArmyPlugin extends JavaPlugin {
         guarded("squad tick", () -> {
             if (squads != null) {
                 squads.tick(tickCounter);
+            }
+        });
+        guarded("Null brain", () -> {
+            if (brain != null) {
+                brain.tick(tickCounter);
+            }
+        });
+        guarded("builder", () -> {
+            if (builder != null) {
+                builder.tick(tickCounter);
             }
         });
         guarded("summon prompts", () -> {
@@ -431,19 +478,94 @@ public final class NullArmyPlugin extends JavaPlugin {
     // ------------------------------------------------------------------ helpers
 
     private PluginConfig buildConfig() {
-        try {
-            return new PluginConfig(getConfig(), getLogger());
-        } catch (Throwable t) {
-            getLogger().log(Level.SEVERE, "[NullArmy] config.yml could not be parsed ("
-                    + Guard.describe(t) + "). Continuing with built-in defaults.");
-            try {
-                return new PluginConfig(new org.bukkit.configuration.file.YamlConfiguration(), getLogger());
-            } catch (Throwable fatal) {
-                // Should be impossible: an empty YamlConfiguration always parses.
-                getLogger().log(Level.SEVERE, "[NullArmy] even the default config failed", fatal);
-                return null;
-            }
+        PluginConfig built = loadConfigFrom(new File(getDataFolder(), ConfigBootstrap.FILE_NAME));
+        if (built != null) {
+            return built;
         }
+        // Nothing parsed and there is no previous configuration: the shipped
+        // defaults keep the plugin working until the file is fixed.
+        try {
+            org.bukkit.configuration.file.YamlConfiguration defaults =
+                    redglitchx.nullarmy.plugin.config.ConfigLoader.shipped(this);
+            org.bukkit.configuration.file.YamlConfiguration empty = new org.bukkit.configuration.file.YamlConfiguration();
+            empty.setDefaults(defaults);
+            return new PluginConfig(empty, getLogger());
+        } catch (Throwable fatal) {
+            getLogger().log(Level.WARNING, "[NullArmy] even the default config failed", fatal);
+            return null;
+        }
+    }
+
+    /**
+     * Parses a config file. On success it becomes the last good configuration;
+     * on a syntax error the problem is reported (file, line, column, the lines
+     * themselves) and null is returned - the caller keeps what it had.
+     */
+    private PluginConfig loadConfigFrom(File file) {
+        redglitchx.nullarmy.plugin.config.ConfigLoader.Outcome outcome =
+                redglitchx.nullarmy.plugin.config.ConfigLoader.load(this, file);
+        if (!outcome.ok()) {
+            lastConfigProblem = outcome.problem();
+            getLogger().warning("[NullArmy] " + lastConfigProblem.headline());
+            for (String line : lastConfigProblem.snippet()) {
+                getLogger().warning("[NullArmy]   " + line);
+            }
+            getLogger().warning("[NullArmy] " + (lastGoodConfig == null
+                    ? "no earlier configuration exists, so the shipped defaults are used until it is fixed."
+                    : "the last good configuration stays in use until it is fixed."));
+            if (chatGate != null) {
+                chatGate.event("config.error", "file", lastConfigProblem.file(), "line", lastConfigProblem.line(),
+                        "column", lastConfigProblem.column(), "problem", lastConfigProblem.problem());
+            }
+            return null;
+        }
+        try {
+            PluginConfig parsed = new PluginConfig(outcome.config(), getLogger());
+            lastGoodConfig = outcome.config();
+            lastConfigProblem = null;
+            return parsed;
+        } catch (Throwable t) {
+            lastConfigProblem = redglitchx.nullarmy.core.config.YamlProblem.locate(file.getName(),
+                    "the values could not be read: " + Guard.describe(t), null);
+            getLogger().warning("[NullArmy] " + lastConfigProblem.headline());
+            return null;
+        }
+    }
+
+    /** The last configuration that parsed - never Bukkit's empty fallback. */
+    @Override
+    public org.bukkit.configuration.file.FileConfiguration getConfig() {
+        if (lastGoodConfig != null) {
+            return lastGoodConfig;
+        }
+        return super.getConfig();
+    }
+
+    /**
+     * Bukkit's reload would print a stack trace and return an empty
+     * configuration for a broken file. This one keeps the last good one.
+     */
+    @Override
+    public void reloadConfig() {
+        loadConfigFrom(new File(getDataFolder(), ConfigBootstrap.FILE_NAME));
+    }
+
+    /** Why the last config load was not applied, or null. */
+    public redglitchx.nullarmy.core.config.YamlProblem lastConfigProblem() { return lastConfigProblem; }
+
+    /**
+     * The self test's malformed-config check: runs a file other than
+     * config.yml through exactly the load path and reports the problem,
+     * leaving the live configuration alone.
+     */
+    public redglitchx.nullarmy.core.config.YamlProblem tryConfigFile(File file) {
+        org.bukkit.configuration.file.YamlConfiguration goodBefore = lastGoodConfig;
+        redglitchx.nullarmy.core.config.YamlProblem problemBefore = lastConfigProblem;
+        PluginConfig parsed = loadConfigFrom(file);
+        redglitchx.nullarmy.core.config.YamlProblem problem = parsed == null ? lastConfigProblem : null;
+        lastGoodConfig = goodBefore;
+        lastConfigProblem = problemBefore;
+        return problem;
     }
 
     private VersionAdapter loadAdapter(String serverVersion) {
@@ -473,12 +595,10 @@ public final class NullArmyPlugin extends JavaPlugin {
      */
     public boolean reloadPluginConfig() {
         try {
-            // prepare() creates the file when it is missing, and when it exists it
-            // appends every setting this build ships that the file does not have
-            // yet - with a backup, and without touching a single owner value.
             ConfigBootstrap.prepare(this);
-            PluginConfig fresh = buildConfig();
+            PluginConfig fresh = loadConfigFrom(new File(getDataFolder(), ConfigBootstrap.FILE_NAME));
             if (fresh == null) {
+                // Reported already; the last good configuration stays in use.
                 return false;
             }
             this.pluginConfig = fresh;
@@ -492,13 +612,13 @@ public final class NullArmyPlugin extends JavaPlugin {
             if (adapter != null) {
                 Guard.attempt(getLogger(), "applying the tab-list setting",
                         () -> adapter.setTabListing(fresh.nullsInTabList()));
+                Guard.attempt(getLogger(), "installing the body rules",
+                        () -> adapter.applyBodySettings(fresh.v3().bodySettings()));
             }
-            // An explicit reload is also the way to re-arm the NMS breaker after
-            // a fix; the plugin says so in chat when it fires.
             spawnBreaker.reset();
             return true;
         } catch (Throwable t) {
-            getLogger().log(Level.SEVERE, "[NullArmy] /null reload failed: " + Guard.describe(t), t);
+            getLogger().log(Level.WARNING, "[NullArmy] /null reload failed: " + Guard.describe(t), t);
             return false;
         }
     }
@@ -506,6 +626,14 @@ public final class NullArmyPlugin extends JavaPlugin {
     // ------------------------------------------------------------------ accessors
 
     public PluginConfig pluginConfig() { return pluginConfig; }
+    public redglitchx.nullarmy.plugin.chat.ChatGate chatGate() { return chatGate; }
+    public redglitchx.nullarmy.plugin.body.NullBrain brain() { return brain; }
+    public redglitchx.nullarmy.plugin.body.NullLifecycleListener lifecycle() { return lifecycle; }
+    public redglitchx.nullarmy.plugin.skin.SkinChain skinChain() { return skinChain; }
+    public redglitchx.nullarmy.plugin.ai.builder.BuilderService builder() { return builder; }
+    public redglitchx.nullarmy.plugin.loadout.LoadoutService loadouts() { return loadouts; }
+    public redglitchx.nullarmy.plugin.zone.ZoneService zones() { return zones; }
+    public redglitchx.nullarmy.plugin.command.V3Commands v3Commands() { return v3Commands; }
     public VersionAdapter adapter() { return adapter; }
     public SquadManager squads() { return squads; }
     public SummonFlow summonFlow() { return summonFlow; }

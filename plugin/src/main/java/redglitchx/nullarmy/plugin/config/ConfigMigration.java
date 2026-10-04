@@ -111,7 +111,17 @@ public final class ConfigMigration {
         }
         try {
             Map<String, Object> shipped = leaves(loadResource(plugin));
-            Map<String, Object> existing = leaves(YamlConfiguration.loadConfiguration(file));
+            // Parse the owner's file strictly. Bukkit's loadConfiguration would
+            // return an EMPTY configuration for a file with a syntax error, every
+            // shipped key would look "missing", and the whole default file would
+            // be appended to the broken one - on every start. A file that does not
+            // parse is never touched.
+            ConfigLoader.Outcome current = ConfigLoader.load(plugin, file);
+            if (!current.ok()) {
+                return Report.failed("config.yml has a syntax error (" + current.problem().headline()
+                        + "); nothing was appended - fix it, then run /null reload");
+            }
+            Map<String, Object> existing = leaves(current.config());
             ConfigMerge.Result result = ConfigMerge.merge(existing, shipped);
             if (!result.changed()) {
                 return Report.untouched(result.unknownKeys());
@@ -121,6 +131,18 @@ public final class ConfigMigration {
             String block = renderBlock(result.additions(), version, backup);
             Files.write(file.toPath(), block.getBytes(StandardCharsets.UTF_8),
                     StandardOpenOption.APPEND, StandardOpenOption.CREATE);
+
+            // Re-parse what was written before anyone uses it; a block that does
+            // not parse is rolled back to the backup, never left behind.
+            ConfigLoader.Outcome after = ConfigLoader.load(plugin, file);
+            if (!after.ok()) {
+                if (backup != null) {
+                    Files.copy(backup.toPath(), file.toPath(),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+                return Report.failed("the appended settings did not parse (" + after.problem().headline()
+                        + "); config.yml was rolled back" + (backup == null ? "" : " to " + backup.getName()));
+            }
             return new Report(true, new ArrayList<>(result.additions().keySet()),
                     result.unknownKeys(), backup, null);
         } catch (Throwable t) {

@@ -276,12 +276,20 @@ public final class ChatDirector implements Listener, Reloadable {
 
     // ------------------------------------------------------------------- chat hook
 
-    @EventHandler(priority = EventPriority.LOWEST)
-    public void onChat(AsyncPlayerChatEvent event) {
+    /**
+     * Paper's modern chat event. The conversation is public: a line addressed to
+     * the Commander - by a wake word or by the Commander's plain name, in any
+     * case - stays in public chat, and the Commander answers in public chat with
+     * the gradient brand and its plain name (it is in the tab list like a
+     * player). Order lines are obeyed; the Nulls gesture and never speak. Any
+     * other line is left completely alone.
+     */
+    @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+    public void onChat(io.papermc.paper.event.player.AsyncChatEvent event) {
         Guard.attempt(plugin.getLogger(), "chat handling", () -> handle(event));
     }
 
-    private void handle(AsyncPlayerChatEvent event) {
+    private void handle(io.papermc.paper.event.player.AsyncChatEvent event) {
         if (event == null) {
             return;
         }
@@ -296,38 +304,39 @@ public final class ChatDirector implements Listener, Reloadable {
                 return;
             }
         } catch (Throwable ignored) {
-            // If the flow cannot be asked, the wake-word check below still applies.
+            // If the flow cannot be asked, the trigger check below still applies.
         }
 
-        String raw = event.getMessage() == null ? "" : event.getMessage().trim();
+        String raw = net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()
+                .serialize(event.message()).trim();
         if (raw.isEmpty()) {
             return;
         }
 
-        // 1. An open session takes the message, whatever it says.
+        // 1. An open private session takes the message, whatever it says.
         Session session = sessions.get(player.getUniqueId());
         if (session != null) {
+            event.setCancelled(true);
             if (isExit(raw)) {
-                event.setCancelled(true);
                 endSession(player, "you said so");
                 return;
             }
-            event.setCancelled(true);
             converse(player, session, raw);
             return;
         }
 
-        // 2. A wake word turns the rest into an order or a question.
-        String rest = stripWakeWord(raw);
+        // 2. Addressed to the Commander? Wake word or the Commander's name.
+        String rest = stripTrigger(raw);
         if (rest == null) {
-            return;
+            return; // silence: not for us
         }
-        if (rest.isEmpty()) {
-            event.setCancelled(true);
-            player.sendMessage(PREFIX + "Yes? Try 'null help', 'null attack <player>',"
-                    + " or 'null chat commander' to talk.");
-            return;
-        }
+        triggered++;
+        final UUID speaker = player.getUniqueId();
+        later(() -> {
+            if (plugin.brain() != null) {
+                plugin.brain().noteSpeaker(speaker, speaker);
+            }
+        });
 
         String talkTarget = talkCommand(rest);
         if (talkTarget != null) {
@@ -336,39 +345,208 @@ public final class ChatDirector implements Listener, Reloadable {
                 player.sendMessage(PREFIX + "Usage: 'null chat <null|commander|off>'.");
                 return;
             }
-            Speaker speaker = Speaker.parse(talkTarget);
-            if (speaker == null) {
+            Speaker target = Speaker.parse(talkTarget);
+            if (target == null) {
                 player.sendMessage(PREFIX + "'" + talkTarget + "' is neither a Null nor the Commander."
                         + " Use 'null chat commander', 'null chat null' or 'null chat off'.");
                 return;
             }
-            if (speaker == Speaker.NONE) {
+            if (target == Speaker.NONE) {
                 if (!endSession(player, null)) {
                     player.sendMessage(PREFIX + "No private channel was open.");
                 }
                 return;
             }
-            startSession(player, speaker);
+            startSession(player, target);
             return;
         }
 
-        String[] args = asCommand(rest);
+        boolean publicReplies = config == null || config.v3().commanderPublicReplies();
+        if (rest.isEmpty()) {
+            if (publicReplies) {
+                commanderReply("Yes, " + player.getName() + "? Give the order, or ask me something.");
+            } else {
+                event.setCancelled(true);
+                player.sendMessage(PREFIX + "Yes? Try 'null help', 'null attack <player>',"
+                        + " or 'null chat commander' to talk.");
+            }
+            return;
+        }
+
+        String[] args = orderWords(rest);
         if (args == null) {
-            // Not an order: it is a question for the model (or an honest refusal).
-            event.setCancelled(true);
-            ask(player, Speaker.COMMANDER, raw, null);
+            args = asCommand(rest);
+        }
+        if (args == null) {
+            // A question or a remark: the Commander answers.
+            if (publicReplies) {
+                answerPublicly(player, rest);
+            } else {
+                event.setCancelled(true);
+                ask(player, Speaker.COMMANDER, raw, null);
+            }
             return;
         }
 
-        event.setCancelled(true);
+        if (!publicReplies) {
+            event.setCancelled(true);
+        }
         if (!allowOrder(player)) {
             player.sendMessage(PREFIX + "Slow down - the Nulls can only take so many orders a minute.");
             return;
         }
+        final String verb = args[0].equals("order") && args.length > 2 ? args[2] : args[0];
         dispatch(player, args);
+        if (publicReplies) {
+            commanderReply(acknowledgement(verb, player.getName()));
+        }
     }
 
-    /** True when the player still has order budget this minute. */
+    private int triggered;
+
+    /** How many chat lines were addressed to the Commander this session (self test). */
+    public int triggeredCount() { return triggered; }
+
+    /** Runs on the main thread a tick later - after the player's own line is shown. */
+    private void later(Runnable action) {
+        try {
+            Bukkit.getScheduler().runTaskLater(plugin, () -> Guard.attempt(plugin.getLogger(),
+                    "Commander reply", action::run), 1L);
+        } catch (Throwable t) {
+            action.run();
+        }
+    }
+
+    private void commanderReply(String text) {
+        final String name = commanderName();
+        later(() -> {
+            if (plugin.chatGate() != null) {
+                plugin.chatGate().commanderSay(name, text);
+            }
+        });
+    }
+
+    private String commanderName() {
+        return plugin.commander() == null || plugin.commander().commanderName() == null
+                ? "NullCommander" : plugin.commander().commanderName();
+    }
+
+    private static String acknowledgement(String verb, String player) {
+        String v = verb == null ? "" : verb.toLowerCase(Locale.ROOT);
+        switch (v) {
+            case "attack": case "kill": return "Understood, " + player + ". Moving on the target.";
+            case "follow": case "come": return "On our way, " + player + ".";
+            case "stop": case "hold": case "guard": return "Holding.";
+            case "build": return "Builders, to work.";
+            case "gather": return "Gathering wood.";
+            case "defend": return "We cover you, " + player + ".";
+            case "jump": return "Hup.";
+            default: return "Understood - " + v + ".";
+        }
+    }
+
+    /** "walk here", "sprint to Steve", "hold square"... the v3 order verbs, for every Null. */
+    static String[] orderWords(String rest) {
+        String[] parts = rest.trim().split("\\s+");
+        if (parts.length == 0) {
+            return null;
+        }
+        String verb = parts[0].toLowerCase(Locale.ROOT).replaceAll("[^a-z]", "");
+        java.util.Set<String> verbs = java.util.Set.of("walk", "run", "sprint", "jump", "stop", "follow", "hold",
+                "gather", "build", "attack", "defend");
+        if (!verbs.contains(verb)) {
+            return null;
+        }
+        List<String> args = new ArrayList<>();
+        args.add("order");
+        args.add("all");
+        args.add(verb);
+        for (int i = 1; i < parts.length; i++) {
+            String word = parts[i];
+            if (i == 1 && (word.equalsIgnoreCase("to") || word.equalsIgnoreCase("me"))) {
+                if (word.equalsIgnoreCase("me")) {
+                    args.add("here");
+                }
+                continue;
+            }
+            args.add(word);
+        }
+        return args.toArray(new String[0]);
+    }
+
+    /**
+     * Strips a wake word, or the Commander's name, from the front of a line.
+     *
+     * @return the rest of the line, "" when nothing followed, or null when the
+     *     line is not addressed to the Commander at all
+     */
+    String stripTrigger(String raw) {
+        String rest = stripWakeWord(raw);
+        if (rest != null) {
+            return rest;
+        }
+        if (config != null && !config.v3().commanderNameTrigger()) {
+            return null;
+        }
+        String name = commanderName();
+        if (name == null || name.isEmpty()) {
+            return null;
+        }
+        String text = raw.trim();
+        String lower = text.toLowerCase(Locale.ROOT);
+        String n = name.toLowerCase(Locale.ROOT);
+        int at = -1;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(^|[^a-z0-9_])" + java.util.regex.Pattern.quote(n)
+                + "($|[^a-z0-9_])").matcher(lower);
+        if (m.find()) {
+            at = m.start() + m.group(1).length();
+        }
+        if (at < 0) {
+            return null;
+        }
+        String before = text.substring(0, at).trim();
+        String after = text.substring(at + name.length()).trim();
+        if (after.startsWith(",") || after.startsWith(":")) {
+            after = after.substring(1).trim();
+        }
+        if (before.endsWith(",")) {
+            before = before.substring(0, before.length() - 1).trim();
+        }
+        String joined = (before + " " + after).trim();
+        // "hey NullCommander" is a greeting with nothing else in it.
+        if (joined.equalsIgnoreCase("hey") || joined.equalsIgnoreCase("hi") || joined.equalsIgnoreCase("hello")) {
+            return joined;
+        }
+        return joined;
+    }
+
+    /** The Commander answers in public chat: a local line, the model, or an honest fallback. */
+    private void answerPublicly(Player player, String message) {
+        String local = localLine(message);
+        if (brain == null || !brain.available()) {
+            commanderReply(local != null ? local
+                    : "I hear you, " + player.getName() + ". Give an order - walk, follow, hold, attack, build -"
+                    + " and the Nulls move.");
+            return;
+        }
+        if (local != null) {
+            commanderReply(local);
+            return;
+        }
+        final String persona = persona(Speaker.COMMANDER, player);
+        brain.ask(persona, null, message, new ChatBrain.Reply() {
+            @Override
+            public void ok(String text) {
+                commanderReply(clip(text, config == null ? 400 : config.chatMaxReplyChars()));
+            }
+
+            @Override
+            public void failed(String reason) {
+                commanderReply("I cannot think that through right now (" + reason + "). Orders still work.");
+            }
+        });
+    }
+
     private boolean allowOrder(Player player) {
         int perMinute = config == null ? 20 : config.chatCommandsPerMinute();
         RateLimiter limiter = orderLimits.computeIfAbsent(player.getUniqueId(),

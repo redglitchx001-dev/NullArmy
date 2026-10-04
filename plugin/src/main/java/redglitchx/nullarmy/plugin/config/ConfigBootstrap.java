@@ -100,7 +100,7 @@ public final class ConfigBootstrap {
                 ConfigMigration.Report report = ConfigMigration.migrate(plugin, version);
                 lastReport = report;
                 if (report.error() != null) {
-                    log.severe("[NullArmy] " + report.describe());
+                    log.warning("[NullArmy] " + report.describe());
                 } else if (report.changed()) {
                     log.info("[NullArmy] " + report.describe() + ": " + report.addedKeys());
                 } else {

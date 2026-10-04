@@ -63,9 +63,13 @@ public final class KitService implements Reloadable {
             return;
         }
         List<String> lines = config.defaultKitLines();
-        kit = DefaultKit.parse(lines, configErrors);
+        List<String> notes = new ArrayList<>();
+        kit = DefaultKit.resolveConfigured(lines, configErrors, notes);
         for (String error : configErrors) {
             plugin.getLogger().warning("[NullArmy] " + error);
+        }
+        for (String note : notes) {
+            plugin.getLogger().info("[NullArmy] " + note);
         }
     }
 
@@ -113,6 +117,23 @@ public final class KitService implements Reloadable {
                 // Already equipped: writing nothing is how a kit stops duplicating.
                 return verify(body) == null;
             }
+            org.bukkit.entity.Player handle = redglitchx.nullarmy.plugin.body.Bodies.player(body);
+            if (handle != null) {
+                // Full items - enchantments, potion types, counts - straight into
+                // the body's real inventory.
+                List<String> problems = new ArrayList<>();
+                org.bukkit.inventory.PlayerInventory inv = handle.getInventory();
+                for (DefaultKit.Item item : missing) {
+                    ItemStack stack = KitItems.toStack(item, problems);
+                    if (stack != null) {
+                        redglitchx.nullarmy.plugin.body.Bodies.set(inv, item.slot(), stack);
+                    }
+                }
+                for (String problem : problems) {
+                    plugin.getLogger().fine("[NullArmy] kit: " + problem);
+                }
+                return verify(body) == null;
+            }
             List<LoadoutSlot> slots = new ArrayList<>();
             for (DefaultKit.Item item : missing) {
                 slots.add(LoadoutSlot.of(item.slot(), item.material(), item.count()));
@@ -123,6 +144,11 @@ public final class KitService implements Reloadable {
             plugin.getLogger().warning("[NullArmy] kit application failed: " + Guard.describe(t));
             return false;
         }
+    }
+
+    /** The kit entries, for checks and the GUI. */
+    public List<DefaultKit.Item> items() {
+        return kit;
     }
 
     /**
@@ -198,16 +224,17 @@ public final class KitService implements Reloadable {
             return false;
         }
         for (DefaultKit.Item item : kit) {
-            org.bukkit.Material material = org.bukkit.Material.matchMaterial(item.material());
-            if (material == null || material.isAir()) {
-                plugin.getLogger().warning("[NullArmy] default kit material '"
-                        + item.material() + "' does not exist on this server - skipped.");
-                continue;
-            }
             if (item.slot() < 0 || item.slot() >= loadout.length) {
                 continue;
             }
-            loadout[item.slot()] = new ItemStack(material, item.count());
+            List<String> problems = new ArrayList<>();
+            ItemStack stack = KitItems.toStack(item, problems);
+            if (stack == null) {
+                plugin.getLogger().warning("[NullArmy] default kit entry '" + item.toConfig()
+                        + "' could not be built on this server - skipped (" + problems + ").");
+                continue;
+            }
+            loadout[item.slot()] = stack;
         }
         try {
             commander.save();

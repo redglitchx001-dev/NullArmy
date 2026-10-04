@@ -74,4 +74,21 @@ public final class PluginText {
         int to = (end >>> shift) & 0xFF;
         return (int) Math.round(from + (to - from) * amount);
     }
+
+    /** A legacy-formatted line with every section-sign code removed. */
+    public static String plain(String legacy) {
+        if (legacy == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(legacy.length());
+        for (int i = 0; i < legacy.length(); i++) {
+            char c = legacy.charAt(i);
+            if (c == SECTION && i + 1 < legacy.length()) {
+                i++;
+                continue;
+            }
+            sb.append(c);
+        }
+        return sb.toString().trim();
+    }
 }

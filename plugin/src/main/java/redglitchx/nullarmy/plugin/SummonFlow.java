@@ -149,7 +149,18 @@ public final class SummonFlow implements Listener, Reloadable {
 
         Pending existing = pending.get(player.getUniqueId());
         if (existing != null) {
-            player.sendMessage(PREFIX + "You already have a summon request open. Answer it or type 'cancel'.");
+            // Chat silence: pressing the horn again only refreshes the open prompt
+            // (its timer and its position) - no new line in chat.
+            Location again = player.getLocation();
+            if (again != null && again.getWorld() != null) {
+                pending.put(player.getUniqueId(), new Pending(player.getUniqueId(), plugin.currentTick(),
+                        again.getWorld().getName(),
+                        new Vec3d(again.getX(), Math.floor(again.getY()), again.getZ()), existing.itemKind));
+            }
+            hornRefreshes++;
+            if (plugin.chatGate() != null) {
+                plugin.chatGate().event("horn.refresh", "player", player.getName());
+            }
             return;
         }
 
@@ -266,22 +277,19 @@ public final class SummonFlow implements Listener, Reloadable {
             SquadManager.Squad squad = squads.createSquad(
                     request.player, request.worldName, request.origin, decision.granted());
             int spawned = squad.members().size();
+            // The answer to the count question; the details are events
+            // (console + /null status), not chat.
             player.sendMessage(PREFIX + "Summoned " + spawned
-                    + (spawned == 1 ? " Null." : " Nulls."));
-            // How they arrived: real doorways, how many, and what had to use open
-            // ground instead. An arrival made of particles alone is not reported
-            // as a portal.
-            String arrival = squad.arrivalNote();
-            if (arrival != null && !arrival.isEmpty()) {
-                player.sendMessage(PREFIX + "  " + arrival);
-            }
-            if (spawned < decision.granted()) {
-                player.sendMessage(PREFIX + "Only " + spawned + " of " + decision.granted()
-                        + " Nulls could be placed on verified safe ground; the rest were NOT"
-                        + " spawned rather than being put inside a wall, a block or each other.");
-            }
-            for (String failure : squad.spawnFailures()) {
-                player.sendMessage(PREFIX + "  failed: " + failure);
+                    + (spawned == 1 ? " Null." : " Nulls.")
+                    + (spawned < decision.granted() ? " " + (decision.granted() - spawned)
+                        + " could not be placed safely - see /null status." : ""));
+            if (plugin.chatGate() != null) {
+                String arrival = squad.arrivalNote();
+                plugin.chatGate().event("null.arrived", "count", spawned, "owner", player.getName(),
+                        "note", arrival == null || arrival.isEmpty() ? "on open ground" : arrival);
+                for (String failure : squad.spawnFailures()) {
+                    plugin.chatGate().event("squad.spawn.failed", "owner", player.getName(), "reason", failure);
+                }
             }
         } catch (IllegalStateException refusal) {
             // Clear, honest failure - no partial army (spec 3).
@@ -293,6 +301,11 @@ public final class SummonFlow implements Listener, Reloadable {
     }
 
     // ------------------------------------------------------------------- housekeeping
+
+    private int hornRefreshes;
+
+    /** How many repeated horn presses refreshed an open prompt silently (self test). */
+    public int hornRefreshes() { return hornRefreshes; }
 
     /** Expires stale requests. Runs on the main thread, never throws. */
     public void tick(long tickCounter) {

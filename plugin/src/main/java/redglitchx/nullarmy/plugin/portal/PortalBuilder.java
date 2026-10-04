@@ -7,66 +7,58 @@ import org.bukkit.block.Block;
 import org.bukkit.block.data.BlockData;
 
 import redglitchx.nullarmy.core.math.Vec3d;
+import redglitchx.nullarmy.core.portal.PortalFrame;
+import redglitchx.nullarmy.core.zone.SummonZone;
 import redglitchx.nullarmy.nms.VersionAdapter;
 import redglitchx.nullarmy.plugin.util.Guard;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
+import java.util.Set;
+import java.util.UUID;
 import java.util.logging.Logger;
 
 /**
- * Builds a real, temporary portal a Null can walk out of.
+ * Builds temporary arrival doorways in the real world.
  *
- * <h2>Why blocks and not particles</h2>
- * A particle effect is not an entrance: nothing is there, nobody comes out of
- * anything, and the client can walk straight through it. This builder places a
- * real frame of {@code OBSIDIAN} with a real {@code NETHER_PORTAL} interior, so
- * the doorway exists in the world, lights the area, throws vanilla portal
- * particles of its own, and the Null is spawned in front of its opening.
+ * <h2>What a doorway is</h2>
+ * <p>An upright, complete obsidian frame - 4 wide, 5 tall, 14 blocks - around a
+ * 2 x 3 opening that is left as <b>air</b> ({@link PortalFrame}). There are no
+ * portal blocks, so nothing that walks or is thrown into the opening is ever
+ * teleported: the doorway is one-way by construction. Portal particles and
+ * sounds make it read as a portal.</p>
  *
- * <h2>Why it can never damage a map</h2>
- * <ul>
- *   <li><b>Nothing is overwritten.</b> A site is only used when every one of the
- *       16 blocks the frame and interior need is already air. One existing block
- *       - a wall, a torch, a leaf, a player's build - and the site is refused and
- *       the next candidate is tried.</li>
- *   <li><b>Everything is recorded.</b> Each block the builder touches is stored
- *       with its original {@link BlockData}, so {@link BuiltPortal#restore} puts
- *       the world back exactly as it was. Air goes back to air.</li>
- *   <li><b>No physics, no fire, no spread.</b> Blocks are written with physics
- *       off, so placing a portal block cannot set anything alight, update a
- *       neighbour into falling, or create a second portal.</li>
- *   <li><b>No travel.</b> {@link PortalManager} cancels the portal events for
- *       these blocks, so nobody is sent to the Nether by a Null's doorway.</li>
- * </ul>
- *
- * <h2>Shape</h2>
- * Four blocks wide, four tall, standing on verified ground: two obsidian columns,
- * an obsidian lintel, obsidian feet, and a two-wide three-tall portal interior
- * whose lowest row is at the level a Null stands on. Exit spots are the blocks
- * immediately in front of and behind that opening, each one validated as
- * collision-safe and free of other entities before anything is spawned there.
+ * <h2>Where</h2>
+ * <p>Inside the summon zone only, at random spots around the summoner. A
+ * <b>ground</b> doorway stands on solid support with a two-block apron of air
+ * (and a solid floor) in front of its opening; a <b>floating</b> one hangs
+ * {@code portals.air-height-min..max} blocks above the ground and its Nulls drop
+ * out of it with real fall damage. Every frame, interior and apron block must be
+ * air before anything is placed - no terrain is ever cut into - and every block
+ * that is changed is recorded and restored when the doorway closes.</p>
  *
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
  */
 public final class PortalBuilder {
 
     /** Frame width in blocks, including both columns. */
-    public static final int WIDTH = 4;
+    public static final int WIDTH = PortalFrame.OUTER_WIDTH;
 
-    /** Frame height in blocks, including the feet row and the lintel. */
-    public static final int HEIGHT = 4;
+    /** Frame height in blocks, including the top and bottom rows. */
+    public static final int HEIGHT = PortalFrame.OUTER_HEIGHT;
 
-    /** Interior width: the doorway a Null steps out of. */
-    public static final int INTERIOR_WIDTH = 2;
+    /** Opening width. */
+    public static final int INTERIOR_WIDTH = PortalFrame.INNER_WIDTH;
 
-    /** Interior height. */
-    public static final int INTERIOR_HEIGHT = 3;
+    /** Opening height. */
+    public static final int INTERIOR_HEIGHT = PortalFrame.INNER_HEIGHT;
 
-    /** One built doorway, with everything needed to undo it. */
+    /** One doorway standing in the world. */
     public static final class BuiltPortal {
 
         private final String worldName;
@@ -74,35 +66,57 @@ public final class PortalBuilder {
         private final List<Vec3d> exits;
         private final Vec3d center;
         private final long expiresAtTick;
+        private final long builtTick;
+        private final PortalFrame frame;
+        private final Set<UUID> assigned = new HashSet<>();
         private boolean restored;
 
-        BuiltPortal(String worldName, Vec3d center, List<Vec3d> exits, long expiresAtTick) {
+        BuiltPortal(String worldName, PortalFrame frame, List<Vec3d> exits, long builtTick, long expiresAtTick) {
             this.worldName = worldName;
-            this.center = center;
+            this.frame = frame;
+            double[] c = frame.center();
+            this.center = new Vec3d(c[0], c[1], c[2]);
             this.exits = Collections.unmodifiableList(new ArrayList<>(exits));
+            this.builtTick = builtTick;
             this.expiresAtTick = expiresAtTick;
         }
 
         public String worldName() { return worldName; }
 
-        /** The point the doorway is centred on, at foot level. */
         public Vec3d center() { return center; }
 
-        /** Validated spots a Null may be spawned at, in front of and behind the opening. */
+        /** Spawn spots: inside the opening first, then the apron of a ground doorway. */
         public List<Vec3d> exits() { return exits; }
 
         public long expiresAtTick() { return expiresAtTick; }
 
+        public long builtTick() { return builtTick; }
+
         public boolean isRestored() { return restored; }
 
-        /** How many blocks this portal occupies. */
         public int blockCount() { return changed.size(); }
 
-        void record(BlockKey key, BlockData original) {
-            changed.put(key, original);
+        public PortalFrame frame() { return frame; }
+
+        /** Where a Null that arrived here walks to. */
+        public Vec3d stepOutPoint() {
+            double[] p = frame.stepOutPoint();
+            return new Vec3d(p[0], p[1], p[2]);
         }
 
-        /** True when this portal owns that block, for the travel-cancel listener. */
+        /** Remembers a Null that came through this doorway. */
+        public void assign(UUID body) {
+            if (body != null) {
+                assigned.add(body);
+            }
+        }
+
+        public Set<UUID> assigned() { return Collections.unmodifiableSet(assigned); }
+
+        void record(BlockKey key, BlockData original) {
+            changed.putIfAbsent(key, original);
+        }
+
         public boolean owns(World world, int x, int y, int z) {
             if (world == null || !world.getName().equals(worldName)) {
                 return false;
@@ -110,18 +124,12 @@ public final class PortalBuilder {
             return changed.containsKey(new BlockKey(x, y, z));
         }
 
-        /** True when this portal owns the block at that location. */
         public boolean owns(Location location) {
             return location != null && location.getWorld() != null
                     && owns(location.getWorld(), location.getBlockX(),
                             location.getBlockY(), location.getBlockZ());
         }
 
-        /**
-         * Puts every block back the way it was.
-         *
-         * @return how many blocks were restored
-         */
         int restore(World world, Logger logger) {
             if (restored || world == null) {
                 return 0;
@@ -150,10 +158,10 @@ public final class PortalBuilder {
     }
 
     /** A block position, usable as a map key. */
-    private static final class BlockKey {
-        private final int x;
-        private final int y;
-        private final int z;
+    static final class BlockKey {
+        final int x;
+        final int y;
+        final int z;
 
         BlockKey(int x, int y, int z) {
             this.x = x;
@@ -210,136 +218,207 @@ public final class PortalBuilder {
         public Refusal refusal() { return refusal; }
     }
 
+    /** Where to look and what kind of doorway to prefer. */
+    public static final class Request {
+        final SummonZone zone;
+        final int originY;
+        final double floatingChance;
+        final int airMin;
+        final int airMax;
+        final long lifetimeTicks;
+        final List<BuiltPortal> avoid;
+
+        public Request(SummonZone zone, int originY, double floatingChance, int airMin, int airMax,
+                       long lifetimeTicks, List<BuiltPortal> avoid) {
+            this.zone = zone;
+            this.originY = originY;
+            this.floatingChance = floatingChance;
+            this.airMin = airMin;
+            this.airMax = airMax;
+            this.lifetimeTicks = lifetimeTicks;
+            this.avoid = avoid == null ? Collections.emptyList() : avoid;
+        }
+    }
+
+    private static final int SITE_ATTEMPTS = 90;
+
     private final Logger logger;
+    private final Random random = new Random();
 
     public PortalBuilder(Logger logger) {
         this.logger = logger;
     }
 
-    /**
-     * Searches for a site near {@code origin} and builds a doorway on it.
-     *
-     * @param adapter       used for the collision and entity-space checks
-     * @param world         the world to build in
-     * @param origin        where the summoner stood
-     * @param searchRadius  how far to look, in blocks
-     * @param lifetimeTicks how long the doorway may stay before it is restored
-     * @param now           the current server tick
-     * @return the built portal, or a refusal naming the real reason
-     */
+    /** The legacy entry point: a ground-or-floating doorway near {@code origin}. */
     public Result build(VersionAdapter adapter, World world, Vec3d origin,
                         int searchRadius, long lifetimeTicks, long now) {
         if (world == null || origin == null) {
             return Result.refused("no world or origin to build in", 0);
         }
-        int radius = Math.max(1, Math.min(24, searchRadius));
-        int tried = 0;
-        // Ring 0 first (right where the summoner stood), then outward. Both
-        // orientations are tried at every candidate: a doorway that fits along X
-        // often does not fit along Z, and vice versa.
-        for (int ring = 0; ring <= radius; ring++) {
-            double r = ring * 1.5;
-            int points = ring == 0 ? 1 : Math.max(6, (int) Math.round(2.0 * Math.PI * r / 1.5));
-            for (int i = 0; i < points; i++) {
-                double angle = (2.0 * Math.PI * i) / points;
-                int cx = (int) Math.floor(origin.x() + (ring == 0 ? 0 : Math.cos(angle) * r));
-                int cz = (int) Math.floor(origin.z() + (ring == 0 ? 0 : Math.sin(angle) * r));
-                for (int dy = 0; dy <= 2; dy++) {
-                    int feetY = (int) Math.floor(origin.y()) + dy;
-                    for (boolean widthOnX : new boolean[] {true, false}) {
-                        tried++;
-                        Result result = trySite(adapter, world, cx, feetY, cz, widthOnX,
-                                lifetimeTicks, now);
-                        if (result.succeeded()) {
-                            return result;
-                        }
-                    }
-                }
-            }
-        }
-        return Result.refused("no site near you has " + (WIDTH * HEIGHT)
-                + " free blocks for a doorway and safe ground to step out onto ("
-                + tried + " sites tried)", tried);
-    }
-
-    /** Attempts one site in one orientation. Never throws. */
-    private Result trySite(VersionAdapter adapter, World world, int cx, int feetY, int cz,
-                           boolean widthOnX, long lifetimeTicks, long now) {
-        try {
-            if (!siteIsClear(world, cx, feetY, cz, widthOnX)) {
-                return Result.refused("site is not clear", 1);
-            }
-            if (!siteHasGround(world, cx, feetY, cz, widthOnX)) {
-                return Result.refused("site has no ground under the frame", 1);
-            }
-            List<Vec3d> exits = exitSpots(adapter, world, cx, feetY, cz, widthOnX);
-            if (exits.isEmpty()) {
-                return Result.refused("no collision-safe spot to step out onto", 1);
-            }
-            BuiltPortal portal = new BuiltPortal(world.getName(),
-                    new Vec3d(cx, feetY, cz), exits, now + Math.max(20L, lifetimeTicks));
-            place(world, cx, feetY, cz, widthOnX, portal);
-            return Result.built(portal);
-        } catch (Throwable t) {
-            logger.fine("[NullArmy] portal site refused: " + Guard.describe(t));
-            return Result.refused("the site could not be checked (" + Guard.describe(t) + ")", 1);
-        }
-    }
-
-    /** True when every block the frame and interior need is already air. */
-    private boolean siteIsClear(World world, int cx, int feetY, int cz, boolean widthOnX) {
-        for (int w = 0; w < WIDTH; w++) {
-            for (int h = 0; h < HEIGHT; h++) {
-                int x = widthOnX ? cx - 1 + w : cx;
-                int z = widthOnX ? cz : cz - 1 + w;
-                int y = feetY + h;
-                if (y > world.getMaxHeight() || y < world.getMinHeight()) {
-                    return false;
-                }
-                if (!world.getBlockAt(x, y, z).getType().isAir()) {
-                    // Never overwrite an existing block. Not one.
-                    return false;
-                }
-            }
-        }
-        return true;
-    }
-
-    /** True when the frame's feet row rests on something solid. */
-    private boolean siteHasGround(World world, int cx, int feetY, int cz, boolean widthOnX) {
-        for (int w = 0; w < WIDTH; w++) {
-            int x = widthOnX ? cx - 1 + w : cx;
-            int z = widthOnX ? cz : cz - 1 + w;
-            if (world.getBlockAt(x, feetY - 1, z).getType().isAir()) {
-                return false;
-            }
-        }
-        return true;
+        SummonZone zone = new SummonZone(origin.x(), origin.z(), Math.max(SummonZone.MIN_SIZE, searchRadius * 4));
+        return build(adapter, world, origin, new Request(zone, (int) Math.floor(origin.y()), 0.0D, 4, 12,
+                lifetimeTicks, null), now);
     }
 
     /**
-     * The validated spots Nulls emerge at.
+     * Builds one doorway inside the request's zone.
      *
-     * <p>In front of the opening first, then behind it: a doorway is a passage,
-     * and a squad of four should not be stacked in one block. Every spot is
-     * checked for block collision <b>and</b> for another entity already standing
-     * there, so nobody appears inside a wall, a block or a body.</p>
+     * <p>Sites are tried at random distances (3 to 22 blocks, never past the
+     * zone) and angles around {@code origin}, both orientations, with the
+     * opening facing the summoner. A floating site is tried with probability
+     * {@code floatingChance}, a ground site otherwise (and as the fallback).</p>
      */
-    private List<Vec3d> exitSpots(VersionAdapter adapter, World world, int cx, int feetY, int cz,
-                                  boolean widthOnX) {
+    public Result build(VersionAdapter adapter, World world, Vec3d origin, Request request, long now) {
+        if (world == null || origin == null || request == null || request.zone == null) {
+            return Result.refused("no world, origin or zone to build in", 0);
+        }
+        int tried = 0;
+        String lastReason = "no site was tried";
+        double maxRadius = Math.max(3.0D, Math.min(22.0D, request.zone.half() - 4.0D));
+        for (int attempt = 0; attempt < SITE_ATTEMPTS; attempt++) {
+            double radius = 3.0D + random.nextDouble() * Math.max(0.5D, maxRadius - 3.0D);
+            double angle = random.nextDouble() * Math.PI * 2.0D;
+            int cx = (int) Math.floor(origin.x() + Math.cos(angle) * radius);
+            int cz = (int) Math.floor(origin.z() + Math.sin(angle) * radius);
+            boolean floating = random.nextDouble() < request.floatingChance;
+            for (int kindTry = 0; kindTry < 2; kindTry++) {
+                PortalFrame.Kind kind = (floating ^ kindTry == 1) ? PortalFrame.Kind.FLOATING : PortalFrame.Kind.GROUND;
+                for (boolean widthOnX : new boolean[] {random.nextBoolean(), true, false}) {
+                    tried++;
+                    PortalFrame frame = siteFor(world, cx, cz, request, kind, widthOnX, origin);
+                    if (frame == null) {
+                        lastReason = "no ground within reach of the zone height";
+                        continue;
+                    }
+                    String problem = problemWith(adapter, world, frame, request);
+                    if (problem != null) {
+                        lastReason = problem;
+                        continue;
+                    }
+                    List<Vec3d> exits = exitSpots(adapter, world, frame);
+                    if (exits.isEmpty()) {
+                        lastReason = "no collision-safe spot inside the opening";
+                        continue;
+                    }
+                    BuiltPortal portal = new BuiltPortal(world.getName(), frame, exits, now,
+                            now + Math.max(60L, request.lifetimeTicks));
+                    place(world, frame, portal);
+                    return Result.built(portal);
+                }
+            }
+        }
+        return Result.refused("no valid doorway site inside the " + request.zone.size() + "x" + request.zone.size()
+                + " zone (" + tried + " sites tried; last problem: " + lastReason + ")", tried);
+    }
+
+    /**
+     * The frame for a site: for a ground doorway the base sits on the highest
+     * standable block near the zone height; for a floating one it hangs a random
+     * {@code air-height-min..max} above that ground. The opening faces the summoner.
+     */
+    private PortalFrame siteFor(World world, int cx, int cz, Request request, PortalFrame.Kind kind,
+                                boolean widthOnX, Vec3d origin) {
+        Integer ground = groundTop(world, cx, cz, request.originY);
+        if (ground == null) {
+            return null;
+        }
+        int baseX = widthOnX ? cx - 1 : cx;
+        int baseZ = widthOnX ? cz : cz - 1;
+        double across = widthOnX ? origin.z() - (cz + 0.5D) : origin.x() - (cx + 0.5D);
+        int exitSide = across >= 0 ? 1 : -1;
+        int baseY = ground + 1;
+        if (kind == PortalFrame.Kind.FLOATING) {
+            int gap = request.airMin + random.nextInt(Math.max(1, request.airMax - request.airMin + 1));
+            baseY = ground + 1 + gap;
+            if (baseY + PortalFrame.OUTER_HEIGHT >= world.getMaxHeight()) {
+                return null;
+            }
+        }
+        return new PortalFrame(baseX, baseY, baseZ, widthOnX, kind, exitSide);
+    }
+
+    /** The highest solid block with two blocks of air above it, within +-8 of the zone height. */
+    private static Integer groundTop(World world, int x, int z, int originY) {
+        int top = Math.min(world.getMaxHeight() - 8, originY + 8);
+        int bottom = Math.max(world.getMinHeight(), originY - 8);
+        for (int y = top; y >= bottom; y--) {
+            Block block = world.getBlockAt(x, y, z);
+            if (block.getType().isSolid() && world.getBlockAt(x, y + 1, z).getType().isAir()
+                    && world.getBlockAt(x, y + 2, z).getType().isAir()) {
+                return y;
+            }
+        }
+        return null;
+    }
+
+    /** Why this frame may not be built here, or null when it may. */
+    String problemWith(VersionAdapter adapter, World world, PortalFrame frame, Request request) {
+        int[] fp = frame.footprint();
+        if (!request.zone.containsBox(fp[0], fp[1], fp[2] + 1, fp[3] + 1)) {
+            return "the doorway would reach outside the summon zone";
+        }
+        for (BuiltPortal other : request.avoid) {
+            if (other == null || other.isRestored() || !other.worldName().equals(world.getName())) {
+                continue;
+            }
+            int[] ofp = other.frame().footprint();
+            boolean overlap = fp[0] <= ofp[2] + 1 && fp[2] >= ofp[0] - 1 && fp[1] <= ofp[3] + 1 && fp[3] >= ofp[1] - 1
+                    && Math.abs(other.frame().baseY() - frame.baseY()) < PortalFrame.OUTER_HEIGHT + 2;
+            if (overlap) {
+                return "another doorway already stands there";
+            }
+        }
+        if (frame.baseY() < world.getMinHeight() + 1 || frame.baseY() + PortalFrame.OUTER_HEIGHT > world.getMaxHeight()) {
+            return "the frame would leave the world's height limits";
+        }
+        List<String> problems = frame.siteProblems(lookup(world), request.airMin, request.airMax);
+        return problems.isEmpty() ? null : problems.get(0);
+    }
+
+    /** Read access to the world for the core rules. */
+    static PortalFrame.Lookup lookup(World world) {
+        return new PortalFrame.Lookup() {
+            @Override
+            public String type(int x, int y, int z) {
+                if (y < world.getMinHeight() || y >= world.getMaxHeight()) {
+                    return "VOID_AIR";
+                }
+                return world.getBlockAt(x, y, z).getType().name();
+            }
+
+            @Override
+            public boolean solid(int x, int y, int z) {
+                if (y < world.getMinHeight() || y >= world.getMaxHeight()) {
+                    return false;
+                }
+                return world.getBlockAt(x, y, z).getType().isSolid();
+            }
+        };
+    }
+
+    /** Problems with a doorway as it stands now; empty when it is complete and one-way. */
+    public List<String> validate(World world, BuiltPortal portal, int airMin, int airMax) {
+        if (world == null || portal == null) {
+            return Collections.singletonList("no doorway");
+        }
+        return portal.frame().builtProblems(lookup(world), airMin, airMax);
+    }
+
+    private List<Vec3d> exitSpots(VersionAdapter adapter, World world, PortalFrame frame) {
         List<Vec3d> out = new ArrayList<>();
-        int[][] candidates = widthOnX
-                ? new int[][] {{cx, cz + 1}, {cx + 1, cz + 1}, {cx, cz - 1}, {cx + 1, cz - 1}}
-                : new int[][] {{cx + 1, cz}, {cx + 1, cz + 1}, {cx - 1, cz}, {cx - 1, cz + 1}};
-        for (int[] candidate : candidates) {
-            Vec3d spot = new Vec3d(candidate[0] + 0.5, feetY, candidate[1] + 0.5);
-            if (!isSafe(adapter, world.getName(), spot)) {
-                continue;
+        // Inside the opening, standing on the bottom row of the frame: the frame is
+        // not built yet, so the spot is checked against the block it will stand on.
+        for (double[] spot : frame.insideSpots()) {
+            out.add(new Vec3d(spot[0], spot[1], spot[2]));
+        }
+        if (frame.kind() == PortalFrame.Kind.GROUND) {
+            List<int[]> floor = frame.apronFloorCells();
+            for (int[] cell : floor) {
+                Vec3d spot = new Vec3d(cell[0] + 0.5D, cell[1] + 1, cell[2] + 0.5D);
+                if (isSafe(adapter, world.getName(), spot) && isFree(adapter, world.getName(), spot)) {
+                    out.add(spot);
+                }
             }
-            if (!isFree(adapter, world.getName(), spot)) {
-                continue;
-            }
-            out.add(spot);
         }
         return out;
     }
@@ -354,59 +433,38 @@ public final class PortalBuilder {
 
     private boolean isFree(VersionAdapter adapter, String worldName, Vec3d spot) {
         try {
-            // An adapter without the entity check reports "free"; the block check
-            // above still has to pass, so this can never make a spot unsafe.
             return adapter == null || adapter.isEntitySpaceFree(worldName, spot);
         } catch (Throwable t) {
             return false;
         }
     }
 
-    /** Writes the frame and the interior, recording every block it changes. */
-    private void place(World world, int cx, int feetY, int cz, boolean widthOnX,
-                       BuiltPortal portal) {
-        BlockData frame = Material.OBSIDIAN.createBlockData();
-        BlockData interior = portalInterior(widthOnX);
-        for (int w = 0; w < WIDTH; w++) {
-            for (int h = 0; h < HEIGHT; h++) {
-                int x = widthOnX ? cx - 1 + w : cx;
-                int z = widthOnX ? cz : cz - 1 + w;
-                int y = feetY + h;
-                boolean inside = w >= 1 && w <= INTERIOR_WIDTH && h < INTERIOR_HEIGHT;
-                Block block = world.getBlockAt(x, y, z);
-                portal.record(new BlockKey(x, y, z), block.getBlockData());
-                // physics=false: no neighbour updates, no fire, no falling sand.
-                block.setBlockData(inside ? interior : frame, false);
-            }
+    private void place(World world, PortalFrame frame, BuiltPortal portal) {
+        BlockData obsidian = Material.OBSIDIAN.createBlockData();
+        for (int[] cell : frame.frameCells()) {
+            Block block = world.getBlockAt(cell[0], cell[1], cell[2]);
+            portal.record(new BlockKey(cell[0], cell[1], cell[2]), block.getBlockData());
+            // physics=false: no neighbour updates, no fire, no falling sand.
+            block.setBlockData(obsidian, false);
         }
-        // Vanilla's own portal sound and particles, at the opening.
-        try {
-            Location mouth = new Location(world,
-                    widthOnX ? cx + 0.5 : cx + 0.5,
-                    feetY + 1.0,
-                    widthOnX ? cz + 0.5 : cz + 0.5);
-            world.spawnParticle(org.bukkit.Particle.PORTAL, mouth, 40, 0.4, 0.9, 0.4, 0.02);
-            world.playSound(mouth, org.bukkit.Sound.BLOCK_PORTAL_TRIGGER, 0.8f, 1.0f);
-            world.playSound(mouth, org.bukkit.Sound.BLOCK_PORTAL_AMBIENT, 0.5f, 1.0f);
-        } catch (Throwable t) {
-            logger.fine("[NullArmy] portal effects skipped: " + Guard.describe(t));
-        }
+        effects(world, portal, true);
     }
 
-    /**
-     * The interior block, with its axis turned the way the frame is.
-     *
-     * <p>A portal whose texture runs the wrong way looks broken even though it
-     * works, so the axis state is set explicitly. If this server cannot parse the
-     * state string, the plain block data is used instead - the doorway still
-     * builds.</p>
-     */
-    private BlockData portalInterior(boolean widthOnX) {
+    /** Portal swirl inside the opening, plus the open/close sounds. */
+    static void effects(World world, BuiltPortal portal, boolean withSound) {
         try {
-            return org.bukkit.Bukkit.createBlockData(Material.NETHER_PORTAL,
-                    "[axis=" + (widthOnX ? "x" : "z") + "]");
-        } catch (Throwable t) {
-            return Material.NETHER_PORTAL.createBlockData();
+            Vec3d c = portal.center();
+            Location mouth = new Location(world, c.x(), c.y() - 0.4D, c.z());
+            double spreadAlong = 0.45D;
+            boolean onX = portal.frame().widthOnX();
+            world.spawnParticle(org.bukkit.Particle.PORTAL, mouth, 30,
+                    onX ? spreadAlong : 0.1D, 0.8D, onX ? 0.1D : spreadAlong, 0.05D);
+            if (withSound) {
+                world.playSound(mouth, org.bukkit.Sound.BLOCK_PORTAL_TRIGGER, 0.6f, 1.2f);
+                world.playSound(mouth, org.bukkit.Sound.BLOCK_END_PORTAL_FRAME_FILL, 0.8f, 0.8f);
+            }
+        } catch (Throwable ignored) {
+            // Cosmetic only.
         }
     }
 }

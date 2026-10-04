@@ -82,7 +82,7 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             "portals", "clearskins", "reload", "wand", "build", "chat", "emote", "greet",
             "withercannon", "cannon", "airdrop", "ban", "kill",
             "kit", "roles", "mission", "missions", "coordinate", "confirm", "selftest",
-            "shutdown");
+            "shutdown", "config", "zone", "order");
 
     /** Combat temperaments understood by {@link SquadManager}. */
     private static final List<String> TACTICS = Arrays.asList("aggressive", "balanced", "defensive");
@@ -91,7 +91,7 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
     private static final List<String> EMOTES = Arrays.asList("wave", "salute", "nod", "point", "dance", "sit");
 
     /** Formation styles understood by {@link SquadManager}. */
-    private static final List<String> FORMATIONS = Arrays.asList("line", "square", "encircle", "turtle");
+    private static final List<String> FORMATIONS = redglitchx.nullarmy.core.formation.FormationMatrix.kinds();
 
     /** One help line per subcommand: usage, permission, description. */
     private static final List<String[]> HELP = Arrays.asList(
@@ -143,7 +143,15 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             new String[]{"coordinate [note]", "nullarmy.admin", "The Commander coordinates the squad (typed actions only)."},
             new String[]{"confirm [yes|no]", "nullarmy.admin", "Confirm or drop an action the Commander is holding."},
             new String[]{"shutdown", "nullarmy.admin", "Run the Totem Of Null shutdown now, on purpose."},
-            new String[]{"selftest", "nullarmy.admin", "Runtime smoke test: spawn, tracking, packets, portals."});
+            new String[]{"selftest", "nullarmy.admin", "Runtime smoke test: spawn, tracking, packets, portals."},
+            new String[]{"config [page|filter]", "nullarmy.admin", "Effective value of every setting (secrets hidden)."},
+            new String[]{"zone", "nullarmy.summon", "Show your summon zone's border for 5 seconds."},
+            new String[]{"order <name|all> <walk|run|sprint|jump|stop|follow|hold|gather|build|attack|defend> [args]",
+                    "nullarmy.follow", "Give an order; the Nulls acknowledge with a gesture."},
+            new String[]{"loadout [null|template <name> [save|apply]]", "nullarmy.gui",
+                    "Edit the Commander's or a Null's loadout; save/apply templates."},
+            new String[]{"ai build <goal>", "nullarmy.build", "The Nulls build it by hand (AI plan or offline planner)."},
+            new String[]{"ai stop", "nullarmy.build", "Stop your build."});
 
     private final NullArmyPlugin plugin;
     private final SquadManager squads;
@@ -221,6 +229,10 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             return out;
         }
         String sub = canonical(args[0]);
+        if (plugin.v3Commands() != null && plugin.v3Commands().handles(sub, args)
+                && !sub.equals("skin") && !sub.equals("reload") && !sub.equals("config") && !sub.equals("zone")) {
+            return startingWith(plugin.v3Commands().complete(sub, args), args[args.length - 1]);
+        }
         if (args.length == 2) {
             switch (sub) {
                 case "attack":
@@ -265,6 +277,9 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             return true;
         }
         String sub = canonical(args[0]);
+        if (plugin.v3Commands() != null && plugin.v3Commands().handles(sub, args)) {
+            return plugin.v3Commands().run(sender, sub, args);
+        }
         switch (sub) {
             case "help":
                 return showHelp(sender);

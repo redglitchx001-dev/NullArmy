@@ -99,52 +99,86 @@ public final class PortalManager implements Listener, Reloadable {
      * @return the doorways that were really built, never null
      */
     public List<PortalBuilder.BuiltPortal> buildDoorways(String worldName, Vec3d origin, int count) {
+        PluginConfig current = config;
+        int size = current == null ? redglitchx.nullarmy.core.zone.SummonZone.DEFAULT_SIZE : current.v3().zoneSize();
+        return buildDoorways(worldName, origin, count,
+                new redglitchx.nullarmy.core.zone.SummonZone(origin.x(), origin.z(), size));
+    }
+
+    /**
+     * Builds up to {@code count} doorways, every one of them inside {@code zone}.
+     * When none fits, {@link #lastRefusal()} says why in words the owner can act on.
+     */
+    public List<PortalBuilder.BuiltPortal> buildDoorways(String worldName, Vec3d origin, int count,
+                                                         redglitchx.nullarmy.core.zone.SummonZone zone) {
         List<PortalBuilder.BuiltPortal> built = new ArrayList<>();
-        if (count <= 0 || origin == null || worldName == null) {
+        lastRefusal = "";
+        if (count <= 0 || origin == null || worldName == null || zone == null) {
             return built;
         }
         PluginConfig current = config;
         if (current == null || !current.portalsEnabled()) {
+            lastRefusal = "portals are switched off (portals.enabled)";
             return built;
         }
         World world = Bukkit.getWorld(worldName);
         if (world == null) {
             return built;
         }
-        int allowed = Math.min(count, current.portalsMaxPerSummon());
         int room = current.portalsMaxActive() - active.size();
         if (room <= 0) {
-            plugin.getLogger().info("[NullArmy] portal ceiling reached ("
-                    + active.size() + "/" + current.portalsMaxActive()
-                    + " active doorways); this summon uses safe ground instead.");
+            lastRefusal = "the portal ceiling is reached (" + active.size() + "/" + current.portalsMaxActive()
+                    + " doorways standing)";
+            plugin.getLogger().info("[NullArmy] " + lastRefusal + "; this summon uses safe ground instead.");
             return built;
         }
-        allowed = Math.min(allowed, room);
+        int allowed = Math.min(Math.min(count, room), redglitchx.nullarmy.core.portal.PortalPlan.HARD_PORTAL_CEILING * 2);
         long now = plugin.currentTick();
+        redglitchx.nullarmy.plugin.config.V3Settings v3 = current.v3();
         for (int i = 0; i < allowed; i++) {
-            PortalBuilder.Result result = builder.build(plugin.adapter(), world, origin,
-                    current.portalSearchRadius(), current.portalsLifetimeTicks(), now);
+            PortalBuilder.Request request = new PortalBuilder.Request(zone, (int) Math.floor(origin.y()),
+                    v3.floatingChance(), v3.airHeightMin(), v3.airHeightMax(), v3.portalLifetimeTicks(), active);
+            PortalBuilder.Result result = builder.build(plugin.adapter(), world, origin, request, now);
             if (result.succeeded()) {
                 active.add(result.portal());
                 built.add(result.portal());
                 continue;
             }
-            // A refusal is worth one line in the log, never an exception.
-            plugin.getLogger().fine("[NullArmy] portal not built: "
-                    + (result.refusal() == null ? "unknown reason" : result.refusal().reason()));
-            break; // the search already swept every nearby site; retrying is noise
+            lastRefusal = result.refusal() == null ? "unknown reason" : result.refusal().reason();
+            plugin.getLogger().fine("[NullArmy] portal not built: " + lastRefusal);
+            break;
         }
         return built;
     }
 
-    /**
-     * The exit spot a Null should be spawned at.
-     *
-     * <p>Spots are consumed in order and each one is re-checked, so two Nulls
-     * never share a block and a spot that has since become unsafe is skipped.</p>
-     *
-     * @return a validated spot, or null when this doorway is full
-     */
+    private String lastRefusal = "";
+
+    /** Why the last build found no (or too few) sites; "" when every doorway was built. */
+    public String lastRefusal() { return lastRefusal; }
+
+    /** Every doorway standing right now. */
+    public List<PortalBuilder.BuiltPortal> standing() {
+        return new ArrayList<>(active);
+    }
+
+    /** Problems with a standing doorway; empty when it is a complete one-way frame. */
+    public List<String> validate(PortalBuilder.BuiltPortal portal) {
+        World world = portal == null ? null : Bukkit.getWorld(portal.worldName());
+        PluginConfig current = config;
+        int min = current == null ? 4 : current.v3().airHeightMin();
+        int max = current == null ? 12 : current.v3().airHeightMax();
+        return builder.validate(world, portal, min, max);
+    }
+
+    /** Closes one doorway now and restores its blocks. */
+    public int close(PortalBuilder.BuiltPortal portal) {
+        if (portal == null) {
+            return 0;
+        }
+        active.remove(portal);
+        return restore(portal);
+    }
+
     public Vec3d takeExit(PortalBuilder.BuiltPortal portal, int wanted) {
         if (portal == null) {
             return null;
@@ -179,17 +213,48 @@ public final class PortalManager implements Listener, Reloadable {
         if (active.isEmpty()) {
             return;
         }
+        PluginConfig current = config;
+        boolean afterExit = current == null || current.v3().restoreAfterExit();
         Iterator<PortalBuilder.BuiltPortal> it = active.iterator();
         while (it.hasNext()) {
             PortalBuilder.BuiltPortal portal = it.next();
-            if (portal.expiresAtTick() <= tickCounter) {
+            boolean expired = portal.expiresAtTick() <= tickCounter;
+            boolean allOut = afterExit && !portal.assigned().isEmpty()
+                    && tickCounter - portal.builtTick() > 60 && everyoneOut(portal);
+            if (expired || allOut) {
                 it.remove();
-                restore(portal);
+                int blocks = restore(portal);
+                if (plugin.chatGate() != null) {
+                    Vec3d c = portal.center();
+                    plugin.chatGate().event("portal.restored", "where",
+                            Math.round(c.x()) + "," + Math.round(c.y()) + "," + Math.round(c.z()), "blocks", blocks);
+                }
+                continue;
+            }
+            if (tickCounter % 10 == 0) {
+                World world = Bukkit.getWorld(portal.worldName());
+                if (world != null) {
+                    PortalBuilder.effects(world, portal, tickCounter % 80 == 0);
+                }
             }
         }
     }
 
-    /** Puts one doorway's blocks back. */
+    /** True when no Null that came through the doorway is still inside its frame. */
+    private boolean everyoneOut(PortalBuilder.BuiltPortal portal) {
+        for (java.util.UUID id : portal.assigned()) {
+            org.bukkit.entity.Entity entity = Bukkit.getEntity(id);
+            if (entity == null || entity.isDead()) {
+                continue;
+            }
+            Location at = entity.getLocation();
+            if (portal.frame().containsBody(at.getX(), at.getY(), at.getZ())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private int restore(PortalBuilder.BuiltPortal portal) {
         if (portal == null) {
             return 0;

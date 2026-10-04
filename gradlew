@@ -274,66 +274,93 @@ fi
 
 # Always report the runtime smoke test's own verdict. "The build passed" says
 # nothing about whether a Null was actually visible on a live server, so the
-# verdict and the check lines are re-emitted as a notice annotation, readable
-# through the API and shown in the Checks UI. Failures and the verdict come
-# first: GitHub truncates a long annotation message.
+# verdict, every self-test line and every NullArmy warning are re-emitted as
+# notice annotations, readable through the API and shown in the Checks UI.
+# GitHub keeps at most ten annotations of a kind per step and truncates long
+# messages, so lines are de-duplicated and packed into ~3800-character chunks:
+# one verdict notice, up to six self-test notices, up to two warning notices.
 if [ -f "$NULLARMY_LOG" ]; then
     awk '
-        /RUNTIME SMOKE: / {
-            line = $0; sub(/\r$/, "", line); gsub(/%/, "%%", line)
-            head = head line "%0A"; next
+        function clean(s) { sub(/\r$/, "", s); gsub(/%/, "%25", s); return s }
+        function emit(title, body) { printf("::notice title=%s::%s\n", title, body) }
+        /RUNTIME SMOKE: / { v = clean($0); if (!(v in seenv)) { seenv[v] = 1; verdict = verdict v "%0A" } next }
+        /\[NullArmy\]\[SELFTEST\]/ {
+            line = clean($0)
+            key = line; sub(/^\[[0-9:]+ [A-Z]+\]: /, "", key); sub(/^\[[0-9:]+\] \[[^]]*\]: /, "", key)
+            if (key in seen) next
+            seen[key] = 1
+            if (key ~ /RESULT:/) result = result key "%0A"
+            if (key ~ /SELFTEST\] FAIL / || key ~ /SELFTEST\] BLOCKED/) bad = bad key "%0A"
+            if (key ~ /SELFTEST\] PASS /) npass++
+            if (key ~ /SELFTEST\] FAIL /) nfail++
+            lines[++n] = key
+            next
         }
-        /\[NullArmy\]\[SELFTEST\] .*FAIL/ {
-            line = $0; sub(/\r$/, "", line); gsub(/%/, "%%", line)
-            head = head line "%0A"; next
-        }
-        /\[NullArmy\]\[SELFTEST\] (RESULT|starting|adapter|arrival|pairing path|shutdown progress|dismissed)/ {
-            line = $0; sub(/\r$/, "", line); gsub(/%/, "%%", line)
-            head = head line "%0A"; next
-        }
-        /\[NullArmy\]\[SELFTEST\] PASS/ {
-            line = $0; sub(/\r$/, "", line); gsub(/%/, "%%", line)
-            passes = passes line "%0A"; npass++; next
+        /(WARN|SEVERE|ERROR)\]: \[NullArmy\]/ {
+            w = clean($0); key = w; sub(/^\[[0-9:]+ [A-Z]+\]: /, "", key); sub(/^\[[0-9:]+\] \[[^]]*\]: /, "", key)
+            if (!(key in seenw) && nw < 60) { seenw[key] = 1; warns[++nw] = key }
+            next
         }
         END {
-            body = head passes
-            if (length(body) > 3800) {
-                body = substr(body, 1, 3800) " %0A(truncated - the full list is in the server log artifact)"
-            }
-            if (npass + length(head) == 0) {
-                printf("::notice title=NullArmy runtime smoke test::no smoke test output - it did not run\n")
+            head = verdict result bad
+            if (length(head) > 3800) head = substr(head, 1, 3800) "%0A(truncated)"
+            if (n == 0 && head == "") {
+                emit("NullArmy runtime smoke test", "no smoke test output - it did not run")
             } else {
-                printf("::notice title=NullArmy runtime smoke test (%d PASS lines)::%s\n", npass, body)
+                emit("NullArmy runtime smoke verdict (" npass " PASS, " nfail " FAIL)", head)
             }
+            chunk = ""; part = 0
+            for (i = 1; i <= n; i++) {
+                if (length(chunk) + length(lines[i]) > 3700) {
+                    if (part < 6) emit("NullArmy self test lines " (++part), chunk)
+                    chunk = ""
+                }
+                chunk = chunk lines[i] "%0A"
+            }
+            if (chunk != "" && part < 6) emit("NullArmy self test lines " (++part), chunk)
+            chunk = ""; wpart = 0
+            for (i = 1; i <= nw; i++) {
+                if (length(chunk) + length(warns[i]) > 3700) {
+                    if (wpart < 2) emit("NullArmy warnings " (++wpart), chunk)
+                    chunk = ""
+                }
+                chunk = chunk warns[i] "%0A"
+            }
+            if (chunk != "" && wpart < 2) emit("NullArmy warnings " (++wpart), chunk)
         }
     ' "$NULLARMY_LOG"
 fi
 
 if [ "$NULLARMY_EXIT" -ne 0 ] && [ -f "$NULLARMY_LOG" ]; then
+    # Compile errors first (file:line plus the message), then the failure
+    # summary, packed into at most nine annotations so none is dropped.
     awk '
+        function clean(s) { sub(/\r$/, "", s); gsub(/%/, "%25", s); return s }
         match($0, /\.java:[0-9]+: error:/) {
-            line = $0
-            sub(/\r$/, "", line)
-            n = index(line, ":")
-            file = substr(line, 1, n - 1)
-            rest = substr(line, n + 1)
-            m = index(rest, ":")
-            lineno = substr(rest, 1, m - 1)
-            msg = substr(rest, m + 2)
-            gsub(/%/, "%%", msg)
-            printf("::error file=%s,line=%s::%s\n", file, lineno, msg)
-            raw = $0
-            gsub(/%/, "%%", raw)
-            printf("::error::%s\n", raw)
+            line = clean($0)
+            if (!(line in seen)) { seen[line] = 1; errs[++ne] = line; pending = 2 }
             next
         }
-        /FAILURE: |What went wrong|^Caused by:|Execution failed for task|error:|BUILD FAILED|RUNTIME SMOKE: FAIL|RUNTIME SMOKE: BLOCKED|\[NullArmy\]\[SELFTEST\]|  FAIL  |^FAILURES:|^  - |^passed: / {
-            line = $0
-            sub(/\r$/, "", line)
-            gsub(/%/, "%%", line)
-            printf("::error::%s\n", line)
+        pending > 0 { ctx = clean($0); errs[ne] = errs[ne] "%0A    " ctx; pending--; next }
+        /FAILURE: |What went wrong|^Caused by:|Execution failed for task|BUILD FAILED|RUNTIME SMOKE: FAIL|RUNTIME SMOKE: BLOCKED|\[NullArmy\]\[SELFTEST\] .*FAIL|  FAIL  |^FAILURES:|^  - |^passed: |Exception|SEVERE/ {
+            line = clean($0)
+            if (!(line in seen) && no < 200) { seen[line] = 1; other[++no] = line }
         }
-    ' "$NULLARMY_LOG" | head -n 80
+        END {
+            chunk = ""; parts = 0
+            for (i = 1; i <= ne; i++) {
+                if (length(chunk) + length(errs[i]) > 3600) { if (parts < 6) printf("::error title=compile errors %d::%s\n", ++parts, chunk); chunk = "" }
+                chunk = chunk errs[i] "%0A"
+            }
+            if (chunk != "" && parts < 6) printf("::error title=compile errors %d::%s\n", ++parts, chunk)
+            chunk = ""
+            for (i = 1; i <= no; i++) {
+                if (length(chunk) + length(other[i]) > 3600) { if (parts < 9) printf("::error title=build failure %d::%s\n", ++parts, chunk); chunk = "" }
+                chunk = chunk other[i] "%0A"
+            }
+            if (chunk != "" && parts < 9) printf("::error title=build failure %d::%s\n", ++parts, chunk)
+        }
+    ' "$NULLARMY_LOG"
     echo "::error::NullArmy build failed with exit code $NULLARMY_EXIT - see the annotations above"
 fi
 
