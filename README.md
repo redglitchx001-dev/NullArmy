@@ -134,7 +134,7 @@ Every Null action must correspond to something a real survival-mode Java player 
 
 Forbidden: magical teleports, invisible movement, wall phasing, instant construction, giant fusions, fabricated loot, free ammunition, infinite durability, AI-generated items.
 
-The **NPC inventory is authoritative**, backed by an auditable item ledger. The `/null loadout` screen is a *blueprint*, not a duplicator — gear must come from items donated by the summoner, legitimate drops, real crafting, honest trades, or explicitly configured storage.
+The **NPC inventory is authoritative**, backed by an auditable item ledger. The `/null loadout` screen is a *blueprint*, not a duplicator — gear must come from items donated by the summoner, legitimate drops, real crafting, honest trades, or explicitly configured storage. Save persists the candidate before changing the live loadout; Cancel or closing without saving restores the player's inventory to how it was when the editor opened.
 
 ### 3. No clumping, stacking, or clipping
 
@@ -202,7 +202,7 @@ capped (`chat.max-reply-chars`) so a model can never inject formatting into chat
 
 ## How Summoning Works
 
-1. **Trigger.** Use a real **Goat Horn** configured/named `Call Horn`, or a real **Totem of Undying** configured/named/tagged `Totem Of Null`. These are vanilla items — a usable summon item is only ever created by an explicit owner/admin action or a documented recipe/config. Never a spontaneous grant.
+1. **Trigger.** Use the plugin-issued Goat Horn named **Null** (its instrument is set to vanilla **Call**) or a Totem of Undying tagged **Totem Of Null**. The horn plays the Call sound when right-clicked; both items then open the same protected summon prompt. Usable summon items only come from an explicit owner/admin action, never a spontaneous grant.
 2. **Ask.** The plugin prompts the *authorized summoner* for the desired Null count in chat. The pending request is bound to that player, expires after a configurable timeout, validates the answer, supports cancel/help, and **ignores chat from any other player**.
 3. **Enforce.** Minimum two Nulls if the squad needs two commanders. A configurable hard cap and resource/performance budget apply. Excessive counts are rejected with a clear message — **never** a partial surprise army.
 4. **Verify.** World permission, loaded/safe ground, nearby hazards, owner limits, and spawn spacing are checked before anything commits. If no safe location exists, NullArmy explains the failure rather than spawning through a wall.
@@ -225,8 +225,8 @@ All commands are permission-checked with tab completion, clear feedback, and aud
 
 | Command | Permission | What it does |
 | --- | --- | --- |
-| `/null menu` (aliases `/null m`, `/null gui`) | `nullarmy.gui` | Opens the NullArmy command menu: a real 54-slot chest GUI with its own holder, Adventure `Component` title, permission-filtered buttons and pagination. Every click and drag is cancelled, so **nothing in it can be taken, moved or duplicated**. Each button dispatches the same `/null …` command a player would type. |
-| `/null horn` | `nullarmy.summon` | Gives you the **Call Horn**: a real Goat Horn named `Null`, enchanted (Unbreaking I) with `HIDE_ENCHANTS` for the glint, with lore and a persistent-data tag. Right-clicking asks *"How many Nulls should come?"* in chat. |
+| `/null menu` (aliases `/null m`, `/null gui`) | `nullarmy.gui` | Opens the NullArmy command center: a themed 54-slot chest GUI with a gradient title, live squad/system cards, permission-filtered actions and pagination. Every click and drag is cancelled, so **nothing in it can be taken, moved or duplicated**. Each action dispatches through the same `/null …` command path as typed commands. |
+| `/null horn` | `nullarmy.summon` | Gives you a real Goat Horn named **Null**, set to the vanilla **Call** instrument, enchanted (Unbreaking I) with `HIDE_ENCHANTS` for the glint, and tagged with persistent data. Right-click plays the Call horn sound and asks *"How many Nulls should come?"* in chat. |
 | `/null totem` | `nullarmy.summon` | The **Totem Of Null**: a real Totem of Undying made the same way, with the same chat-count flow. |
 | `/null reload` | `nullarmy.admin` | Re-reads `config.yml` without a restart, re-arms the NMS spawn breaker and tells every subsystem to re-read its settings. A missing `config.yml` is recreated; an existing one is **never** overwritten. |
 | `/null come` (aliases `/null tp`, `/null bring`) | `nullarmy.follow` | Walks your squad to your position. **Not a teleport** — spec 5 forbids teleporting Nulls, including as recovery. |

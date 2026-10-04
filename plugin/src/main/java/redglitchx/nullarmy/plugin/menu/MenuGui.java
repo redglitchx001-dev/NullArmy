@@ -9,10 +9,12 @@ import org.bukkit.inventory.meta.ItemMeta;
 
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 
 import redglitchx.nullarmy.plugin.NullArmyPlugin;
 import redglitchx.nullarmy.plugin.config.PluginConfig;
+import redglitchx.nullarmy.plugin.util.PluginText;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -44,11 +46,14 @@ import java.util.List;
  */
 public final class MenuGui implements InventoryHolder {
 
-    /** A double chest: 45 button slots plus one navigation row. */
+    /** A double chest: a status header, 36 action slots and one navigation row. */
     public static final int SIZE = 54;
 
-    /** Buttons per page. The rest of the row is navigation. */
-    public static final int PAGE_SIZE = 45;
+    /** The header row is reserved for live status cards; commands fill rows 2-5. */
+    public static final int CONTENT_START = 9;
+
+    /** Buttons per page. The bottom row is reserved for navigation. */
+    public static final int PAGE_SIZE = 36;
 
     public static final int BUTTON_BACK = 45;
     public static final int BUTTON_CLOSE = 49;
@@ -98,7 +103,7 @@ public final class MenuGui implements InventoryHolder {
     public MenuGui(NullArmyPlugin plugin, Player viewer) {
         this.plugin = plugin;
         this.viewer = viewer;
-        Component title = Component.text(titleText(plugin)).color(NamedTextColor.DARK_PURPLE);
+        Component title = PluginText.gradientComponent(titleText(plugin));
         // Server#createInventory(InventoryHolder, int, Component) is the
         // documented 1.21.11 signature; the String-title overload is deprecated.
         this.inventory = plugin.getServer().createInventory(this, SIZE, title);
@@ -130,9 +135,9 @@ public final class MenuGui implements InventoryHolder {
     private void buildButtons() {
         buttons.clear();
 
-        add(Material.GOAT_HORN, "Summon Nulls", "Ask how many Nulls should come.",
+        add(Material.GOAT_HORN, "Call Horn · Null", "Get the Call Goat Horn named Null.",
                 "nullarmy.summon", "horn");
-        add(Material.TOTEM_OF_UNDYING, "Totem Of Null", "Get the totem trigger item.",
+        add(Material.TOTEM_OF_UNDYING, "Totem Of Null", "Get the totem trigger item named Null.",
                 "nullarmy.summon", "totem");
         add(Material.PLAYER_HEAD, "Commander", "Summon the Null Commander out of a portal.",
                 "nullarmy.commander", "commander");
@@ -182,7 +187,6 @@ public final class MenuGui implements InventoryHolder {
                 "nullarmy.admin", "debug");
         add(Material.PAPER, "Help", "Every subcommand with its usage line.",
                 null, "help");
-        add(Material.OAK_DOOR, "Close", "Close this menu.", null, "menu");
 
         // Gated entries are only present when the feature is really available.
         PluginConfig config = plugin.pluginConfig();
@@ -201,65 +205,124 @@ public final class MenuGui implements InventoryHolder {
             // Hidden, not shown-and-refused: the screen must match reality.
             return;
         }
-        int slot = buttons.size();
+        int slot = CONTENT_START + (buttons.size() % PAGE_SIZE);
         List<String> lines = new ArrayList<>();
         lines.add(lore);
-        lines.add("Runs: /null " + String.join(" ", action));
+        lines.add(" ");
+        lines.add("Click to run /null " + String.join(" ", action));
         buttons.add(new Button(slot, material, name, lines, permission, action));
     }
 
     /** Repaints the whole inventory for the current page. */
     public void paint() {
         inventory.clear();
-        ItemStack filler = filler();
 
-        // Every slot starts as filler: the menu can never be a place to put items.
+        // Every slot is protected by a decorative pane before real content is
+        // laid out; the menu can never become a place to put or lose items.
         for (int slot = 0; slot < SIZE; slot++) {
-            inventory.setItem(slot, filler);
+            inventory.setItem(slot, filler(slot));
         }
+
+        // A dashboard header makes the screen useful at a glance, not just a
+        // wall of commands. These cards are informational and read-only.
+        inventory.setItem(1, liveSquadCard());
+        inventory.setItem(4, brandCard());
+        inventory.setItem(7, systemCard());
 
         int start = page * PAGE_SIZE;
         int end = Math.min(buttons.size(), start + PAGE_SIZE);
-        int slot = 0;
+        int slot = CONTENT_START;
         for (int i = start; i < end; i++) {
             Button button = buttons.get(i);
             inventory.setItem(slot++, item(button.material(), button.name(), button.lore()));
         }
 
         if (page > 0) {
-            inventory.setItem(BUTTON_BACK, item(Material.ARROW, "Back",
-                    List.of("Previous page (" + page + "/" + pageCount() + ")")));
+            inventory.setItem(BUTTON_BACK, item(Material.ARROW, "Previous page",
+                    List.of("Page " + page + " of " + pageCount())));
         }
         if (end < buttons.size()) {
-            inventory.setItem(BUTTON_NEXT, item(Material.SPECTRAL_ARROW, "Next",
-                    List.of("Next page (" + (page + 2) + "/" + pageCount() + ")")));
+            inventory.setItem(BUTTON_NEXT, item(Material.SPECTRAL_ARROW, "Next page",
+                    List.of("Page " + (page + 2) + " of " + pageCount())));
         }
         inventory.setItem(BUTTON_CLOSE, item(Material.BARRIER, "Close",
-                List.of("Close this menu.")));
+                List.of("Close the command center.")));
         inventory.setItem(BUTTON_PAGE, item(Material.CLOCK,
                 "Page " + (page + 1) + " of " + pageCount(),
-                List.of("Buttons: " + buttons.size())));
+                List.of(buttons.size() + " available actions")));
     }
 
-    private static ItemStack filler() {
-        return item(Material.GRAY_STAINED_GLASS_PANE, " ", List.of());
+    private ItemStack liveSquadCard() {
+        int live = plugin.squads() == null ? 0 : plugin.squads().liveCount();
+        int max = plugin.pluginConfig() == null ? 0 : plugin.pluginConfig().caps().maxLiveNpcs();
+        int pending = plugin.summonFlow() == null ? 0 : plugin.summonFlow().pendingCount();
+        return item(Material.WITHER_SKELETON_SKULL,
+                Component.text("LIVE SQUAD").color(TextColor.color(0x5EEAD4))
+                        .decoration(TextDecoration.BOLD, true),
+                List.of(loreLine("Nulls deployed: " + live + " / " + max, NamedTextColor.WHITE),
+                        loreLine("Open call prompts: " + pending, NamedTextColor.GRAY)));
+    }
+
+    private ItemStack brandCard() {
+        return item(Material.NETHER_STAR, PluginText.gradientComponent("NULLARMY"),
+                List.of(loreLine("COMMAND CENTER", TextColor.color(0xD8B4FE)),
+                        loreLine("Choose an action below.", NamedTextColor.GRAY)));
+    }
+
+    private ItemStack systemCard() {
+        boolean paused = plugin.spawnBreaker() != null && plugin.spawnBreaker().isOpen();
+        String state = paused ? "SPAWN GUARD: PAUSED" : "SPAWN GUARD: READY";
+        Material icon = paused ? Material.BARRIER : Material.SHIELD;
+        TextColor stateColor = paused ? NamedTextColor.RED : NamedTextColor.GREEN;
+        return item(icon,
+                Component.text("SYSTEM STATUS").color(stateColor)
+                        .decoration(TextDecoration.BOLD, true),
+                List.of(loreLine(state, stateColor),
+                        loreLine("Destructive features remain opt-in.", NamedTextColor.GRAY)));
+    }
+
+    private static Component loreLine(String text, TextColor color) {
+        return Component.text(text).color(color).decoration(TextDecoration.ITALIC, false);
+    }
+
+    private static ItemStack filler(int slot) {
+        int row = slot / 9;
+        int column = slot % 9;
+        Material material;
+        if (row == 0 || row == 5) {
+            material = Material.PURPLE_STAINED_GLASS_PANE;
+        } else if (column == 0 || column == 8) {
+            material = Material.MAGENTA_STAINED_GLASS_PANE;
+        } else {
+            material = Material.BLACK_STAINED_GLASS_PANE;
+        }
+        return item(material, " ", List.of());
     }
 
     private static ItemStack item(Material material, String name, List<String> lore) {
+        List<Component> lines = new ArrayList<>();
+        for (String line : lore) {
+            if (line.startsWith("Click to run ")) {
+                lines.add(PluginText.gradientComponent(line)
+                        .decoration(TextDecoration.ITALIC, false));
+            } else {
+                lines.add(loreLine(line, NamedTextColor.GRAY));
+            }
+        }
+        Component displayName = Component.text(name)
+                .color(NamedTextColor.WHITE)
+                .decoration(TextDecoration.BOLD, true)
+                .decoration(TextDecoration.ITALIC, false);
+        return item(material, displayName, lines);
+    }
+
+    private static ItemStack item(Material material, Component name, List<Component> lore) {
         ItemStack stack = new ItemStack(material);
         ItemMeta meta = stack.getItemMeta();
         if (meta != null) {
-            meta.customName(Component.text(name)
-                    .color(NamedTextColor.WHITE)
-                    .decoration(TextDecoration.ITALIC, false));
-            List<Component> components = new ArrayList<>();
-            for (String line : lore) {
-                components.add(Component.text(line)
-                        .color(NamedTextColor.GRAY)
-                        .decoration(TextDecoration.ITALIC, false));
-            }
-            if (!components.isEmpty()) {
-                meta.lore(components);
+            meta.customName(name.decoration(TextDecoration.ITALIC, false));
+            if (!lore.isEmpty()) {
+                meta.lore(lore);
             }
             stack.setItemMeta(meta);
         }
@@ -268,10 +331,10 @@ public final class MenuGui implements InventoryHolder {
 
     /** The button in a content slot on the current page, or null. */
     public Button buttonAt(int rawSlot) {
-        if (rawSlot < 0 || rawSlot >= PAGE_SIZE) {
+        if (rawSlot < CONTENT_START || rawSlot >= CONTENT_START + PAGE_SIZE) {
             return null;
         }
-        int index = page * PAGE_SIZE + rawSlot;
+        int index = page * PAGE_SIZE + (rawSlot - CONTENT_START);
         if (index < 0 || index >= buttons.size()) {
             return null;
         }

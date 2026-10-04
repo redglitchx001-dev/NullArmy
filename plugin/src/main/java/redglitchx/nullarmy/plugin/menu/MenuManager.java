@@ -14,6 +14,7 @@ import redglitchx.nullarmy.plugin.command.NullCommand;
 import redglitchx.nullarmy.plugin.config.PluginConfig;
 import redglitchx.nullarmy.plugin.config.Reloadable;
 import redglitchx.nullarmy.plugin.util.Guard;
+import redglitchx.nullarmy.plugin.util.PluginText;
 
 import java.util.Arrays;
 
@@ -125,7 +126,7 @@ public final class MenuManager implements Listener, Reloadable {
         }
         Guard.attempt(plugin.getLogger(), "menu action /null " + String.join(" ", args), () -> {
             if (command == null) {
-                player.sendMessage("[NullArmy] That action is unavailable: the command is not wired.");
+                player.sendMessage(PluginText.PREFIX + "That action is unavailable: the command is not wired.");
                 return;
             }
             command.dispatch(player, args);
