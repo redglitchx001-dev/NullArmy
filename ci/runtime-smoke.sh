@@ -34,39 +34,52 @@ cp "$JAR" "$SERVER_DIR/plugins/"
 
 # ---------------------------------------------------------------- Paper download
 PAPER_JAR="$SERVER_DIR/paper.jar"
+
+# Fetch a URL, print the HTTP code, and put the body in $RESPONSE.
+fetch() {
+  local url="$1"
+  local code
+  RESPONSE="$(curl -sSL -w '\n%{http_code}' --max-time 60 "$url" 2>/dev/null)" || RESPONSE=""
+  code="$(printf '%s' "$RESPONSE" | tail -n 1)"
+  RESPONSE="$(printf '%s' "$RESPONSE" | sed '$d')"
+  echo "RUNTIME SMOKE: tried $url -> HTTP ${code:-no response}"
+  [ -n "$code" ] && [ "$code" = "200" ]
+}
+
+# Pull the first .jar download URL out of any PaperMC API response, whatever the
+# schema version is. This survives both the Fill v3 shape and the download-api v2
+# shape without needing to know which one answered.
+jar_url_from() {
+  printf '%s' "$1" | tr ',{' '\n\n' | grep -oE 'https://[^"[:space:]]+\.jar' | head -n 1
+}
+
 download_paper() {
-  # Fill v3 (current): ask for the latest stable build, then its server download.
-  local meta
-  meta="$(curl -fsSL "https://fill.papermc.io/v3/projects/paper/versions/${MC_VERSION}/builds?channel=STABLE" 2>/dev/null)" || meta=""
-  if [ -n "$meta" ]; then
-    local url
-    url="$(printf '%s' "$meta" | python3 -c '
-import json,sys
-try:
-    data=json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-builds=data.get("builds") or []
-if not builds:
-    sys.exit(0)
-latest=builds[-1]
-downloads=latest.get("downloads") or {}
-for key in ("server:default","server","application"):
-    entry=downloads.get(key)
-    if isinstance(entry,dict) and entry.get("url"):
-        print(entry["url"]); break
-' 2>/dev/null)"
+  local meta url build
+
+  # 1. Fill v3: every stable build for this version.
+  if fetch "https://fill.papermc.io/v3/projects/paper/versions/${MC_VERSION}/builds?channel=STABLE"; then
+    url="$(jar_url_from "$RESPONSE")"
     if [ -n "$url" ]; then
-      echo "RUNTIME SMOKE: downloading Paper from the Fill v3 API"
-      curl -fsSL -o "$PAPER_JAR" "$url" && [ -s "$PAPER_JAR" ] && return 0
+      echo "RUNTIME SMOKE: downloading $url"
+      curl -fsSL --max-time 300 -o "$PAPER_JAR" "$url" && [ -s "$PAPER_JAR" ] && return 0
+      echo "RUNTIME SMOKE: that download failed"
+    else
+      echo "RUNTIME SMOKE: no jar URL in the Fill v3 answer"
     fi
   fi
 
-  # Download API v2 (older PaperMC API shape).
-  meta="$(curl -fsSL "https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}" 2>/dev/null)" || meta=""
-  if [ -n "$meta" ]; then
-    local build
-    build="$(printf '%s' "$meta" | python3 -c '
+  # 2. Fill v3: just the latest build.
+  if fetch "https://fill.papermc.io/v3/projects/paper/versions/${MC_VERSION}/builds/latest"; then
+    url="$(jar_url_from "$RESPONSE")"
+    if [ -n "$url" ]; then
+      echo "RUNTIME SMOKE: downloading $url"
+      curl -fsSL --max-time 300 -o "$PAPER_JAR" "$url" && [ -s "$PAPER_JAR" ] && return 0
+    fi
+  fi
+
+  # 3. Download API v2: version metadata, then the newest build number.
+  if fetch "https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}"; then
+    build="$(printf '%s' "$RESPONSE" | python3 -c '
 import json,sys
 try:
     data=json.load(sys.stdin)
@@ -76,11 +89,24 @@ builds=data.get("builds") or []
 print(builds[-1] if builds else "")
 ' 2>/dev/null)"
     if [ -n "$build" ]; then
-      local url="https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}/builds/${build}/downloads/paper-${MC_VERSION}-${build}.jar"
-      echo "RUNTIME SMOKE: downloading Paper build ${build} from the v2 API"
-      curl -fsSL -o "$PAPER_JAR" "$url" && [ -s "$PAPER_JAR" ] && return 0
+      url="https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}/builds/${build}/downloads/paper-${MC_VERSION}-${build}.jar"
+      echo "RUNTIME SMOKE: downloading Paper build ${build}"
+      curl -fsSL --max-time 300 -o "$PAPER_JAR" "$url" && [ -s "$PAPER_JAR" ] && return 0
+      echo "RUNTIME SMOKE: that download failed"
+    else
+      echo "RUNTIME SMOKE: no build number in the v2 answer"
     fi
   fi
+
+  # 4. Download API v2, latest-build endpoint.
+  if fetch "https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}/builds/latest"; then
+    url="$(jar_url_from "$RESPONSE")"
+    if [ -n "$url" ]; then
+      echo "RUNTIME SMOKE: downloading $url"
+      curl -fsSL --max-time 300 -o "$PAPER_JAR" "$url" && [ -s "$PAPER_JAR" ] && return 0
+    fi
+  fi
+
   return 1
 }
 
@@ -97,6 +123,7 @@ if ! download_paper; then
   echo "  5. the wither cannon fires and delivers TNT with block damage off"
   exit 3
 fi
+echo "RUNTIME SMOKE: server jar is $(stat -c %s "$PAPER_JAR" 2>/dev/null || wc -c < "$PAPER_JAR") bytes"
 
 # ---------------------------------------------------------------- server config
 echo "eula=true" > "$SERVER_DIR/eula.txt"
