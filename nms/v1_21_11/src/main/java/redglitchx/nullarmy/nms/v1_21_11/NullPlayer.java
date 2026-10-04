@@ -49,8 +49,8 @@ import java.util.logging.Level;
  * A {@code ServerPlayer} may be visited by server tick and packet-broadcast
  * paths even though this NPC has no client. A null {@code connection} crashes
  * those paths outside this entity's {@link #tick()} guard. The constructor gives
- * every Null a real packet-listener object backed by a no-network connection;
- * outbound packets are discarded instead of queued or sent to another player.
+ * every Null a real packet-listener object with outbound sends discarded;
+ * those packets are never sent to another player or retained for a fake client.
  * This must be smoke-tested on the target Paper build before release.
  *
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
@@ -92,20 +92,21 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         // before NullPlayer.tick() is reached. Install a non-null listener
         // before the entity is registered, but never attach it to a real client
         // or let its sends accumulate in Connection's pre-channel queue.
-        this.connection = new ServerGamePacketListenerImpl(server,
-                new DiscardingConnection(), this,
-                CommonListenerCookie.createInitial(profile, false));
+        this.connection = new DiscardingPacketListener(server, this, profile);
     }
 
     /**
-     * A network connection for a server-only player. Packets aimed at the Null
-     * are intentionally discarded; viewers receive entity-tracking packets
+     * Satisfies server code that assumes every ServerPlayer has a listener,
+     * without pretending this server-only NPC has a client. Packet delivery to
+     * the Null itself is discarded; viewers receive entity-tracking packets
      * through their own real connections.
      */
-    private static final class DiscardingConnection extends Connection {
+    private static final class DiscardingPacketListener extends ServerGamePacketListenerImpl {
 
-        private DiscardingConnection() {
-            super(PacketFlow.SERVERBOUND);
+        private DiscardingPacketListener(MinecraftServer server, ServerPlayer player,
+                                         GameProfile profile) {
+            super(server, new Connection(PacketFlow.SERVERBOUND), player,
+                    CommonListenerCookie.createInitial(profile, false));
         }
 
         @Override
@@ -116,11 +117,6 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         @Override
         public void send(Packet<?> packet, ChannelFutureListener listener) {
             // No network send means there is no ChannelFuture to notify.
-        }
-
-        @Override
-        public void send(Packet<?> packet, ChannelFutureListener listener, boolean flush) {
-            // Some NMS call sites specify flushing explicitly; these are no-ops too.
         }
     }
 

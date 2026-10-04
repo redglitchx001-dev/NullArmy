@@ -42,8 +42,8 @@ import java.util.logging.Level;
  * <p>Nothing may escape {@code onEnable}, {@code onDisable}, a command, a
  * listener or a tick. A fake {@code ServerPlayer} with a null packet listener
  * can crash the server's own packet-send loop, outside the NPC tick guard. The
- * version adapter installs a non-null listener backed by a discard-only
- * connection before registering each Null; the plugin still guards the spawn
+ * version adapter installs a non-null listener that discards outgoing sends
+ * before registering each Null; the plugin still guards the spawn
  * path and all other risky work. So:</p>
  * <ul>
  *   <li>{@link #onEnable()} is wrapped as a whole, and each step is wrapped
