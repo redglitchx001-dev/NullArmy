@@ -10,8 +10,14 @@ import net.minecraft.world.phys.Vec3;
 
 import redglitchx.nullarmy.core.ledger.ItemLedger;
 import redglitchx.nullarmy.core.math.Vec3d;
+import redglitchx.nullarmy.nms.LoadoutSlot;
 import redglitchx.nullarmy.nms.NullBody;
 import redglitchx.nullarmy.nms.VersionAdapter;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.logging.Level;
 
 /**
  * The server-authoritative body of a Null on 1.21.11.
@@ -46,9 +52,18 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     /** Blocks per tick. Bounded so no steering force can exceed legal speed. */
     private static final double MAX_SPEED = 0.28;
 
+    /**
+     * A body that keeps throwing from {@code tick()} is removed rather than
+     * allowed to keep throwing inside the server's entity loop. Three strikes:
+     * one failure may be transient (a chunk boundary, a chunk unload race),
+     * three in a row is a broken body.
+     */
+    private static final int TICK_FAILURE_LIMIT = 3;
+
     private final ItemLedger inventory;
     private final V1_21_11Adapter adapter;
     private final Vec3d[] pendingForce = new Vec3d[1];
+    private int tickFailures;
 
     NullPlayer(MinecraftServer server, ServerLevel level, GameProfile profile,
                VersionAdapter.SpawnRequest request, V1_21_11Adapter adapter) {
@@ -100,6 +115,27 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     @Override
     public double health() { return getHealth(); }
 
+    /**
+     * Tops the body up without ever exceeding its maximum, and without
+     * reviving a dead one. A negative or absurd amount is ignored.
+     */
+    @Override
+    public void heal(double amount) {
+        if (amount <= 0.0D || !isAlive()) {
+            return;
+        }
+        try {
+            float max = getMaxHealth();
+            float now = getHealth();
+            float target = (float) Math.min(max, now + amount);
+            if (target > now) {
+                setHealth(target);
+            }
+        } catch (Throwable ignored) {
+            // Healing is best-effort: /null heal reports what it could not do.
+        }
+    }
+
     @Override
     public ItemLedger inventory() { return inventory; }
 
@@ -126,6 +162,37 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
      */
     @Override
     public void tick() {
+        try {
+            tickBody();
+        } catch (Throwable t) {
+            tickFailures++;
+            if (tickFailures <= TICK_FAILURE_LIMIT) {
+                org.bukkit.Bukkit.getLogger().log(Level.SEVERE,
+                        "[NullArmy] a Null failed to tick (" + tickFailures
+                                + " time(s)); the server is unaffected: " + t, t);
+            }
+            if (tickFailures >= TICK_FAILURE_LIMIT) {
+                // Remove the body instead of letting it throw again next tick.
+                // This is the difference between one lost Null and a crashed
+                // server: nothing may keep throwing inside the entity loop.
+                try {
+                    if (adapter != null) {
+                        adapter.forget(this);
+                    }
+                } catch (Throwable ignored) {
+                    // The adapter list is best-effort here.
+                }
+                try {
+                    discard();
+                } catch (Throwable ignored) {
+                    // Nothing further can be done for this body.
+                }
+            }
+        }
+    }
+
+    /** The real per-tick work, isolated so a failure can be contained. */
+    private void tickBody() {
         Vec3d force = pendingForce[0];
         pendingForce[0] = null;
 
@@ -144,6 +211,53 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         // changes a Null's position.
         move(MoverType.SELF, getDeltaMovement());
     }
+
+    /**
+     * Reads what the body is currently wearing or carrying.
+     *
+     * <p>This is a read of the real player inventory, so there is exactly one
+     * source of truth. Slots that are empty are omitted rather than reported as
+     * air.</p>
+     */
+    @Override
+    public List<LoadoutSlot> loadout() {
+        List<LoadoutSlot> out = new ArrayList<>();
+        org.bukkit.inventory.PlayerInventory inv;
+        try {
+            inv = getBukkitEntity().getInventory();
+        } catch (Throwable t) {
+            return Collections.emptyList();
+        }
+        if (inv == null) {
+            return Collections.emptyList();
+        }
+        addSlot(out, LoadoutSlot.SLOT_BOOTS, inv.getBoots());
+        addSlot(out, LoadoutSlot.SLOT_LEGGINGS, inv.getLeggings());
+        addSlot(out, LoadoutSlot.SLOT_CHESTPLATE, inv.getChestplate());
+        addSlot(out, LoadoutSlot.SLOT_HELMET, inv.getHelmet());
+        addSlot(out, LoadoutSlot.SLOT_OFFHAND, inv.getItemInOffHand());
+        for (int i = 0; i <= 35; i++) {
+            addSlot(out, i, inv.getItem(i));
+        }
+        return out;
+    }
+
+    /** Adds one occupied slot, skipping air and unreadable stacks. */
+    private static void addSlot(List<LoadoutSlot> out, int slot, org.bukkit.inventory.ItemStack stack) {
+        if (stack == null) {
+            return;
+        }
+        try {
+            org.bukkit.Material type = stack.getType();
+            if (type == null || type.isAir()) {
+                return;
+            }
+            out.add(LoadoutSlot.of(slot, type.name(), stack.getAmount()));
+        } catch (Throwable ignored) {
+            // An unreadable stack is skipped, never fatal.
+        }
+    }
+
     @Override
     public void setLoadout(java.util.List<redglitchx.nullarmy.nms.LoadoutSlot> slots) {
         org.bukkit.inventory.PlayerInventory inv = getBukkitEntity().getInventory();

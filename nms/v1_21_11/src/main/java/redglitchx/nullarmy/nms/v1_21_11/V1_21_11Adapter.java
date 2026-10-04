@@ -75,9 +75,21 @@ public final class V1_21_11Adapter implements VersionAdapter {
         ServerLevel level = ((CraftWorld) bukkitWorld).getHandle();
 
         // Re-verify safety server-side. Never trust the caller.
-        if (!isSpawnSafe(request.worldName(), request.position())) {
+        //
+        // Ground spawns need solid ground under the feet. An airborne spawn is
+        // the /null airdrop sky path: the body must start in free space with no
+        // solid block intersecting it, and it is then delivered by ordinary
+        // vanilla gravity - which is exactly why the air drop documents real
+        // fall damage instead of pretending there is none.
+        boolean safe = request.airborne()
+                ? isAirborneSpawnSafe(request.worldName(), request.position())
+                : isSpawnSafe(request.worldName(), request.position());
+        if (!safe) {
             throw new IllegalStateException("refusing to spawn Null at unsafe position "
-                    + request.position() + " - no teleporting out of bad spots");
+                    + request.position()
+                    + (request.airborne()
+                        ? " - the air-drop position is not clear of blocks"
+                        : " - no teleporting out of bad spots"));
         }
 
         GameProfile profile = new GameProfile(UUID.randomUUID(), request.profileName());
@@ -126,6 +138,40 @@ public final class V1_21_11Adapter implements VersionAdapter {
         }
         world.playSound(new org.bukkit.Location(world, at.x(), at.y(), at.z()),
                 org.bukkit.Sound.BLOCK_PORTAL_TRIGGER, 0.6f, 1.2f);
+    }
+
+    /**
+     * Safety check for a sky-delivered Null: the body's block space must be
+     * free of solid blocks, but there is deliberately no requirement for ground
+     * beneath the feet. Only the air-drop path uses this.
+     */
+    @Override
+    public boolean isAirborneSpawnSafe(String worldName, Vec3d position) {
+        World world = Bukkit.getWorld(worldName);
+        if (world == null) {
+            return false;
+        }
+        ServerLevel level = ((CraftWorld) world).getHandle();
+        int minX = (int) Math.floor(position.x() - BODY_WIDTH / 2.0);
+        int maxX = (int) Math.floor(position.x() + BODY_WIDTH / 2.0);
+        int minZ = (int) Math.floor(position.z() - BODY_WIDTH / 2.0);
+        int maxZ = (int) Math.floor(position.z() + BODY_WIDTH / 2.0);
+        int feetY = (int) Math.floor(position.y());
+
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                for (int y = feetY; y < feetY + (int) Math.ceil(BODY_HEIGHT); y++) {
+                    if (y > level.getMaxY()) {
+                        return false;
+                    }
+                    BlockState state = level.getBlockState(new BlockPos(x, y, z));
+                    if (!state.isAir()) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     @Override

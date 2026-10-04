@@ -13,7 +13,7 @@ commands:
   # command map a null key and crashes Paper's PluginDescriptionFile on load.
   "null":
     description: Manage NullArmy squads and plugin features.
-    usage: "/null <gui|commander|loadout|skin|features|chat|attack|attackx|follow|build|status|stop|dismiss|ban|kill>"
+    usage: "/null <menu|help|status|horn|totem|commander|loadout|follow|guard|formation|attack|attackx|come|stop|dismiss|list|info|heal|equip|drop|reload|withercannon|airdrop|version>  -  /null help lists every subcommand"
 
 permissions:
   nullarmy.summon:
