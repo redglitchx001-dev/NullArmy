@@ -83,6 +83,14 @@ public final class V1_21_11Adapter implements VersionAdapter {
 
     private final List<NullBody> active = Collections.synchronizedList(new ArrayList<>());
 
+    /** Whether a Null's player-info entry is listed in the client's tab overlay. */
+    private volatile boolean tabListed = true;
+
+    @Override
+    public void setTabListing(boolean listed) {
+        this.tabListed = listed;
+    }
+
     @Override
     public String minecraftVersion() { return MC_VERSION; }
 
@@ -241,12 +249,34 @@ public final class V1_21_11Adapter implements VersionAdapter {
             if (players == null) {
                 return false;
             }
-            players.broadcastAll(ClientboundPlayerInfoUpdatePacket
-                    .createPlayerInitializing(List.of(npc)));
+            players.broadcastAll(infoPacket(npc));
             return true;
         } catch (Throwable t) {
             return false;
         }
+    }
+
+    /**
+     * The player-info entry a client needs before it will render this body.
+     *
+     * <p>Without {@code UPDATE_LISTED} the entry still exists - so the entity is
+     * still rendered and still carries the skin - but the client keeps it out of
+     * the tab overlay, which is what {@code nulls.show-in-tab-list: false} means.</p>
+     */
+    private ClientboundPlayerInfoUpdatePacket infoPacket(NullPlayer npc) {
+        if (tabListed) {
+            return ClientboundPlayerInfoUpdatePacket.createPlayerInitializing(List.of(npc));
+        }
+        java.util.EnumSet<ClientboundPlayerInfoUpdatePacket.Action> actions =
+                java.util.EnumSet.of(
+                        ClientboundPlayerInfoUpdatePacket.Action.ADD_PLAYER,
+                        ClientboundPlayerInfoUpdatePacket.Action.INITIALIZE_CHAT,
+                        ClientboundPlayerInfoUpdatePacket.Action.UPDATE_GAME_MODE,
+                        ClientboundPlayerInfoUpdatePacket.Action.UPDATE_LATENCY,
+                        ClientboundPlayerInfoUpdatePacket.Action.UPDATE_DISPLAY_NAME,
+                        ClientboundPlayerInfoUpdatePacket.Action.UPDATE_HAT,
+                        ClientboundPlayerInfoUpdatePacket.Action.UPDATE_LIST_ORDER);
+        return new ClientboundPlayerInfoUpdatePacket(actions, List.of(npc));
     }
 
     /** Removes the tab-list/info entry of a body that is gone or never arrived. */
@@ -322,8 +352,7 @@ public final class V1_21_11Adapter implements VersionAdapter {
                 continue;
             }
             try {
-                viewer.connection.send(ClientboundPlayerInfoUpdatePacket
-                        .createPlayerInitializing(List.of((NullPlayer) body)));
+                viewer.connection.send(infoPacket((NullPlayer) body));
                 announced++;
             } catch (Throwable ignored) {
                 // One unannounceable Null must not stop the rest.
@@ -369,6 +398,11 @@ public final class V1_21_11Adapter implements VersionAdapter {
         if (worldName == null || position == null) {
             return null;
         }
+        return createViewerProbeAt(worldName, position);
+    }
+
+    /** Creates the probe at a position that is inside the chunk it is given. */
+    private NullBody createViewerProbeAt(String worldName, Vec3d position) {
         World bukkitWorld = Bukkit.getWorld(worldName);
         if (bukkitWorld == null) {
             return null;
@@ -427,7 +461,7 @@ public final class V1_21_11Adapter implements VersionAdapter {
         if (level == null) {
             return false;
         }
-        return Tracking.pair(level, body.getId(), probe);
+        return Tracking.pair(level, body, probe);
     }
 
     @Override
@@ -440,8 +474,7 @@ public final class V1_21_11Adapter implements VersionAdapter {
             return false;
         }
         try {
-            to.connection.send(ClientboundPlayerInfoUpdatePacket
-                    .createPlayerInitializing(List.of((NullPlayer) target)));
+            to.connection.send(infoPacket((NullPlayer) target));
             return true;
         } catch (Throwable t) {
             return false;

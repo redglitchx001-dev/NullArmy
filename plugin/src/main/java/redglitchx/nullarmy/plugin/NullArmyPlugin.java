@@ -224,6 +224,12 @@ public final class NullArmyPlugin extends JavaPlugin {
             nullCommand.setTabCompleter(command);
         }
 
+        // 5b. Tab listing. A Null is always announced with a player-info entry
+        //     (a client will not render a player entity without one); this only
+        //     decides whether that entry shows in the tab overlay.
+        Guard.attempt(getLogger(), "applying the tab-list setting",
+                () -> adapter.setTabListing(pluginConfig == null || pluginConfig.nullsInTabList()));
+
         // 6. Warm the skin cache in the background. Cosmetic, never fatal.
         Guard.attempt(getLogger(), "warming the skin cache", () -> commander.preloadSkin());
 
@@ -482,6 +488,10 @@ public final class NullArmyPlugin extends JavaPlugin {
             for (Reloadable reloadable : reloadables) {
                 Guard.attempt(getLogger(), "reloading " + reloadable.getClass().getSimpleName(),
                         () -> reloadable.onConfigReloaded(fresh));
+            }
+            if (adapter != null) {
+                Guard.attempt(getLogger(), "applying the tab-list setting",
+                        () -> adapter.setTabListing(fresh.nullsInTabList()));
             }
             // An explicit reload is also the way to re-arm the NMS breaker after
             // a fix; the plugin says so in chat when it fires.

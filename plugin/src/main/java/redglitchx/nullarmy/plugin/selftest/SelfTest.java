@@ -216,7 +216,18 @@ public final class SelfTest {
         }
         try {
             Vec3d at = single.bodyPosition();
-            probe = plugin.adapter().createViewerProbe(worldName, new Vec3d(at.x() + 2.0, at.y(), at.z()));
+            // The probe goes two blocks away but INSIDE the target's own chunk: a
+            // viewer in the next chunk would add a second variable to a test that
+            // is trying to prove one thing.
+            double probeX = at.x() + 2.0;
+            double chunkMinX = Math.floor(probeX / 16.0) * 16.0;
+            if (Math.floor(probeX / 16.0) != Math.floor(at.x() / 16.0)) {
+                probeX = at.x() - 2.0;
+            }
+            if (Math.floor(probeX / 16.0) != Math.floor(at.x() / 16.0)) {
+                probeX = chunkMinX + 8.5;
+            }
+            probe = plugin.adapter().createViewerProbe(worldName, new Vec3d(probeX, at.y(), at.z()));
         } catch (Throwable t) {
             probe = null;
             fail("the viewer probe could not be created: " + Guard.describe(t));

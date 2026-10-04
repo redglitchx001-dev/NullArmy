@@ -1400,6 +1400,25 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             plugin.getLogger().info("AUDIT: " + sender.getName() + " reloaded config.yml.");
             sender.sendMessage(PREFIX + "config.yml reloaded. The spawn path was re-armed and"
                     + " every subsystem re-read its settings.");
+            // The reason a reload used to look broken: the file on disk never
+            // changed, so nothing new appeared. Say exactly what it did.
+            redglitchx.nullarmy.plugin.config.ConfigMigration.Report migration =
+                    plugin.lastMigration();
+            if (migration == null) {
+                sender.sendMessage(PREFIX + "  no config migration report is available.");
+            } else {
+                sender.sendMessage(PREFIX + "  " + migration.describe());
+                if (migration.changed()) {
+                    sender.sendMessage(PREFIX + "  added: " + migration.addedKeys());
+                    sender.sendMessage(PREFIX + "  your own values and comments were left"
+                            + " untouched; the new keys are appended at the bottom of "
+                            + plugin.configFile());
+                }
+                if (!migration.unknownKeys().isEmpty()) {
+                    sender.sendMessage(PREFIX + "  keys this build does not ship (kept as they"
+                            + " are): " + migration.unknownKeys().size());
+                }
+            }
         } else {
             sender.sendMessage(PREFIX + "Reload failed - the old settings are still in use."
                     + " The reason is in the server log.");
@@ -1466,6 +1485,7 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
                     + (brain == null ? "the chat director is unavailable" : brain.unavailableReason()) + ".");
             sender.sendMessage(PREFIX + "The plugin is fully functional without it -"
                     + " AI only adds conversation and the AI-only roles.");
+            describeCoordination(sender);
             return true;
         }
         sender.sendMessage(PREFIX + "Chat model is ready for the ChatCommander role.");
@@ -1473,7 +1493,47 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
         if (outcome != null) {
             sender.sendMessage(PREFIX + outcome.message);
         }
+        describeCoordination(sender);
         return true;
+    }
+
+    /**
+     * What the AI is and is not allowed to do to the squad.
+     *
+     * <p>Honest about the split: a model may only answer with one typed action
+     * from a closed allowlist, which is then checked against permissions, caps
+     * and policy before it runs through the same executor a typed order uses.
+     * Without an endpoint, the local coordinator does the safe subset - and this
+     * says so instead of implying a model is involved.</p>
+     */
+    private void describeCoordination(CommandSender sender) {
+        sender.sendMessage(PREFIX + "Squad coordination: " + (config.aiSquadCoordination()
+                ? "on" : "off (ai.squad-coordination is false)")
+                + ", automatic local steps: " + (config.aiAutoCoordinate() ? "on" : "off")
+                + " every " + (config.aiCoordinateIntervalTicks() / 20) + "s.");
+        sender.sendMessage(PREFIX + "  allowlisted actions: "
+                + String.join(", ", redglitchx.nullarmy.core.ai.SquadAction.allowlist()));
+        sender.sendMessage(PREFIX + "  a model can never run a console command, grant a"
+                + " permission, enable griefing, ban or kill a player; cannon, airdrop and"
+                + " dismiss always need /null confirm.");
+        if (plugin.chat() == null || plugin.chat().brain() == null
+                || !plugin.chat().brain().available()) {
+            sender.sendMessage(PREFIX + "  no model is configured, so only the local"
+                    + " deterministic coordinator runs: /null coordinate takes one safe step"
+                    + " (heal a hurt squad, hold position when idle, store missing roles).");
+        } else {
+            sender.sendMessage(PREFIX + "  a model IS configured: /null coordinate asks it to"
+                    + " read the squad and answer with one allowlisted action.");
+        }
+        if (plugin.coordinator() != null) {
+            for (String line : plugin.coordinator().recentDecisions()) {
+                sender.sendMessage(PREFIX + "  last: " + line);
+            }
+        }
+        if (sender instanceof Player && plugin.coordinator() != null
+                && plugin.coordinator().hasPendingConfirmation(((Player) sender).getUniqueId())) {
+            sender.sendMessage(PREFIX + "  an action is waiting for your /null confirm.");
+        }
     }
 
     /** Small holder so the two AI-info lines stay readable. */

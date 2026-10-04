@@ -197,6 +197,17 @@ public interface VersionAdapter {
      */
     default int refreshViewer(UUID viewerId) { return 0; }
 
+    /**
+     * Whether spawned Nulls are listed in clients' tab lists.
+     *
+     * <p>Either way a Null is <b>announced</b> with a player-info entry, because a
+     * client refuses to render a player entity it has no entry for. This only
+     * decides whether that entry is listed in the tab overlay.</p>
+     */
+    default void setTabListing(boolean listed) {
+        // Adapters that cannot honour it stay as they are rather than pretending.
+    }
+
     /** Adapter-specific tracking diagnostics for {@code /null debug}. */
     default List<String> trackingDiagnostics() { return java.util.Collections.emptyList(); }
 

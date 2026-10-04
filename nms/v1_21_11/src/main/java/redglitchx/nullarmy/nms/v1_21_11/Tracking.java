@@ -106,11 +106,14 @@ final class Tracking {
      *
      * @return true when the viewer is paired with the entity afterwards
      */
-    static boolean pair(ServerLevel level, int entityId, ServerPlayer viewer) {
-        Object tracked = trackedEntity(level, entityId);
-        if (tracked == null || viewer == null) {
-            lastError = tracked == null ? "no TrackedEntity for entity " + entityId
-                    : "no viewer was given";
+    static boolean pair(ServerLevel level, net.minecraft.world.entity.Entity target, ServerPlayer viewer) {
+        if (target == null || viewer == null) {
+            lastError = "no target or no viewer was given";
+            return false;
+        }
+        Object tracked = trackedEntity(level, target.getId());
+        if (tracked == null) {
+            lastError = "no TrackedEntity for entity " + target.getId();
             return false;
         }
         Method method = updatePlayer(tracked.getClass());
@@ -126,15 +129,79 @@ final class Tracking {
                     + (cause.getMessage() == null ? "" : ": " + cause.getMessage());
             return false;
         }
-        int viewers = viewerCount(level, entityId);
-        if (viewers <= 0) {
-            lastError = "updatePlayer ran but the tracker still counts " + viewers
-                    + " viewer(s): the viewer is out of range, its chunk is still"
-                    + " pending for it, or the entity refuses to broadcast";
-        } else {
-            lastError = "";
-        }
+        int viewers = viewerCount(level, target.getId());
+        lastError = viewers > 0 ? "" : "updatePlayer ran but the tracker counts " + viewers
+                + " viewer(s). " + diagnose(level, target, viewer);
         return viewers > 0;
+    }
+
+    /**
+     * Works out <b>which</b> of the tracker's four conditions refused the pairing.
+     *
+     * <p>{@code ChunkMap.TrackedEntity.updatePlayer} pairs a viewer only when all
+     * of these hold: the viewer is inside the tracking range (horizontal, and -
+     * on Paper - inside {@code entities.tracking-range-y}), the entity agrees to
+     * be broadcast to that viewer, and the viewer's own chunk tracking view covers
+     * the entity's chunk with that chunk no longer marked pending for them. Guessing
+     * which one failed wastes a server; this reads all four.</p>
+     */
+    static String diagnose(ServerLevel level, net.minecraft.world.entity.Entity target,
+                           ServerPlayer viewer) {
+        StringBuilder sb = new StringBuilder();
+        try {
+            double dx = viewer.getX() - target.getX();
+            double dz = viewer.getZ() - target.getZ();
+            double dy = viewer.getY() - target.getY();
+            sb.append("distance=").append(String.format(java.util.Locale.ROOT, "%.1f", Math.sqrt(dx * dx + dz * dz)))
+                    .append("bl, dy=").append(String.format(java.util.Locale.ROOT, "%.1f", dy)).append("; ");
+            sb.append("viewerViewDistance=").append(viewer.requestedViewDistance()).append("; ");
+            sb.append("broadcastToPlayer=").append(target.broadcastToPlayer(viewer)).append("; ");
+            sb.append("viewerSpectator=").append(viewer.isSpectator()).append("; ");
+            if (target instanceof ServerPlayer) {
+                sb.append("targetSpectator=").append(((ServerPlayer) target).isSpectator()).append("; ");
+                sb.append("targetGameMode=").append(((ServerPlayer) target).gameMode()).append("; ");
+            }
+            sb.append("targetValid=").append(target.valid)
+                    .append(", viewerValid=").append(viewer.valid).append("; ");
+            ChunkMap map = chunkMap(level);
+            if (map != null) {
+                net.minecraft.world.level.ChunkPos targetChunk = target.chunkPosition();
+                net.minecraft.world.level.ChunkPos viewerChunk = viewer.chunkPosition();
+                sb.append("sameChunk=").append(targetChunk.equals(viewerChunk))
+                        .append(" (target ").append(targetChunk.x).append(',').append(targetChunk.z)
+                        .append(", viewer ").append(viewerChunk.x).append(',').append(viewerChunk.z)
+                        .append("); ");
+                sb.append("view=").append(viewer.getChunkTrackingView().getClass().getSimpleName())
+                        .append("; ");
+                sb.append("chunkTracked=").append(map.isChunkTracked(viewer, targetChunk.x, targetChunk.z))
+                        .append("; ");
+                try {
+                    sb.append("pending=").append(viewer.connection.chunkSender
+                            .isPending(net.minecraft.world.level.ChunkPos.asLong(targetChunk.x, targetChunk.z)))
+                            .append("; ");
+                } catch (Throwable ignored) {
+                    sb.append("pending=unknown; ");
+                }
+            }
+            sb.append("queueSize=").append(pendingQueueSize(viewer));
+        } catch (Throwable t) {
+            sb.append("diagnosis failed: ").append(t.getClass().getSimpleName())
+                    .append(": ").append(t.getMessage());
+        }
+        return sb.toString();
+    }
+
+    /** How many chunks are still marked pending for a viewer, or -1 if unreadable. */
+    static int pendingQueueSize(ServerPlayer viewer) {
+        if (viewer == null || PENDING_CHUNKS == null || viewer.connection == null) {
+            return -1;
+        }
+        try {
+            Object value = PENDING_CHUNKS.get(viewer.connection.chunkSender);
+            return value instanceof java.util.Collection<?> ? ((java.util.Collection<?>) value).size() : -1;
+        } catch (Throwable t) {
+            return -1;
+        }
     }
 
     /**
