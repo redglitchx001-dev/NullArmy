@@ -1097,8 +1097,14 @@ final class SelfTestV3 {
         PortalBuilder.BuiltPortal door = portals.get(0);
         Vec3d p = one.bodyPosition();
         boolean out = !door.frame().containsBody(p.x(), p.y(), p.z());
+        Mind mind = plugin.brain().minds().get(one.uuid());
+        double[] exit = door.frame().stepOutPoint();
         check("S-72", "B-13", out && plugin.currentTick() - mark <= 60, "the first Null steps out of its frame"
-                + " within 60 ticks (" + (plugin.currentTick() - mark) + " ticks)");
+                + " within 60 ticks (" + (plugin.currentTick() - mark) + " ticks; " + door.frame() + ", exit side "
+                + door.frame().exitSide() + ", body " + String.format(Locale.ROOT, "%.2f,%.2f,%.2f", p.x(), p.y(), p.z())
+                + ", step-out point " + String.format(Locale.ROOT, "%.1f,%.1f,%.1f", exit[0], exit[1], exit[2])
+                + ", ground=" + one.onGround() + ", wall=" + one.horizontalCollision() + ", mind "
+                + (mind == null ? "none" : mind.describe()) + ")");
         dismissAll();
         plugin.portals().close(door);
         portals = new ArrayList<>();
@@ -1439,7 +1445,7 @@ final class SelfTestV3 {
         }
         Player shooter = handle(one);
         Vec3d p = two.bodyPosition();
-        plugin.brain().order(List.of(two), Mind.Verb.RUN, new Vec3d(p.x(), p.y(), p.z() + 24.0D), null, null, 1);
+        plugin.brain().order(List.of(two), Mind.Verb.SPRINT, new Vec3d(p.x(), p.y(), p.z() + 30.0D), null, null, 1);
         shooter.startUsingItem(EquipmentSlot.HAND);
         mark = plugin.currentTick();
         counter = 0;
@@ -1477,13 +1483,18 @@ final class SelfTestV3 {
         double lead = aim == null || vecA == null ? 0.0D
                 : Ballistics.leadAlongVelocity(aim, numberA, numberB, vecA.x(), vecA.z());
         boolean along = false;
+        double arrowYaw = Double.NaN;
         if (shot) {
-            Vector v = arrow.getVelocity();
-            double yaw = Math.toDegrees(Math.atan2(-v.getX(), v.getZ()));
-            along = Math.abs(wrap(yaw - aim.yaw())) < 5.0D;
+            Vector v = plugin.lifecycle().lastArrowVelocity();
+            if (v != null) {
+                arrowYaw = Math.toDegrees(Math.atan2(-v.getX(), v.getZ()));
+                along = Math.abs(wrap(arrowYaw - aim.yaw())) < 5.0D;
+            }
         }
         check("S-83", "B-17", shot && lead > 0.5D && along, "a drawn bow leads a moving target (lead "
-                + String.format(Locale.ROOT, "%.2f", lead) + " blocks, arrow along the aim=" + along + ")");
+                + String.format(Locale.ROOT, "%.2f", lead) + " blocks; launch yaw "
+                + String.format(Locale.ROOT, "%.1f", arrowYaw) + " vs aim "
+                + (aim == null ? "?" : String.format(Locale.ROOT, "%.1f", aim.yaw())) + ")");
         dismissAll();
     }
 

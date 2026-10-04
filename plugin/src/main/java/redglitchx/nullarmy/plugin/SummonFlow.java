@@ -93,7 +93,13 @@ public final class SummonFlow implements Listener, Reloadable {
     // ------------------------------------------------------------------ triggers
 
     /** Player clicks with a summon item: opened from a listener, so it is wrapped. */
-    @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
+    /**
+     * Not {@code ignoreCancelled}: Bukkit reports every right-click into the AIR
+     * as cancelled ({@code useInteractedBlock} is DENY when no block was
+     * clicked), so with ignoreCancelled the horn did nothing unless it was used
+     * on a block. Item use that another plugin really denied is respected below.
+     */
+    @EventHandler(priority = EventPriority.NORMAL)
     public void onInteract(PlayerInteractEvent event) {
         Guard.attempt(plugin.getLogger(), "summon-item interaction", () -> handleInteract(event));
     }
@@ -105,6 +111,9 @@ public final class SummonFlow implements Listener, Reloadable {
         Action action = event.getAction();
         if (action != Action.RIGHT_CLICK_AIR && action != Action.RIGHT_CLICK_BLOCK) {
             return;
+        }
+        if (event.useItemInHand() == org.bukkit.event.Event.Result.DENY) {
+            return; // another plugin denied using the item
         }
         // Both hands fire an event; only the main hand should start a prompt.
         if (event.getHand() != EquipmentSlot.HAND) {

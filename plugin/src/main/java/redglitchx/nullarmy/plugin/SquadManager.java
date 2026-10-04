@@ -100,6 +100,9 @@ public final class SquadManager implements Reloadable {
         /** A held formation's anchor; null means "behind the target player". */
         private Vec3d formationAnchor;
         private float formationYaw;
+        /** Member index -> formation cell index, nearest-first; recomputed when the shape changes. */
+        private int[] formationAssignment;
+        private String formationAssignmentKey = "";
 
         Squad(UUID owner, String worldName) {
             this.owner = owner;
@@ -126,6 +129,16 @@ public final class SquadManager implements Reloadable {
 
         /** The facing a held formation is rotated by. */
         public float formationYaw() { return formationYaw; }
+
+        /** Member index -> cell index of the current formation, or null when not computed yet. */
+        public int[] formationAssignment() { return formationAssignment; }
+
+        public String formationAssignmentKey() { return formationAssignmentKey; }
+
+        public void setFormationAssignment(int[] assignment, String key) {
+            this.formationAssignment = assignment;
+            this.formationAssignmentKey = key == null ? "" : key;
+        }
 
         /** How this squad walked in, for the summon message and {@code /null status}. */
         public String arrivalNote() { return arrivalNote; }

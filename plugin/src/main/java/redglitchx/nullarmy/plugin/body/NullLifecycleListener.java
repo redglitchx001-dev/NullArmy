@@ -97,6 +97,7 @@ public final class NullLifecycleListener implements Listener {
     private final Deque<Death> deaths = new ArrayDeque<>();
     private final Deque<String> consumed = new ArrayDeque<>();
     private volatile Projectile lastArrow;
+    private volatile org.bukkit.util.Vector lastArrowVelocity;
     private volatile UUID lastArrowShooter;
     private volatile long lastArrowTick;
 
@@ -269,6 +270,7 @@ public final class NullLifecycleListener implements Listener {
     public void onShoot(EntityShootBowEvent event) {
         if (isNull(event.getEntity()) && event.getProjectile() instanceof Projectile) {
             lastArrow = (Projectile) event.getProjectile();
+            lastArrowVelocity = event.getProjectile().getVelocity().clone();
             lastArrowShooter = event.getEntity().getUniqueId();
             lastArrowTick = plugin.currentTick();
         }
@@ -323,6 +325,11 @@ public final class NullLifecycleListener implements Listener {
     }
 
     public Projectile lastArrow() { return lastArrow; }
+
+    /** The velocity the last Null arrow was launched with (before drag or impact). */
+    public org.bukkit.util.Vector lastArrowVelocity() {
+        return lastArrowVelocity == null ? null : lastArrowVelocity.clone();
+    }
     public UUID lastArrowShooter() { return lastArrowShooter; }
     public long lastArrowTick() { return lastArrowTick; }
 }

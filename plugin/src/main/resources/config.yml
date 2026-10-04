@@ -201,9 +201,10 @@ chat:
   nulls-orders-only: true
   commander-chat-prefix: true
   wake-words:
-    - null
-    - nulls
-    - commander
+    # Quoted: an unquoted `null` is YAML's null value, not the word.
+    - "null"
+    - "nulls"
+    - "commander"
   # Orders one player may give per minute through chat.
   commands-per-minute: 20
   # Longest reply the plugin will print, in characters.

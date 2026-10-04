@@ -651,7 +651,15 @@ public final class PluginConfig {
     private static List<String> readWakeWords(FileConfiguration config) {
         List<String> fallback = List.of("null", "nulls", "commander");
         try {
-            List<String> raw = config.getStringList("chat.wake-words");
+            // getStringList() silently drops null elements, and `- null` unquoted
+            // in YAML IS a null element - the owner meant the word "null".
+            List<String> raw = new ArrayList<>();
+            List<?> list = config.getList("chat.wake-words");
+            if (list != null) {
+                for (Object item : list) {
+                    raw.add(item == null ? "null" : String.valueOf(item));
+                }
+            }
             if (raw == null || raw.isEmpty()) {
                 return fallback;
             }

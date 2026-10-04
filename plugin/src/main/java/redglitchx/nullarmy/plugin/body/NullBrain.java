@@ -642,7 +642,10 @@ public final class NullBrain implements Reloadable {
         if (cell == null) {
             return Intent.stop();
         }
-        Intent intent = steerTo(body, mind, world, pos, cell, 0.15D, NullBody.GAIT_RUN);
+        double fromCell = Math.hypot(cell.x() - pos.x(), cell.z() - pos.z());
+        Intent intent = mind.atCell && fromCell < 0.35D ? null
+                : steerTo(body, mind, world, pos, cell, 0.15D, NullBody.GAIT_RUN);
+        mind.atCell = intent == null;
         if (intent == null) {
             Intent hold = Intent.stop();
             Vec3d anchorLook = squad.formationAnchor();
@@ -696,7 +699,56 @@ public final class NullBrain implements Reloadable {
         if (index < 0 || index >= cells.size()) {
             return null;
         }
-        return new Vec3d(cells.get(index)[0], ay, cells.get(index)[1]);
+        String key = kind + ":" + count + ":" + (anchor != null
+                ? Math.round(ax * 4) + "," + Math.round(az * 4) + "," + Math.round(yaw) : "follow");
+        int[] assignment = squad.formationAssignment();
+        if (assignment == null || assignment.length != count || !key.equals(squad.formationAssignmentKey())) {
+            assignment = assignCells(squad, cells);
+            squad.setFormationAssignment(assignment, key);
+        }
+        int cell = assignment[index] >= 0 && assignment[index] < cells.size() ? assignment[index] : index;
+        return new Vec3d(cells.get(cell)[0], ay, cells.get(cell)[1]);
+    }
+
+    /**
+     * Nearest-first assignment of members to cells: repeatedly the closest free
+     * (member, cell) pair. Paths barely cross, so nobody shoulders through the
+     * squad to reach a cell on the far side - the cause of formations that never
+     * settled. Every member gets exactly one cell and no cell is shared.
+     */
+    static int[] assignCells(SquadManager.Squad squad, List<double[]> cells) {
+        List<NullBody> members = squad.members();
+        int n = Math.min(members.size(), cells.size());
+        int[] out = new int[members.size()];
+        java.util.Arrays.fill(out, -1);
+        List<double[]> pairs = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            Vec3d p = members.get(i).bodyPosition();
+            for (int j = 0; j < cells.size(); j++) {
+                double d = Math.hypot(p.x() - cells.get(j)[0], p.z() - cells.get(j)[1]);
+                pairs.add(new double[] {d, i, j});
+            }
+        }
+        pairs.sort((a, b) -> Double.compare(a[0], b[0]));
+        boolean[] cellTaken = new boolean[cells.size()];
+        int assigned = 0;
+        for (double[] pair : pairs) {
+            int i = (int) pair[1];
+            int j = (int) pair[2];
+            if (out[i] < 0 && !cellTaken[j]) {
+                out[i] = j;
+                cellTaken[j] = true;
+                if (++assigned == n) {
+                    break;
+                }
+            }
+        }
+        for (int i = 0; i < out.length; i++) {
+            if (out[i] < 0) {
+                out[i] = i % Math.max(1, cells.size());
+            }
+        }
+        return out;
     }
 
     private Vec3d targetPosition(UUID id, String world) {

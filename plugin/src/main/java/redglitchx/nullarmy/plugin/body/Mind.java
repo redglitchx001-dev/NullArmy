@@ -93,6 +93,17 @@ public final class Mind {
     /** Formation hold: the cell this Null was told to hold, if any. */
     Vec3d holdCell;
 
+    /** True once the Null reached its formation cell (left only when pushed > 0.35 away). */
+    boolean atCell;
+
+    /** One line for diagnostics. */
+    public String describe() {
+        return "order=" + (order == null ? "-" : order.verb) + " exit=" + (exitPoint == null ? "-"
+                : String.format(java.util.Locale.ROOT, "%.1f,%.1f,%.1f", exitPoint.x(), exitPoint.y(), exitPoint.z()))
+                + " exitUntil=" + exitUntil + " slide=" + (slideTo != null) + " fight=" + (combatTarget != null)
+                + " detour=" + (detour != null) + " blocked=" + blockedTicks;
+    }
+
     Mind(UUID id, long bornTick) {
         this.id = id;
         this.bornTick = bornTick;
