@@ -134,7 +134,7 @@ Every Null action must correspond to something a real survival-mode Java player 
 
 Forbidden: magical teleports, invisible movement, wall phasing, instant construction, giant fusions, fabricated loot, free ammunition, infinite durability, AI-generated items.
 
-The **NPC inventory is authoritative**, backed by an auditable item ledger. The `/null gui` loadout screen is a *blueprint*, not a duplicator — gear must come from items donated by the summoner, legitimate drops, real crafting, honest trades, or explicitly configured storage.
+The **NPC inventory is authoritative**, backed by an auditable item ledger. The `/null loadout` screen is a *blueprint*, not a duplicator — gear must come from items donated by the summoner, legitimate drops, real crafting, honest trades, or explicitly configured storage.
 
 ### 3. No clumping, stacking, or clipping
 
@@ -203,7 +203,19 @@ All commands are permission-checked with tab completion, clear feedback, and aud
 
 | Command | Permission | What it does |
 | --- | --- | --- |
-| `/null gui` | `nullarmy.gui` | Opens the inventory/loadout **planning** GUI. Selects equipment priorities and quantities, shows an explicit supply source and every deficit. **Never duplicates a displayed item.** |
+| `/null menu` (aliases `/null m`, `/null gui`) | `nullarmy.gui` | Opens the NullArmy command menu: a real 54-slot chest GUI with its own holder, Adventure `Component` title, permission-filtered buttons and pagination. Every click and drag is cancelled, so **nothing in it can be taken, moved or duplicated**. Each button dispatches the same `/null …` command a player would type. |
+| `/null horn` | `nullarmy.summon` | Gives you the **Call Horn**: a real Goat Horn named `Null`, enchanted (Unbreaking I) with `HIDE_ENCHANTS` for the glint, with lore and a persistent-data tag. Right-clicking asks *"How many Nulls should come?"* in chat. |
+| `/null totem` | `nullarmy.summon` | The **Totem Of Null**: a real Totem of Undying made the same way, with the same chat-count flow. |
+| `/null reload` | `nullarmy.admin` | Re-reads `config.yml` without a restart, re-arms the NMS spawn breaker and tells every subsystem to re-read its settings. A missing `config.yml` is recreated; an existing one is **never** overwritten. |
+| `/null come` (aliases `/null tp`, `/null bring`) | `nullarmy.follow` | Walks your squad to your position. **Not a teleport** — spec 5 forbids teleporting Nulls, including as recovery. |
+| `/null guard` | `nullarmy.follow` | Holds position and watches. |
+| `/null formation <line\|square\|encircle\|turtle>` | `nullarmy.follow` | Arranges the squad around you in the chosen formation. |
+| `/null list` · `/null info <id\|name>` | `nullarmy.admin` | Every live Null with health and position; then one Null in detail. |
+| `/null heal` · `/null equip` · `/null drop` | `nullarmy.admin` | Top the squad up; hand your held item to your first Null (the item **leaves your hand**, so this cannot duplicate); empty the squad's inventories into the world as real drops. |
+| `/null portals` · `/null clearskins` | `nullarmy.admin` | Play the portal visual where you stand (cosmetic only); forget cached skins and resolve them again. |
+| `/null version` · `/null help` · `/null debug` | — / — / `nullarmy.admin` | Plugin, adapter and server version; the full command list; guard state, subsystem failures and tracked entities. |
+| `/null withercannon` (alias `/null cannon`) | `nullarmy.admin` | **Opt-in.** Fires a TNT minecart that arcs into the sky, opens portals at the apex and drops TNT. Off unless `wither-cannon.enabled` **and** `policy.explosives-enabled` **and** `policy.wither-enabled` are all true and you hold the configured permission. Block damage needs a fourth opt-in (`policy.griefing-enabled` **and** `wither-cannon.blocks-damage`); without it the blasts are visual only. |
+| `/null airdrop [count]` | `nullarmy.admin` | **Opt-in.** Sky portals open above you and ground portals around you, TNT drops from the sky, and the squad arrives. With `airdrop.drop-nulls-from-sky: true` the Nulls fall under real gravity and **do** take fall damage; with it false they emerge on ground the adapter verified as safe. |
 | `/null chat [on\|off]` | `nullarmy.chat` | Toggles Null chat and ChatCommander output. |
 | `/null attack <player>` | `nullarmy.attack` | Sets a physical pursuit/combat objective. The target is **not** instantly damaged or moved. |
 | `/null attackx <player>` | `nullarmy.attackx` | Adaptive extreme-combat profile: faster tactical reassessment, tighter coordination, careful resource use, stronger counterplay. **No cheats, impossible reaction times, hidden information, bonus damage, or free items** — just a better-behaved squad. |

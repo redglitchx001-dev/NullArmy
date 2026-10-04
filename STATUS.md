@@ -1,8 +1,30 @@
 # NullArmy — Status
 
-**Last updated:** 2026-10-03 · **Current state:** Phase 0 complete · Phase 1 source authored **but UNVERIFIED** (blocked B-1) · Partial Phase 2/3 source authored, also unverified
+**Last updated:** 2026-10-04 · **Current state:** Phase 0 complete · Phase 1/2/3 source authored · **crash-safety, summoning, menu, cannon and airdrop work in flight on `arena/01a105d6-nullarmy`** (see the delta below)
 
 Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit + architecture) · [`TRACEABILITY.md`](TRACEABILITY.md) (471-item register) · [`MECHANICS_EXPANSION.md`](MECHANICS_EXPANSION.md) (250 added mechanics) · [`BUILD.md`](BUILD.md) (build & verify commands)
+
+---
+
+## Delta on `arena/01a105d6-nullarmy` (the P0–P4 pass)
+
+Everything below is **authored and type-checked locally, and must still pass CI + a live
+smoke test on Paper 1.21.11 before it is trusted.**
+
+| Area | Change |
+| --- | --- |
+| **P0 — crashes** | Every entry point is wrapped: `onEnable`, `onDisable`, commands, tab completion, every listener handler and every per-tick subsystem. Per-tick subsystems also have a failure budget: after 100 failures one subsystem switches itself off for the session instead of spamming the log. Chat always gets `[NullArmy] …` plus the reason. |
+| **P0 — the NMS body** | `NullPlayer.tick()` is wrapped; three consecutive tick failures retire the body (with a stack trace) instead of letting it keep throwing inside the server's entity loop. The NMS spawn path sits behind a latched breaker that trips once and then stays off until `/null reload` or a restart. |
+| **P0 — data folder** | `ConfigBootstrap` creates `plugins/NullArmy/`, writes the shipped `config.yml` only when absent (never overwrites), falls back to a written starter config if the jar lost the resource, and reloads. The Gradle `jar` task now fails the build when `config.yml`/`plugin.yml` are not packaged. |
+| **P1 — summoning** | `/null horn` and `/null totem` hand over the real Call Horn / Totem Of Null: named `Null`, really enchanted (Unbreaking I) with `HIDE_ENCHANTS` for the glint, four lore lines, and a `PersistentDataContainer` tag (`nullarmy:call_horn` / `nullarmy:totem_of_null`) as the key. Right-click asks "How many Nulls should come?" in chat, clamps against the hard cap/global cap/remaining capacity, times out after 300 ticks, and supports `cancel`. Recognition no longer depends on a display name. |
+| **P2 — menu** | `/null menu` (`/null m`, `/null gui`) opens a real 54-slot chest GUI with its own `InventoryHolder`, Adventure `Component` title, permission-filtered buttons, pagination, every click and drag cancelled, and every button dispatching the same `/null …` command executor path. Nothing in it can be taken. |
+| **P3 — spectacle (opt-in)** | `/null withercannon` (`/null cannon`) and `/null airdrop [count]` exist behind their own config blocks, the `policy.*` switches and a permission. Block damage needs a separate `blocks-damage` opt-in; without it the registered explosion handler empties each blast's block list. Every created entity is tracked so `/null stop`, `/null dismiss` and `onDisable` clean up. |
+| **P4 — commands** | The full tree is implemented with permission checks, usage lines and tab completion: `menu gui help status version features debug horn totem commander respawn loadout skin follow guard formation attack attackx come tp bring stop dismiss list info name heal equip drop portals clearskins reload wand build chat withercannon cannon airdrop ban kill`. Features that are not implemented say so and change nothing. |
+
+**Still unverified:** `nms/v1_21_11` cannot be type-checked in the authoring sandbox (no
+dev bundle); its compile status is proven by CI, and its runtime behaviour only by the
+live smoke test. The NMS additions in this pass are `SpawnRequest.airborne()` +
+`isAirborneSpawnSafe(...)`, `NullBody.heal(double)`/`loadout()`, and the tick guard.
 
 ---
 
@@ -25,8 +47,17 @@ Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit +
 
 ## 🔴 Blockers
 
-### B-1 — Build environment unavailable
+### B-1 — Build environment unavailable (partially mitigated)
 No JDK, no Gradle, and network access limited to `github.com`. `repo.papermc.io` (Paper dev bundle), Maven Central, Gradle distributions, and JDK downloads are all unreachable. **No Phase can be compiled or verified in this sandbox.** → Owner decision **D-2** in the plan.
+
+> **Partial mitigation (2026-10-04).** A local type-check now exists: the Eclipse batch
+> compiler (ECJ, from the VS Code Java language server bundle) running on a bundled JRE,
+> with `core`, `nms:api` and `plugin` compiled against checked-in API stubs for the
+> Bukkit/Adventure surface they use. This **type-checks the whole plugin module** and
+> caught real defects (an ambiguous `Guard.attempt` overload, two operator-precedence
+> bugs, missing accessors). It cannot see `nms/v1_21_11`, which needs the real Paper dev
+> bundle, so **CI remains the only full build** and the live smoke test the only proof of
+> runtime behaviour.
 
 > **What this does and does not mean for the code that now exists.**
 > 33 Java files (4,423 lines) have been authored across all four modules. They are
