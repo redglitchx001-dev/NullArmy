@@ -178,6 +178,28 @@ The most important table in this document. These are ideas that sound great and 
 
 ---
 
+## Talking To Them
+
+Two ways, and neither needs a slash:
+
+- **Orders.** Start a chat line with a wake word (`null`, `nulls` or `commander` by default -
+  `chat.wake-words` in `config.yml`) and the rest is treated as a subcommand:
+  `null attack Steve`, `null kill Steve`, `null ban Steve`, `null eliminate Steve`, `null come`,
+  `null stop`, `null heal`, `null menu`, `null follow me`, `null go away`. Natural phrases and
+  synonyms are mapped, the order goes through the **same** executor as typing `/null` (so
+  permissions, caps and policy gates are identical), and the line is removed from public chat.
+  Each player gets 20 orders a minute by default (`chat.commands-per-minute`).
+- **Conversation.** `/null chat commander` (or `/null chat null`) opens a private channel: your
+  next messages go to that character alone and it answers in its own voice, with a rolling
+  context of the last few turns. Say `exit`, or `/null chat off`, to end it.
+
+Conversation needs a model. **The plugin never requires one** - with `ai.enabled: false` the
+characters still answer a few lines locally("Commander on deck") and `/null ai` states plainly
+why the rest is unavailable. To switch a model on, add an endpoint under `ai.endpoints` and point
+`ai.default-endpoint` at it; the ChatCommander role uses the same config, key resolution, timeout
+and rate limiting as every other AI role. Replies are single-line, colour-code-stripped and length
+capped (`chat.max-reply-chars`) so a model can never inject formatting into chat.
+
 ## How Summoning Works
 
 1. **Trigger.** Use a real **Goat Horn** configured/named `Call Horn`, or a real **Totem of Undying** configured/named/tagged `Totem Of Null`. These are vanilla items — a usable summon item is only ever created by an explicit owner/admin action or a documented recipe/config. Never a spontaneous grant.
@@ -216,7 +238,12 @@ All commands are permission-checked with tab completion, clear feedback, and aud
 | `/null version` · `/null help` · `/null debug` | — / — / `nullarmy.admin` | Plugin, adapter and server version; the full command list; guard state, subsystem failures and tracked entities. |
 | `/null withercannon` (alias `/null cannon`) | `nullarmy.admin` | **Opt-in.** Fires a TNT minecart that arcs into the sky, opens portals at the apex and drops TNT. Off unless `wither-cannon.enabled` **and** `policy.explosives-enabled` **and** `policy.wither-enabled` are all true and you hold the configured permission. Block damage needs a fourth opt-in (`policy.griefing-enabled` **and** `wither-cannon.blocks-damage`); without it the blasts are visual only. |
 | `/null airdrop [count]` | `nullarmy.admin` | **Opt-in.** Sky portals open above you and ground portals around you, TNT drops from the sky, and the squad arrives. With `airdrop.drop-nulls-from-sky: true` the Nulls fall under real gravity and **do** take fall damage; with it false they emerge on ground the adapter verified as safe. |
-| `/null chat [on\|off]` | `nullarmy.chat` | Toggles Null chat and ChatCommander output. |
+| `/null chat [null\|commander\|off\|status]` | `nullarmy.chat` | Opens a **private channel** with a Null or the Commander. Your next messages go only to that character and it answers in its own voice. With no model configured it still answers a few lines locally, and `/null ai` tells you exactly which of the two is happening. |
+| `/null ai` | `nullarmy.admin` | Whether a model is configured, enabled and actually reachable - and, when it is not, the reason in one line. |
+| `/null portal [player]` | `nullarmy.admin` | Your Nulls walk **through a portal** to you, or to a named player: effects at both ends, the arrival spot verified collision-safe first, nobody arrives mid-fall. The one deliberate, opt-in exception to the no-teleport rule (`mechanics.portal-travel`). |
+| `/null tactics <aggressive\|balanced\|defensive>` | `nullarmy.attack` | Changes the standoff a squad actually keeps: 1.2 / 2.0 / 4.5 blocks. Not cosmetic - the steering uses it. |
+| `/null emote <wave\|salute\|nod\|point\|dance\|sit>` · `/null greet [player]` | `nullarmy.admin` / `nullarmy.follow` | Visible body language: your Nulls turn, step and make the sounds a player would hear. A greeting only reaches 24 blocks, because a distant Null waving is a lie. |
+| `/null inv` | `nullarmy.admin` | What your Nulls are carrying, read-only - a summary per Null, never an editable inventory. |
 | `/null attack <player>` | `nullarmy.attack` | Sets a physical pursuit/combat objective. The target is **not** instantly damaged or moved. |
 | `/null attackx <player>` | `nullarmy.attackx` | Adaptive extreme-combat profile: faster tactical reassessment, tighter coordination, careful resource use, stronger counterplay. **No cheats, impossible reaction times, hidden information, bonus damage, or free items** — just a better-behaved squad. |
 | `/null follow me` | `nullarmy.follow` | Follows the issuing owner using a formation and personal-space rules. **Never teleports to catch up.** |
