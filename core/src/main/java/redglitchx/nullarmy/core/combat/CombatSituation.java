@@ -14,6 +14,13 @@ package redglitchx.nullarmy.core.combat;
  */
 public final class CombatSituation {
 
+    /**
+     * Damage the mace hit itself contributes, before any fall-distance bonus.
+     * A smash is not only the fall: leaving this out makes the model reject
+     * genuinely lethal smashes.
+     */
+    private static final double MACE_BASE_DAMAGE = 6.0;
+
     private final double distanceToTarget;
     private final double heightAboveTarget;
     private final double fallSpeed;
@@ -103,9 +110,12 @@ public final class CombatSituation {
         if (!hasMace || fallSpeed <= 0.0) {
             return false;
         }
-        // Density adds damage per block fallen; model the threshold conservatively.
+        // Total smash damage = the mace hit itself + fall distance + the speed
+        // already carried. Density adds damage per block fallen; the threshold
+        // stays deliberately conservative so a marginal smash is refused.
         double bonus = maceHasDensity ? 0.5 : 0.0;
-        double effective = (heightAboveTarget + fallSpeed * 0.35) * (1.0 + bonus);
+        double effective = MACE_BASE_DAMAGE
+                + (heightAboveTarget + fallSpeed * 0.35) * (1.0 + bonus);
         return effective >= targetHealth + targetArmor;
     }
 

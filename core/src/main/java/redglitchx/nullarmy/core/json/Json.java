@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * A strictly bounded JSON reader/writer.
@@ -26,6 +27,10 @@ import java.util.Map;
 public final class Json {
 
     private static final int MAX_DEPTH = 32;
+
+    /** Strict JSON number grammar, used to reject tokens like {@code 01} or {@code 1.}. */
+    private static final Pattern NUMBER = Pattern.compile(
+            "-?(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?");
 
     private final String src;
     private int pos;
@@ -230,6 +235,13 @@ public final class Json {
         String text = src.substring(start, pos);
         if (text.isEmpty()) {
             throw new JsonException("expected value at " + start);
+        }
+        // Strict JSON number grammar (RFC 8259): no leading zeros ("01"), no
+        // bare trailing dot ("1.") and no dangling exponent ("1e"). A model
+        // that emits any of those is not speaking JSON, and 7.4 says reject
+        // rather than guess what it meant.
+        if (!NUMBER.matcher(text).matches()) {
+            throw new JsonException("bad number '" + text + "'");
         }
         try {
             return Double.valueOf(text);
