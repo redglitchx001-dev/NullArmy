@@ -1,7 +1,6 @@
 package redglitchx.nullarmy.nms.v1_21_11;
 
 import com.mojang.authlib.GameProfile;
-import net.minecraft.network.Connection;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
@@ -99,10 +98,10 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
      * packets sent by server maintenance are discarded; viewers still receive
      * entity-tracking packets through their own real connections.
      */
-    private static Connection createDiscardingConnection() {
-        return (Connection) Proxy.newProxyInstance(
-                Connection.class.getClassLoader(),
-                new Class<?>[] {Connection.class},
+    private static net.minecraft.network.Connection createDiscardingConnection() {
+        return (net.minecraft.network.Connection) Proxy.newProxyInstance(
+                net.minecraft.network.Connection.class.getClassLoader(),
+                new Class<?>[] {net.minecraft.network.Connection.class},
                 (proxy, method, arguments) -> {
                     if (method.getDeclaringClass() == Object.class) {
                         switch (method.getName()) {
