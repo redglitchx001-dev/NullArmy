@@ -52,10 +52,10 @@ final class AdapterLoader {
                 Class<?> clazz = Class.forName(className);
                 VersionAdapter adapter = (VersionAdapter) clazz.getDeclaredConstructor().newInstance();
                 out.add(adapter.minecraftVersion());
+            } catch (ClassNotFoundException e) {
+                // ignored: this adapter is not shipped in this build
             } catch (ReflectiveOperationException | ClassCastException e) {
                 // ignored: see load()
-            } catch (ClassNotFoundException e) {
-                // ignored: adapter not shipped in this build
             }
         }
         return Collections.unmodifiableList(out);
