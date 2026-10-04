@@ -309,13 +309,14 @@ public final class CommanderManager implements Listener, Reloadable {
             return false;
         }
 
-        // The portal is the whole point of the entrance. It is cosmetic, so it
-        // may fail without losing the Commander that already exists.
+        // The portal effects are the last, cosmetic part of the entrance: they may
+        // fail without losing the Commander that already exists and was verified.
+        final Vec3d arrivalSpot = spot;
         Guard.attempt(plugin.getLogger(), "Commander portal effects", () -> {
             int effects = Math.max(Caps.minPortalEffects(),
                     plugin.pluginConfig() == null ? Caps.minPortalEffects()
                             : plugin.pluginConfig().caps().portalEffectsPerSummon());
-            adapter.playPortalEffects(world, spot, effects);
+            adapter.playPortalEffects(world, arrivalSpot, effects);
         });
 
         Guard.attempt(plugin.getLogger(), "Commander loadout", this::applyLoadout);
