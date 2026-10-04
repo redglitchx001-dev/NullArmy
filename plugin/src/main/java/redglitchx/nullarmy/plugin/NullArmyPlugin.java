@@ -97,7 +97,6 @@ public final class NullArmyPlugin extends JavaPlugin {
     private SquadCoordinator coordinator;
     private MissionRunner missionRunner;
     private SelfTest selfTest;
-    private ConfigMigration.Report lastMigration;
 
     private TickBudget pathBudget;
     private TickBudget blockInspectionBudget;
@@ -532,10 +531,14 @@ public final class NullArmyPlugin extends JavaPlugin {
     /** The Paper runtime smoke test, run from the console or {@code /null selftest}. */
     public SelfTest selfTest() { return selfTest; }
 
-    /** What the last config migration did, for {@code /null reload} and {@code /null debug}. */
-    public ConfigMigration.Report lastMigration() { return lastMigration; }
-
-    void setLastMigration(ConfigMigration.Report report) { this.lastMigration = report; }
+    /**
+     * What the last config migration did, for {@code /null reload} and
+     * {@code /null debug}.
+     *
+     * <p>This is the answer to "the reload does not update config.yml": it does
+     * now, and this says exactly which keys were appended.</p>
+     */
+    public ConfigMigration.Report lastMigration() { return ConfigBootstrap.lastReport(); }
     public TickBudget pathBudget() { return pathBudget; }
     public TickBudget blockInspectionBudget() { return blockInspectionBudget; }
     public long currentTick() { return tickCounter; }

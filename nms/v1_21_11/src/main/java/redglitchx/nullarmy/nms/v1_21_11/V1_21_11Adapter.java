@@ -594,7 +594,10 @@ public final class V1_21_11Adapter implements VersionAdapter {
                     position.z() - BODY_WIDTH / 2.0,
                     position.x() + BODY_WIDTH / 2.0, position.y() + BODY_HEIGHT,
                     position.z() + BODY_WIDTH / 2.0);
-            List<Entity> inside = level.getEntities(null, box, entity -> entity != null);
+            // The cast picks the (Entity, AABB, Predicate) overload: without it
+            // the call is ambiguous against the EntityTypeTest variant.
+            java.util.function.Predicate<Entity> anything = entity -> entity != null;
+            List<Entity> inside = level.getEntities((Entity) null, box, anything);
             for (Entity entity : inside) {
                 if (entity == null || !entity.isAlive()) {
                     continue;

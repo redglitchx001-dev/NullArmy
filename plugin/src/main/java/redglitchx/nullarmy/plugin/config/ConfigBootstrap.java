@@ -40,6 +40,14 @@ public final class ConfigBootstrap {
     /** The file name inside the data folder, and the resource path in the jar. */
     public static final String FILE_NAME = "config.yml";
 
+    /** What the most recent {@link ConfigMigration} did, for {@code /null debug}. */
+    private static ConfigMigration.Report lastReport;
+
+    /** The last migration report, or null when nothing has run yet. */
+    public static ConfigMigration.Report lastReport() {
+        return lastReport;
+    }
+
     private ConfigBootstrap() {
     }
 
@@ -90,6 +98,7 @@ public final class ConfigBootstrap {
                     // The header of the appended block just says "unknown".
                 }
                 ConfigMigration.Report report = ConfigMigration.migrate(plugin, version);
+                lastReport = report;
                 if (report.error() != null) {
                     log.severe("[NullArmy] " + report.describe());
                 } else if (report.changed()) {
