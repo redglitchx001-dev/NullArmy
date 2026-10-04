@@ -50,6 +50,8 @@ final class SkinApplicator {
             // No skin available. Keep the default rather than pretending.
             return;
         }
-        profile.getProperties().put("textures", new Property("textures", value, signature));
+        // authlib exposes GameProfile as record-style accessors: properties()
+        // (not getProperties()) in the version Paper 1.21.11 ships.
+        profile.properties().put("textures", new Property("textures", value, signature));
     }
 }
