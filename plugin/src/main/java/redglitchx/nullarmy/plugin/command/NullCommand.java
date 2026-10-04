@@ -80,7 +80,9 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             "come", "tp", "bring", "portal",
             "stop", "dismiss", "list", "info", "name", "heal", "equip", "drop", "inv",
             "portals", "clearskins", "reload", "wand", "build", "chat", "emote", "greet",
-            "withercannon", "cannon", "airdrop", "ban", "kill");
+            "withercannon", "cannon", "airdrop", "ban", "kill",
+            "kit", "roles", "mission", "missions", "coordinate", "confirm", "selftest",
+            "shutdown");
 
     /** Combat temperaments understood by {@link SquadManager}. */
     private static final List<String> TACTICS = Arrays.asList("aggressive", "balanced", "defensive");
@@ -134,7 +136,14 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             new String[]{"withercannon", "nullarmy.admin", "Fire the opt-in TNT-minecart sky cannon."},
             new String[]{"airdrop [count]", "nullarmy.admin", "Portals above and below deliver a squad."},
             new String[]{"ban <player>", "nullarmy.moderation", "Moderation action; never an AI action."},
-            new String[]{"kill <player>", "nullarmy.attack", "Set a lethal-combat objective (they can still win)."});
+            new String[]{"kill <player>", "nullarmy.attack", "Set a lethal-combat objective (they can still win)."},
+            new String[]{"kit", "nullarmy.admin", "The default kit, and whether every Null really wears it."},
+            new String[]{"roles", "nullarmy.follow", "Store squad roles: scout, guard, escort, ranged, medic."},
+            new String[]{"mission <start|stop|status> [kind]", "nullarmy.mission", "One objective for the whole army."},
+            new String[]{"coordinate [note]", "nullarmy.admin", "The Commander coordinates the squad (typed actions only)."},
+            new String[]{"confirm [yes|no]", "nullarmy.admin", "Confirm or drop an action the Commander is holding."},
+            new String[]{"shutdown", "nullarmy.admin", "Run the Totem Of Null shutdown now, on purpose."},
+            new String[]{"selftest", "nullarmy.admin", "Runtime smoke test: spawn, tracking, packets, portals."});
 
     private final NullArmyPlugin plugin;
     private final SquadManager squads;
@@ -233,6 +242,10 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
                 case "info":
                 case "name":
                     return nullSubcommandTargets(args[1]);
+                case "mission":
+                    return missionCompletion(args[1]);
+                case "confirm":
+                    return startingWith(Arrays.asList("yes", "no"), args[1]);
                 case "airdrop":
                 case "menu":
                     return Collections.emptyList();
@@ -337,6 +350,21 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
                 return ban(sender, args);
             case "kill":
                 return kill(sender, args);
+            case "kit":
+                return kit(sender);
+            case "roles":
+                return roles(sender);
+            case "mission":
+            case "missions":
+                return mission(sender, args);
+            case "coordinate":
+                return coordinate(sender, args);
+            case "confirm":
+                return confirm(sender, args);
+            case "shutdown":
+                return shutdown(sender);
+            case "selftest":
+                return selftest(sender);
             default:
                 sender.sendMessage(PREFIX + "Unknown subcommand '" + args[0] + "'.");
                 sender.sendMessage(PREFIX + "Run /null help for the full list.");
@@ -358,7 +386,10 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
         return SUBCOMMANDS.contains(name)
                 || name.equals("kill") || name.equals("ban")
                 || name.equals("inv") || name.equals("tactics") || name.equals("portal")
-                || name.equals("emote") || name.equals("greet") || name.equals("ai");
+                || name.equals("emote") || name.equals("greet") || name.equals("ai")
+                || name.equals("kit") || name.equals("roles") || name.equals("mission")
+                || name.equals("coordinate") || name.equals("confirm")
+                || name.equals("shutdown") || name.equals("selftest");
     }
 
     /** Maps every alias to its canonical subcommand name. */
@@ -433,8 +464,20 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
                 + " explosives=" + config.explosivesEnabled()
                 + " wither=" + config.witherEnabled()
                 + " (wither fully usable=" + config.witherActuallyAllowed() + ")");
-        sender.sendMessage(PREFIX + "  wither cannon: " + gateLine(config.witherCannonUsable(),
-                config.witherCannonEnabled(), "wither-cannon.enabled"));
+        sender.sendMessage(PREFIX + "  wither cannon: " + (plugin.witherCannon() == null
+                ? gateLine(config.witherCannonUsable(), config.witherCannonEnabled(),
+                        "wither-cannon.enabled")
+                : plugin.witherCannon().describeState(sender instanceof Player ? (Player) sender : null)));
+        sender.sendMessage(PREFIX + "  arrival portals: " + (plugin.portals() == null
+                ? "unavailable" : plugin.portals().describe()));
+        sender.sendMessage(PREFIX + "  default kit: " + (plugin.kits() == null
+                ? "unavailable" : plugin.kits().describe() + ", verified="
+                        + kitVerified()));
+        sender.sendMessage(PREFIX + "  mission: " + (plugin.missions() == null
+                ? "unavailable" : plugin.missions().oneLine()));
+        sender.sendMessage(PREFIX + "  totem shutdown: " + (plugin.shutdown() == null
+                ? "unavailable" : plugin.shutdown().describe()));
+        sender.sendMessage(PREFIX + "  commander: " + commanderLine());
         sender.sendMessage(PREFIX + "  air drop: " + gateLine(config.airdropEnabled(),
                 config.airdropEnabled(), "airdrop.enabled"));
         sender.sendMessage(PREFIX + "  config: " + plugin.configFile());
@@ -534,7 +577,285 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
                 sender.sendMessage(PREFIX + "    " + line);
             }
         }
+        if (plugin.adapter() != null) {
+            sender.sendMessage(PREFIX + "  tracking internals: "
+                    + plugin.adapter().trackingDiagnostics());
+        }
+        if (plugin.kits() != null && !plugin.kits().configErrors().isEmpty()) {
+            sender.sendMessage(PREFIX + "  kit config problems: " + plugin.kits().configErrors());
+        }
+        if (plugin.coordinator() != null) {
+            sender.sendMessage(PREFIX + "  coordinator decisions:");
+            for (String line : plugin.coordinator().recentDecisions()) {
+                sender.sendMessage(PREFIX + "    " + line);
+            }
+        }
+        if (plugin.totems() != null) {
+            sender.sendMessage(PREFIX + "  totem shutdowns triggered: "
+                    + plugin.totems().triggeredCount());
+            sender.sendMessage(PREFIX + "  summon items: "
+                    + redglitchx.nullarmy.plugin.item.SummonItems.identitySummary());
+        }
+        if (plugin.lastMigration() != null) {
+            sender.sendMessage(PREFIX + "  last config migration: "
+                    + plugin.lastMigration().describe());
+        }
+        if (plugin.selfTest() != null && !plugin.selfTest().lastResults().isEmpty()) {
+            sender.sendMessage(PREFIX + "  last self test: " + plugin.selfTest().lastPassed()
+                    + " passed, " + plugin.selfTest().lastFailed() + " failed");
+            for (String line : plugin.selfTest().lastResults()) {
+                sender.sendMessage(PREFIX + "    " + line);
+            }
+        }
         return true;
+    }
+
+    // ------------------------------------------------------------------ new commands
+
+    /** The default kit, and proof that the live Nulls are actually wearing it. */
+    private boolean kit(CommandSender sender) {
+        if (!require(sender, "nullarmy.admin")) {
+            return true;
+        }
+        if (plugin.kits() == null) {
+            sender.sendMessage(PREFIX + "The kit service is not available.");
+            return true;
+        }
+        sender.sendMessage(PREFIX + "Default kit: " + plugin.kits().describe());
+        for (String line : plugin.kits().configLines()) {
+            sender.sendMessage(PREFIX + "  " + line);
+        }
+        sender.sendMessage(PREFIX + "Applied to Nulls: " + config.kitAppliesToNulls()
+                + ", to the Commander on a fresh install: " + config.kitAppliesToCommander());
+        sender.sendMessage(PREFIX + "Live check: " + kitVerified());
+        if (sender instanceof Player && config.kitAppliesToNulls()) {
+            int touched = 0;
+            for (redglitchx.nullarmy.nms.NullBody body : squads.membersOf(((Player) sender).getUniqueId())) {
+                if (plugin.kits().applyTo(body)) {
+                    touched++;
+                }
+            }
+            if (touched > 0) {
+                sender.sendMessage(PREFIX + "Re-checked " + touched
+                        + " of your Nulls; missing slots were filled, nothing was duplicated.");
+            }
+        }
+        return true;
+    }
+
+    /** One line saying whether the kit is really on the bodies. */
+    private String kitVerified() {
+        if (plugin.kits() == null) {
+            return "unavailable";
+        }
+        int checked = 0;
+        int wrong = 0;
+        String firstProblem = null;
+        for (redglitchx.nullarmy.nms.NullBody body : squads.allMembers()) {
+            checked++;
+            String problem = plugin.kits().verify(body);
+            if (problem != null) {
+                wrong++;
+                if (firstProblem == null) {
+                    firstProblem = problem;
+                }
+            }
+        }
+        if (plugin.commander() != null && plugin.commander().isSpawned()) {
+            checked++;
+            String problem = plugin.commander().kitProblem();
+            if (problem != null) {
+                wrong++;
+                if (firstProblem == null) {
+                    firstProblem = problem;
+                }
+            }
+        }
+        if (checked == 0) {
+            return "no Nulls to check";
+        }
+        return wrong == 0 ? checked + " body/bodies all wear it"
+                : wrong + "/" + checked + " incomplete (" + firstProblem + ")";
+    }
+
+    /** Stores and reports squad roles. */
+    private boolean roles(CommandSender sender) {
+        if (!require(sender, "nullarmy.follow")) {
+            return true;
+        }
+        Player player = asPlayer(sender, "Only a player has a squad to organise.");
+        if (player == null) {
+            return true;
+        }
+        int assigned = squads.assignRoles(player.getUniqueId());
+        if (assigned <= 0) {
+            sender.sendMessage(PREFIX + "You have no Nulls to organise. Sound the horn first.");
+            return true;
+        }
+        sender.sendMessage(PREFIX + "Roles stored for " + assigned + " Null(s): "
+                + squads.roleSummary(player.getUniqueId()));
+        for (String duty : squads.roleDuties(player.getUniqueId())) {
+            sender.sendMessage(PREFIX + "  " + duty);
+        }
+        return true;
+    }
+
+    /** One objective for the whole army. */
+    private boolean mission(CommandSender sender, String[] args) {
+        if (!require(sender, "nullarmy.mission")) {
+            return true;
+        }
+        if (plugin.missions() == null) {
+            sender.sendMessage(PREFIX + "The mission system is not available.");
+            return true;
+        }
+        String sub = args.length < 2 ? "status" : args[1].toLowerCase(Locale.ROOT);
+        switch (sub) {
+            case "start": {
+                Player player = asPlayer(sender, "Only a player can lead a mission.");
+                if (player == null) {
+                    return true;
+                }
+                String kind = args.length < 3 ? "" : args[2];
+                if (kind.isEmpty()) {
+                    sender.sendMessage(PREFIX + "Which mission? Try one of: "
+                            + String.join(", ", redglitchx.nullarmy.plugin.mission.MissionRunner.kinds()));
+                    return true;
+                }
+                sender.sendMessage(PREFIX + plugin.missions().start(player.getUniqueId(), kind));
+                return true;
+            }
+            case "stop":
+                sender.sendMessage(PREFIX + plugin.missions().stop("the owner stopped it"));
+                return true;
+            case "kinds":
+            case "list":
+                sender.sendMessage(PREFIX + "Missions (all original NullArmy content):");
+                for (redglitchx.nullarmy.core.mission.MissionKind kind
+                        : redglitchx.nullarmy.core.mission.MissionKind.values()) {
+                    sender.sendMessage(PREFIX + "  " + kind.key() + " - " + kind.title()
+                            + ": " + kind.briefing());
+                }
+                return true;
+            case "status":
+            default:
+                for (String line : plugin.missions().describe()) {
+                    sender.sendMessage(PREFIX + line);
+                }
+                return true;
+        }
+    }
+
+    private List<String> missionCompletion(String partial) {
+        List<String> words = new ArrayList<>(
+                redglitchx.nullarmy.plugin.mission.MissionRunner.kinds());
+        words.add("start");
+        words.add("stop");
+        words.add("status");
+        return startingWith(words, partial);
+    }
+
+    /**
+     * The Commander coordinates its squad.
+     *
+     * <p>With a model configured the answer is parsed into one typed, allowlisted
+     * action and validated before anything runs. Without one the local coordinator
+     * takes a safe step instead - and says which of the two it was.</p>
+     */
+    private boolean coordinate(CommandSender sender, String[] args) {
+        if (!require(sender, "nullarmy.admin")) {
+            return true;
+        }
+        Player player = asPlayer(sender, "Coordination needs an owner in the world.");
+        if (player == null) {
+            return true;
+        }
+        if (plugin.coordinator() == null) {
+            sender.sendMessage(PREFIX + "The squad coordinator is not available.");
+            return true;
+        }
+        String note = args.length < 2 ? "" : String.join(" ", java.util.Arrays.copyOfRange(args, 1, args.length));
+        boolean model = plugin.chat() != null && plugin.chat().brain() != null
+                && plugin.chat().brain().available() && config.aiSquadCoordination();
+        if (model) {
+            sender.sendMessage(PREFIX + "The Commander is reading the squad and will answer"
+                    + " with one allowlisted action.");
+            plugin.coordinator().askModel(player.getUniqueId(), note,
+                    line -> player.sendMessage(PREFIX + "Commander: " + line));
+            return true;
+        }
+        sender.sendMessage(PREFIX + "No AI endpoint is configured, so the local coordinator"
+                + " ran instead (this is honest, not a model reply).");
+        sender.sendMessage(PREFIX + "Commander: " + plugin.coordinator().deterministicStep(
+                player.getUniqueId()));
+        return true;
+    }
+
+    /** Confirms or drops an action the Commander is holding. */
+    private boolean confirm(CommandSender sender, String[] args) {
+        if (!require(sender, "nullarmy.admin")) {
+            return true;
+        }
+        Player player = asPlayer(sender, "Only the owner can confirm an action.");
+        if (player == null) {
+            return true;
+        }
+        if (plugin.coordinator() == null) {
+            sender.sendMessage(PREFIX + "The squad coordinator is not available.");
+            return true;
+        }
+        boolean yes = args.length < 2 || !args[1].equalsIgnoreCase("no");
+        sender.sendMessage(PREFIX + plugin.coordinator().confirm(player.getUniqueId(), yes));
+        return true;
+    }
+
+    /** Runs the totem shutdown deliberately, for testing and for an owner who means it. */
+    private boolean shutdown(CommandSender sender) {
+        if (!require(sender, "nullarmy.admin")) {
+            return true;
+        }
+        if (plugin.shutdown() == null) {
+            sender.sendMessage(PREFIX + "The shutdown director is not available.");
+            return true;
+        }
+        if (plugin.shutdown().isRunning()) {
+            sender.sendMessage(PREFIX + "A shutdown is already running: "
+                    + plugin.shutdown().describe());
+            return true;
+        }
+        if (squads.liveCount() == 0) {
+            sender.sendMessage(PREFIX + "There are no Nulls to send out.");
+            return true;
+        }
+        sender.sendMessage(PREFIX + "Starting the sequential shutdown of " + squads.liveCount()
+                + " Null(s), one at a time, Commander last.");
+        plugin.shutdown().start("an operator ran /null shutdown");
+        return true;
+    }
+
+    /** The runtime smoke test. */
+    private boolean selftest(CommandSender sender) {
+        if (!require(sender, "nullarmy.admin")) {
+            return true;
+        }
+        if (plugin.selfTest() == null) {
+            sender.sendMessage(PREFIX + "The self test is not available.");
+            return true;
+        }
+        sender.sendMessage(PREFIX + plugin.selfTest().start(sender));
+        return true;
+    }
+
+    /** The Commander, in one line. */
+    private String commanderLine() {
+        if (plugin.commander() == null) {
+            return "unavailable";
+        }
+        return (plugin.commander().isSpawned() ? "here" : "not spawned")
+                + ", name '" + plugin.commander().commanderName() + "'"
+                + ", saved loadout=" + plugin.commander().hasSavedLoadout()
+                + (plugin.commander().kitProblem() == null ? ""
+                        : ", kit: " + plugin.commander().kitProblem());
     }
 
     /** Gives the Call Horn or the Totem Of Null, the trigger items from spec 3. */
@@ -1026,6 +1347,9 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
     private boolean portals(CommandSender sender) {
         if (!require(sender, "nullarmy.admin")) {
             return true;
+        }
+        if (plugin.portals() != null) {
+            sender.sendMessage(PREFIX + "Arrival portals: " + plugin.portals().describe());
         }
         Player player = asPlayer(sender, "Only a player has a position for the portal.");
         if (player == null) {

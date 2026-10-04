@@ -81,6 +81,16 @@ public final class CommanderManager implements Listener, Reloadable {
         if (name == null || name.trim().isEmpty()) {
             name = DEFAULT_NAME;
         }
+        // The Commander is presented exactly like a normal player: no colours, no
+        // symbols, no decoration in the name itself. The brand prefix belongs to
+        // the plugin's chat lines, not to the name.
+        name = name.replaceAll("[^A-Za-z0-9_]", "");
+        if (name.isEmpty()) {
+            name = DEFAULT_NAME;
+        }
+        if (name.length() > 16) {
+            name = name.substring(0, 16);
+        }
         if (!file.isFile()) {
             return;
         }
@@ -138,6 +148,33 @@ public final class CommanderManager implements Listener, Reloadable {
     public SkinData skin() { return skin; }
     public String commanderName() { return name; }
     public ItemStack[] loadout() { return loadout; }
+
+    /** The live Commander body, or null when it is not here. */
+    public NullBody body() { return commander; }
+
+    /**
+     * True when a Commander loadout is already saved.
+     *
+     * <p>This is what decides whether the default kit is installed: a fresh
+     * install (or a deleted {@code commander.yml}) gets the shipped kit, an
+     * owner-edited loadout is left exactly as it was saved.</p>
+     */
+    public boolean hasSavedLoadout() {
+        for (ItemStack stack : loadout) {
+            if (stack != null && stack.getType() != null && !stack.getType().isAir()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The kit verification line for {@code /null status}, or null when it is right. */
+    public String kitProblem() {
+        if (commander == null || plugin.kits() == null) {
+            return null;
+        }
+        return plugin.kits().verify(commander);
+    }
 
     /**
      * A config reload does not change anything the Commander is already

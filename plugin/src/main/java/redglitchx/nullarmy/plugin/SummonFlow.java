@@ -266,14 +266,23 @@ public final class SummonFlow implements Listener, Reloadable {
             SquadManager.Squad squad = squads.createSquad(
                     request.player, request.worldName, request.origin, decision.granted());
             int spawned = squad.members().size();
+            player.sendMessage(PREFIX + "Summoned " + spawned
+                    + (spawned == 1 ? " Null." : " Nulls."));
+            // How they arrived: real doorways, how many, and what had to use open
+            // ground instead. An arrival made of particles alone is not reported
+            // as a portal.
+            String arrival = squad.arrivalNote();
+            if (arrival != null && !arrival.isEmpty()) {
+                player.sendMessage(PREFIX + "  " + arrival);
+            }
             if (spawned < decision.granted()) {
                 player.sendMessage(PREFIX + "Only " + spawned + " of " + decision.granted()
-                        + " Nulls found collision-safe ground; the rest were not spawned"
-                        + " rather than clipping into terrain.");
+                        + " Nulls could be placed on verified safe ground; the rest were NOT"
+                        + " spawned rather than being put inside a wall, a block or each other.");
             }
-            player.sendMessage(PREFIX + "Summoned " + spawned
-                    + (spawned == 1 ? " Null." : " Nulls.")
-                    + " The portals open where you stood.");
+            for (String failure : squad.spawnFailures()) {
+                player.sendMessage(PREFIX + "  failed: " + failure);
+            }
         } catch (IllegalStateException refusal) {
             // Clear, honest failure - no partial army (spec 3).
             player.sendMessage(PREFIX + "Summon failed: " + refusal.getMessage());
@@ -323,6 +332,34 @@ public final class SummonFlow implements Listener, Reloadable {
     /** Drops a pending prompt (used by {@code /null stop}). */
     public boolean cancelPending(UUID player) {
         return player != null && pending.remove(player) != null;
+    }
+
+    /**
+     * Cancels every open prompt and tells each owner why.
+     *
+     * <p>Used by the Totem Of Null shutdown: a summon that is queued must not
+     * complete while the army is going out.</p>
+     *
+     * @return how many prompts were cancelled
+     */
+    public int cancelAll(String reason) {
+        if (pending.isEmpty()) {
+            return 0;
+        }
+        List<UUID> ids = new ArrayList<>(pending.keySet());
+        pending.clear();
+        String why = reason == null || reason.isEmpty() ? "cancelled" : reason;
+        for (UUID id : ids) {
+            try {
+                Player player = Bukkit.getPlayer(id);
+                if (player != null && player.isOnline()) {
+                    player.sendMessage(PREFIX + "Your summon request was cancelled: " + why + ".");
+                }
+            } catch (Throwable ignored) {
+                // An unreachable player simply does not get the notice.
+            }
+        }
+        return ids.size();
     }
 
     private Caps caps() {

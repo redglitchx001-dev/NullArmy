@@ -13,6 +13,8 @@ import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
 
+import redglitchx.nullarmy.core.item.SummonItemSpec;
+
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
@@ -22,6 +24,12 @@ import java.util.List;
 
 /**
  * The two legal summon items: the <b>Call Horn</b> and the <b>Totem Of Null</b>.
+ *
+ * <p>The Call Horn is named exactly {@code Null} and keeps the vanilla "Call"
+ * goat-horn instrument, so right-clicking it plays the real horn sound. The totem
+ * is named exactly {@code The Totem Of Null} and carries the <b>real Curse of
+ * Vanishing</b>, so it disappears instead of being left on the ground when its
+ * owner dies.</p>
  *
  * <p>Spec 3 allows a real Goat Horn or a real Totem of Undying as the trigger,
  * but the item may only ever come into existence through an explicit owner
@@ -44,8 +52,11 @@ import java.util.List;
  */
 public final class SummonItems {
 
-    /** Display name of both summon items (spec 3: the item is named {@code Null}). */
-    public static final String DISPLAY_NAME = "Null";
+    /** The Call Horn's name, exactly (spec 3: the item is named {@code Null}). */
+    public static final String DISPLAY_NAME = SummonItemSpec.HORN_DISPLAY_NAME;
+
+    /** The totem's name, exactly. Not "Totem Of Null", not "Null". */
+    public static final String TOTEM_DISPLAY_NAME = SummonItemSpec.TOTEM_DISPLAY_NAME;
 
     /** Persistent-data key suffixes, stored as {@code nullarmy:<suffix>}. */
     public static final String HORN_KEY = "call_horn";
@@ -63,19 +74,24 @@ public final class SummonItems {
 
     /** The Call Horn: a real Goat Horn, named, enchanted, glinting and tagged. */
     public static ItemStack callHorn(Plugin plugin) {
-        return build(plugin, Material.GOAT_HORN, HORN_KEY, LEGACY_HORN_NAME,
+        return build(plugin, Material.GOAT_HORN, HORN_KEY, DISPLAY_NAME, LEGACY_HORN_NAME, false,
                 "Call Goat Horn: right-click to sound the call.",
                 "Then type how many Nulls should come in chat.",
-                "They walk out of portal effects onto safe ground.",
+                "They walk out of real, temporary portal doorways.",
                 "Owner-issued item. Never granted spontaneously.");
     }
 
-    /** The Totem Of Null: a real Totem of Undying, tagged the same way. */
+    /**
+     * The Totem Of Null: a real Totem of Undying, named exactly, cursed with the
+     * real Curse of Vanishing, and tagged so a rename cannot break recognition.
+     */
     public static ItemStack totemOfNull(Plugin plugin) {
-        return build(plugin, Material.TOTEM_OF_UNDYING, TOTEM_KEY, LEGACY_TOTEM_NAME,
-                "Right-click to call the Nulls.",
-                "Then type how many should come in chat.",
-                "They walk out of portal effects onto safe ground.",
+        return build(plugin, Material.TOTEM_OF_UNDYING, TOTEM_KEY, TOTEM_DISPLAY_NAME,
+                LEGACY_TOTEM_NAME, true,
+                "The Totem Of Null: the army's heart.",
+                "Right-click to call the Nulls, then type how many come.",
+                "If it pops or is destroyed, every Null - Commander last -",
+                "steps out one at a time and the army is gone.",
                 "Owner-issued item. Never dropped, never granted.");
     }
 
@@ -86,7 +102,8 @@ public final class SummonItems {
      * rather than failing the command that asked for it.</p>
      */
     private static ItemStack build(Plugin plugin, Material material, String keySuffix,
-                                   String legacyName, String... loreLines) {
+                                   String displayName, String legacyName, boolean vanish,
+                                   String... loreLines) {
         ItemStack item = new ItemStack(material);
         try {
             ItemMeta meta = item.getItemMeta();
@@ -96,7 +113,7 @@ public final class SummonItems {
             // customName(Component) is the current API on 1.21.11; the older
             // displayName(Component) is marked obsolete since 1.21.4 and now
             // means the same thing.
-            meta.customName(Component.text(DISPLAY_NAME)
+            meta.customName(Component.text(displayName)
                     .color(NamedTextColor.DARK_PURPLE)
                     .decoration(TextDecoration.ITALIC, false));
 
@@ -114,9 +131,20 @@ public final class SummonItems {
             }
             meta.lore(lore);
 
-            // A real, legal enchantment - that is what makes the item glint.
-            meta.addEnchant(Enchantment.UNBREAKING, GLINT_LEVEL, true);
-            meta.addItemFlags(ItemFlag.HIDE_ENCHANTS);
+            if (vanish) {
+                // The real Curse of Vanishing, not a look-alike: the totem must not
+                // survive its owner as a loose item anyone can pick up.
+                Enchantment curse = Enchantment.VANISHING_CURSE;
+                if (curse != null) {
+                    meta.addEnchant(curse, 1, true);
+                }
+                // Deliberately NOT hidden: an owner should be able to read why the
+                // totem vanished. The glint comes with the enchantment anyway.
+            } else {
+                // A real, legal enchantment - that is what makes the horn glint.
+                meta.addEnchant(Enchantment.UNBREAKING, GLINT_LEVEL, true);
+                meta.addItemFlags(ItemFlag.HIDE_ENCHANTS);
+            }
 
             meta.getPersistentDataContainer().set(
                     key(plugin, keySuffix), PersistentDataType.STRING, "1");
@@ -161,7 +189,9 @@ public final class SummonItems {
                 if (hasTag(data, TOTEM_KEY)) {
                     return TOTEM_KEY;
                 }
-                if (nameIs(meta, DISPLAY_NAME) || nameIs(meta, LEGACY_TOTEM_NAME)) {
+                // The exact name, or a name an older build used. A plain vanilla
+                // totem - and one renamed to anything else - is NOT ours.
+                if (nameIs(meta, TOTEM_DISPLAY_NAME) || nameIs(meta, LEGACY_TOTEM_NAME)) {
                     return TOTEM_KEY;
                 }
                 return "";
@@ -181,6 +211,46 @@ public final class SummonItems {
     /** The exact vanilla sound belonging to the Call Goat Horn instrument. */
     public static Sound callHornSound() {
         return MusicInstrument.CALL_GOAT_HORN.getSound();
+    }
+
+    /** True when the stack carries the real Curse of Vanishing. */
+    public static boolean hasVanishingCurse(ItemStack item) {
+        if (item == null || !item.hasItemMeta()) {
+            return false;
+        }
+        try {
+            ItemMeta meta = item.getItemMeta();
+            return meta != null && Enchantment.VANISHING_CURSE != null
+                    && meta.hasEnchant(Enchantment.VANISHING_CURSE);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /** The plain-text name of a stack, or "" when it has none. */
+    public static String plainName(ItemStack item) {
+        if (item == null || !item.hasItemMeta()) {
+            return "";
+        }
+        try {
+            ItemMeta meta = item.getItemMeta();
+            if (meta == null || meta.customName() == null) {
+                return "";
+            }
+            return net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
+                    .plainText().serialize(meta.customName());
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
+    /** The identity rules, for diagnostics and tests. */
+    public static String identitySummary() {
+        return "horn='" + SummonItemSpec.HORN_DISPLAY_NAME + "' tagged "
+                + SummonItemSpec.tagKey(SummonItemSpec.HORN_TAG) + "; totem='"
+                + SummonItemSpec.TOTEM_DISPLAY_NAME + "' tagged "
+                + SummonItemSpec.tagKey(SummonItemSpec.TOTEM_TAG) + " with "
+                + SummonItemSpec.VANISHING_CURSE_KEY;
     }
 
     /** True when this exact stack is a Totem Of Null. */
@@ -225,8 +295,23 @@ public final class SummonItems {
      * only for items made by an older build.</p>
      */
     private static boolean nameIs(ItemMeta meta, String expected) {
-        if (meta == null) {
+        if (meta == null || expected == null) {
             return false;
+        }
+        // Preferred: the Adventure component this plugin writes, as plain text.
+        // A renamed item keeps its tag, so this path only matters for items an
+        // older build made before tags existed.
+        try {
+            Component custom = meta.customName();
+            if (custom != null) {
+                String plain = net.kyori.adventure.text.serializer.plain
+                        .PlainTextComponentSerializer.plainText().serialize(custom);
+                if (plain != null && expected.equals(plain.trim())) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+            // Fall through to the legacy accessor below.
         }
         try {
             if (!meta.hasDisplayName()) {

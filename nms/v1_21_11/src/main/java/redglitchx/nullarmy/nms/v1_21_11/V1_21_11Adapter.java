@@ -2,15 +2,21 @@ package redglitchx.nullarmy.nms.v1_21_11;
 
 import com.mojang.authlib.GameProfile;
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.protocol.game.ClientboundPlayerInfoRemovePacket;
+import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ClientInformation;
+import net.minecraft.server.level.ChunkTrackingView;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.players.PlayerList;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
 import org.bukkit.Bukkit;
 import org.bukkit.World;
 import org.bukkit.craftbukkit.CraftServer;
 import org.bukkit.craftbukkit.CraftWorld;
+import org.bukkit.craftbukkit.entity.CraftPlayer;
 
 import redglitchx.nullarmy.core.math.Vec3d;
 import redglitchx.nullarmy.core.nav.BlockView;
@@ -25,20 +31,36 @@ import java.util.UUID;
 /**
  * NullArmy adapter for Paper 1.21.11.
  *
- * <p><b>STATUS: COMPILED; RUNTIME UNVERIFIED.</b> The GitHub Actions
- * Paperweight build compiles this adapter against Paper 1.21.11. A live-server
- * smoke test is still needed to verify Null spawning, ticking and packet
- * tracking (IMPLEMENTATION_PLAN.md verification item V-04).</p>
+ * <h2>The spawn contract</h2>
+ * {@link #spawnNull} does not report success because an object was constructed.
+ * It performs four steps and verifies each one, and any failure destroys the
+ * partial body and throws with the reason:
+ * <ol>
+ *   <li><b>Announce.</b> Broadcast
+ *       {@code ClientboundPlayerInfoUpdatePacket} for the profile. The client
+ *       refuses to build a player entity for a UUID it has no info entry for
+ *       ({@code ClientPacketListener.createEntityFromPacket} logs "Server
+ *       attempted to add player prior to sending player info" and drops the
+ *       entity), so this has to happen first. It is also what puts a Null in the
+ *       tab list and what carries the configured skin.</li>
+ *   <li><b>Register.</b> {@code ServerLevel.addFreshEntity} - the returned
+ *       boolean is checked, not ignored.</li>
+ *   <li><b>Verify.</b> The body must be valid, present in the level's entity
+ *       index, still have its packet listener, and - the part that decides
+ *       whether anybody can see it - have a {@code TrackedEntity} in
+ *       {@code ChunkMap.entityMap}.</li>
+ *   <li><b>Report.</b> Only then is the body returned and counted.</li>
+ * </ol>
  *
  * <p>Known deliberate choices:</p>
  * <ul>
- *   <li>We do <b>not</b> call {@code PlayerList#placeNewPlayer}. That drives
- *       full join semantics (playerdata files, advancements, statistics,
- *       PlayerJoinEvent) - risk R-01/R-02/R-03. The Null is added to the level
- *       and presented to viewers with packets instead.</li>
+ *   <li>We do <b>not</b> call {@code PlayerList#placeNewPlayer}. That drives full
+ *       join semantics (playerdata files, advancements, statistics,
+ *       PlayerJoinEvent, the online-player list and the max-player count) -
+ *       risks R-01/R-02/R-03. Nulls are level entities plus explicit player-info
+ *       packets instead.</li>
  *   <li>CraftBukkit is <b>not</b> relocated on Paper 1.20.5+, hence
- *       {@code org.bukkit.craftbukkit.CraftServer} with no version segment
- *       (IMPLEMENTATION_PLAN.md section 3.2).</li>
+ *       {@code org.bukkit.craftbukkit.CraftServer} with no version segment.</li>
  *   <li>{@code ClientboundAddEntityPacket} is used because
  *       {@code ClientboundAddPlayerPacket} no longer exists in 1.21.4+.</li>
  * </ul>
@@ -51,6 +73,14 @@ public final class V1_21_11Adapter implements VersionAdapter {
     private static final double BODY_WIDTH = 0.6;
     private static final double BODY_HEIGHT = 1.8;
 
+    /**
+     * The view distance a Null asks for. {@code ClientInformation.createDefault()}
+     * requests 2, and {@code ChunkMap.getPlayerViewDistance} clamps it into
+     * {@code [2, server view distance]}, so 2 is what the tracker computes for
+     * every Null. Matching it exactly is what keeps the probe test honest.
+     */
+    private static final int NULL_VIEW_DISTANCE = 2;
+
     private final List<NullBody> active = Collections.synchronizedList(new ArrayList<>());
 
     @Override
@@ -61,8 +91,13 @@ public final class V1_21_11Adapter implements VersionAdapter {
         return serverVersion != null && serverVersion.startsWith(MC_VERSION);
     }
 
+    // --------------------------------------------------------------------- spawn
+
     @Override
     public NullBody spawnNull(SpawnRequest request) {
+        if (request == null) {
+            throw new IllegalStateException("no spawn request");
+        }
         CraftServer craftServer = (CraftServer) Bukkit.getServer();
         MinecraftServer server = craftServer.getServer();
 
@@ -89,29 +124,321 @@ public final class V1_21_11Adapter implements VersionAdapter {
                         ? " - the air-drop position is not clear of blocks"
                         : " - no teleporting out of bad spots"));
         }
+        if (!isEntitySpaceFree(level, request.position())) {
+            throw new IllegalStateException("refusing to spawn Null at " + request.position()
+                    + " - another entity is already standing there");
+        }
 
-        GameProfile profile = new GameProfile(UUID.randomUUID(), request.profileName());
-        // A pure black skin needs a REAL Mojang-hosted texture plus its signature.
-        // If none is configured the Null keeps the default skin rather than
-        // pretending (IMPLEMENTATION_PLAN.md A-05).
+        String name = request.profileName();
+        if (name == null || name.trim().isEmpty()) {
+            throw new IllegalStateException("a Null needs a profile name");
+        }
+        if (name.length() > 16) {
+            // A longer name is rejected by the protocol's PLAYER_NAME codec, which
+            // would fail the whole spawn far away from the real cause.
+            throw new IllegalStateException("profile name is longer than 16 characters: " + name);
+        }
+
+        GameProfile profile = new GameProfile(UUID.randomUUID(), name);
         // Every Null and the Commander wear one configured skin. The request
         // carries it; if it is absent we fall back to whatever SkinConfig has,
         // and if that is empty too the profile is left alone rather than faked
         // (IMPLEMENTATION_PLAN.md A-05).
         SkinApplicator.apply(profile, request.skinValue(), request.skinSignature());
 
-        ServerPlayer npc = new NullPlayer(server, level, profile, request, this);
+        NullPlayer npc = new NullPlayer(server, level, profile, request, this);
+        if (npc.connection == null) {
+            // Cannot happen with the constructor above, and is checked anyway:
+            // registering a ServerPlayer without a listener is what crashed
+            // MinecraftServer.tickChildren on 2026-10-04.
+            throw new IllegalStateException("the Null has no packet listener; refusing to register it");
+        }
 
-        // NullPlayer installs a listener backed by a packet-discarding sink in its
-        // constructor. Never register a ServerPlayer with a null connection:
-        // Paper's server tick can send packets outside the entity tick guard.
         npc.setPos(request.position().x(), request.position().y(), request.position().z());
-        level.addFreshEntity(npc);
 
-        NullBody body = (NullBody) npc;
-        active.add(body);
-        return body;
+        // 1. Player info first. Without it every client silently drops the
+        //    add-entity packet and the Null exists only on the server.
+        if (!announce(npc)) {
+            discardQuietly(npc);
+            throw new IllegalStateException("could not send the player-info packet for "
+                    + name + ", so no client would have been able to render it");
+        }
+
+        // 2. Register in the world, and check the answer.
+        boolean added;
+        try {
+            added = level.addFreshEntity(npc);
+        } catch (Throwable t) {
+            withdraw(npc);
+            discardQuietly(npc);
+            throw new IllegalStateException("the server threw while adding the Null to the world: "
+                    + describe(t), t);
+        }
+        if (!added) {
+            withdraw(npc);
+            discardQuietly(npc);
+            throw new IllegalStateException("the server refused to add the Null to "
+                    + request.worldName() + " (addFreshEntity returned false)");
+        }
+
+        // 3. Verify. A returned object is not a spawn.
+        String failure = verify(level, npc);
+        if (failure != null) {
+            withdraw(npc);
+            discardQuietly(npc);
+            throw new IllegalStateException(failure);
+        }
+
+        active.add(npc);
+        return npc;
     }
+
+    /**
+     * Checks the things that decide whether this Null really exists for the
+     * server and for clients.
+     *
+     * @return null when everything is in order, otherwise the reason to report
+     */
+    private String verify(ServerLevel level, NullPlayer npc) {
+        if (npc.connection == null) {
+            return "the Null lost its packet listener after registration";
+        }
+        if (!npc.valid) {
+            return "the level did not mark the Null as a valid entity"
+                    + " (it was never added to the world's entity manager)";
+        }
+        if (npc.isRemoved()) {
+            return "the Null was removed again immediately after being added";
+        }
+        Entity indexed = null;
+        try {
+            indexed = level.getEntity(npc.getUUID());
+        } catch (Throwable t) {
+            return "the level's entity index could not be read: " + describe(t);
+        }
+        if (indexed != npc) {
+            return "the Null is not in the level's entity index, so the server"
+                    + " would forget it on the next chunk operation";
+        }
+        if (!Tracking.isTracked(level, npc.getId())) {
+            return "the chunk map is not tracking the Null, so no client can see it"
+                    + " (Paper logged an illegal addEntity, or the entity type has"
+                    + " no client tracking range)";
+        }
+        return null;
+    }
+
+    /**
+     * Broadcasts the player-info entry every client needs before it will render
+     * this body - and which is also what makes it appear in the tab list with a
+     * plain name and the configured skin.
+     *
+     * @return true when the packet was built and handed to the player list
+     */
+    private boolean announce(NullPlayer npc) {
+        try {
+            PlayerList players = minecraftServer().getPlayerList();
+            if (players == null) {
+                return false;
+            }
+            players.broadcastAll(ClientboundPlayerInfoUpdatePacket
+                    .createPlayerInitializing(List.of(npc)));
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** Removes the tab-list/info entry of a body that is gone or never arrived. */
+    private void withdraw(NullPlayer npc) {
+        try {
+            PlayerList players = minecraftServer().getPlayerList();
+            if (players == null) {
+                return;
+            }
+            players.broadcastAll(new ClientboundPlayerInfoRemovePacket(List.of(npc.getUUID())));
+        } catch (Throwable ignored) {
+            // A ghost tab entry is cosmetic; a thrown exception here is not.
+        }
+    }
+
+    private MinecraftServer minecraftServer() {
+        return ((CraftServer) Bukkit.getServer()).getServer();
+    }
+
+    private static void discardQuietly(NullPlayer npc) {
+        try {
+            npc.discard();
+        } catch (Throwable ignored) {
+            // The body never made it into the world; nothing more can be done.
+        }
+    }
+
+    private static String describe(Throwable t) {
+        if (t == null) {
+            return "unknown failure";
+        }
+        String message = t.getMessage();
+        return t.getClass().getSimpleName() + (message == null || message.isEmpty()
+                ? "" : ": " + message);
+    }
+
+    // ------------------------------------------------------------------ viewers
+
+    /**
+     * Sends the info entries of every live Null to one player.
+     *
+     * <p>A player who joins after a squad exists would otherwise see bodies the
+     * server is tracking but the client cannot build, because the info packets
+     * were broadcast before they connected.</p>
+     *
+     * @return how many Nulls were announced to that player
+     */
+    @Override
+    public int refreshViewer(UUID viewerId) {
+        if (viewerId == null) {
+            return 0;
+        }
+        org.bukkit.entity.Player bukkitPlayer = Bukkit.getPlayer(viewerId);
+        if (bukkitPlayer == null || !bukkitPlayer.isOnline()) {
+            return 0;
+        }
+        ServerPlayer viewer;
+        try {
+            viewer = ((CraftPlayer) bukkitPlayer).getHandle();
+        } catch (Throwable t) {
+            return 0;
+        }
+        if (viewer == null || viewer.connection == null) {
+            return 0;
+        }
+        int announced = 0;
+        List<NullBody> bodies;
+        synchronized (active) {
+            bodies = new ArrayList<>(active);
+        }
+        for (NullBody body : bodies) {
+            if (!(body instanceof NullPlayer) || !body.isAlive()) {
+                continue;
+            }
+            try {
+                viewer.connection.send(ClientboundPlayerInfoUpdatePacket
+                        .createPlayerInitializing(List.of((NullPlayer) body)));
+                announced++;
+            } catch (Throwable ignored) {
+                // One unannounceable Null must not stop the rest.
+            }
+        }
+        return announced;
+    }
+
+    @Override
+    public boolean isTracked(NullBody body) {
+        if (!(body instanceof NullPlayer)) {
+            return false;
+        }
+        NullPlayer npc = (NullPlayer) body;
+        ServerLevel level = npc.serverLevelOrNull();
+        return level != null && Tracking.isTracked(level, npc.getId());
+    }
+
+    @Override
+    public int viewerCount(NullBody body) {
+        if (!(body instanceof NullPlayer)) {
+            return -1;
+        }
+        NullPlayer npc = (NullPlayer) body;
+        ServerLevel level = npc.serverLevelOrNull();
+        return level == null ? -1 : Tracking.viewerCount(level, npc.getId());
+    }
+
+    @Override
+    public boolean packetListenerReady(NullBody body) {
+        return body instanceof NullPlayer && ((NullPlayer) body).packetListenerReady();
+    }
+
+    @Override
+    public List<String> trackingDiagnostics() {
+        return Tracking.capabilityReport();
+    }
+
+    // ------------------------------------------------------- smoke-test viewer
+
+    @Override
+    public NullBody createViewerProbe(String worldName, Vec3d position) {
+        if (worldName == null || position == null) {
+            return null;
+        }
+        World bukkitWorld = Bukkit.getWorld(worldName);
+        if (bukkitWorld == null) {
+            return null;
+        }
+        ServerLevel level = ((CraftWorld) bukkitWorld).getHandle();
+        MinecraftServer server = minecraftServer();
+        GameProfile profile = new GameProfile(UUID.randomUUID(), "nullprobe");
+        SpawnRequest request = new SpawnRequest(UUID.randomUUID(), "nullprobe", worldName,
+                position, 36 * 64, "", "", true);
+        NullPlayer probe = new NullPlayer(server, level, profile, request, this, true);
+        probe.setPos(position.x(), position.y(), position.z());
+        if (!level.addFreshEntity(probe)) {
+            discardQuietly(probe);
+            return null;
+        }
+        // Make the probe behave like a client that has already received the
+        // chunks around it: a matching tracking view, and an empty send queue
+        // (isChunkTracked refuses to pair an entity in a chunk that is still
+        // pending for the viewer).
+        try {
+            probe.setChunkTrackingView(
+                    ChunkTrackingView.of(probe.chunkPosition(), NULL_VIEW_DISTANCE));
+        } catch (Throwable ignored) {
+            // The pairing call below reports whether it worked.
+        }
+        Tracking.clearPendingChunks(probe.connection);
+        probe.clearRecordedPackets();
+        active.add(probe);
+        return probe;
+    }
+
+    @Override
+    public boolean pairProbe(NullBody viewer, NullBody target) {
+        if (!(viewer instanceof NullPlayer) || !(target instanceof NullPlayer)) {
+            return false;
+        }
+        NullPlayer probe = (NullPlayer) viewer;
+        NullPlayer body = (NullPlayer) target;
+        ServerLevel level = body.serverLevelOrNull();
+        if (level == null) {
+            return false;
+        }
+        return Tracking.pair(level, body.getId(), probe);
+    }
+
+    @Override
+    public boolean announceTo(NullBody viewer, NullBody target) {
+        if (!(viewer instanceof NullPlayer) || !(target instanceof NullPlayer)) {
+            return false;
+        }
+        NullPlayer to = (NullPlayer) viewer;
+        if (to.connection == null) {
+            return false;
+        }
+        try {
+            to.connection.send(ClientboundPlayerInfoUpdatePacket
+                    .createPlayerInitializing(List.of((NullPlayer) target)));
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    @Override
+    public List<String> probePackets(NullBody viewer) {
+        return viewer instanceof NullPlayer ? ((NullPlayer) viewer).recordedPackets()
+                : Collections.emptyList();
+    }
+
+    // ------------------------------------------------------------- portal travel
 
     /**
      * {@inheritDoc}
@@ -189,6 +516,38 @@ public final class V1_21_11Adapter implements VersionAdapter {
             return false;
         }
         ServerLevel level = ((CraftWorld) world).getHandle();
+        return columnIsClear(level, position);
+    }
+
+    @Override
+    public boolean isSpawnSafe(String worldName, Vec3d position) {
+        World world = Bukkit.getWorld(worldName);
+        if (world == null) {
+            return false;
+        }
+        ServerLevel level = ((CraftWorld) world).getHandle();
+        if (!columnIsClear(level, position)) {
+            return false;
+        }
+        int minX = (int) Math.floor(position.x() - BODY_WIDTH / 2.0);
+        int maxX = (int) Math.floor(position.x() + BODY_WIDTH / 2.0);
+        int minZ = (int) Math.floor(position.z() - BODY_WIDTH / 2.0);
+        int maxZ = (int) Math.floor(position.z() + BODY_WIDTH / 2.0);
+        int feetY = (int) Math.floor(position.y());
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                // Need solid ground under the feet.
+                BlockState below = level.getBlockState(new BlockPos(x, feetY - 1, z));
+                if (below.isAir()) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /** True when the 1x2 (rounded to the body's width) space is free of blocks. */
+    private boolean columnIsClear(ServerLevel level, Vec3d position) {
         int minX = (int) Math.floor(position.x() - BODY_WIDTH / 2.0);
         int maxX = (int) Math.floor(position.x() + BODY_WIDTH / 2.0);
         int minZ = (int) Math.floor(position.z() - BODY_WIDTH / 2.0);
@@ -211,35 +570,47 @@ public final class V1_21_11Adapter implements VersionAdapter {
         return true;
     }
 
+    /**
+     * True when no other entity occupies the body's box.
+     *
+     * <p>Block checks alone let two Nulls be placed inside each other, which the
+     * client renders as one flickering body and which vanilla's own collision
+     * resolution then pushes apart unpredictably.</p>
+     */
     @Override
-    public boolean isSpawnSafe(String worldName, Vec3d position) {
+    public boolean isEntitySpaceFree(String worldName, Vec3d position) {
         World world = Bukkit.getWorld(worldName);
-        if (world == null) {
+        if (world == null || position == null) {
             return false;
         }
         ServerLevel level = ((CraftWorld) world).getHandle();
-        int minX = (int) Math.floor(position.x() - BODY_WIDTH / 2.0);
-        int maxX = (int) Math.floor(position.x() + BODY_WIDTH / 2.0);
-        int minZ = (int) Math.floor(position.z() - BODY_WIDTH / 2.0);
-        int maxZ = (int) Math.floor(position.z() + BODY_WIDTH / 2.0);
-        int feetY = (int) Math.floor(position.y());
+        return isEntitySpaceFree(level, position);
+    }
 
-        for (int x = minX; x <= maxX; x++) {
-            for (int z = minZ; z <= maxZ; z++) {
-                for (int y = feetY; y < feetY + (int) Math.ceil(BODY_HEIGHT); y++) {
-                    BlockState state = level.getBlockState(new BlockPos(x, y, z));
-                    if (!state.isAir()) {
-                        return false;
-                    }
+    private boolean isEntitySpaceFree(ServerLevel level, Vec3d position) {
+        try {
+            AABB box = new AABB(
+                    position.x() - BODY_WIDTH / 2.0, position.y(),
+                    position.z() - BODY_WIDTH / 2.0,
+                    position.x() + BODY_WIDTH / 2.0, position.y() + BODY_HEIGHT,
+                    position.z() + BODY_WIDTH / 2.0);
+            List<Entity> inside = level.getEntities(null, box, entity -> entity != null);
+            for (Entity entity : inside) {
+                if (entity == null || !entity.isAlive()) {
+                    continue;
                 }
-                // Need solid ground under the feet.
-                BlockState below = level.getBlockState(new BlockPos(x, feetY - 1, z));
-                if (below.isAir()) {
-                    return false;
+                // Items and experience orbs on the ground are not occupants.
+                if (entity instanceof net.minecraft.world.entity.item.ItemEntity
+                        || entity instanceof net.minecraft.world.entity.ExperienceOrb) {
+                    continue;
                 }
+                return false;
             }
+            return true;
+        } catch (Throwable t) {
+            // Fail closed: an unreadable entity list is not a safe spawn spot.
+            return false;
         }
-        return true;
     }
 
     @Override
@@ -255,8 +626,21 @@ public final class V1_21_11Adapter implements VersionAdapter {
         return out;
     }
 
-    /** Drops a dead Null from the active list. Called by {@link NullPlayer}. */
-    void forget(NullBody body) { active.remove(body); }
+    /**
+     * Drops a body from the active list and withdraws its player-info entry.
+     *
+     * <p>Called by {@link NullPlayer} on destroy, so a Null never leaves a ghost
+     * in anybody's tab list.</p>
+     */
+    void forget(NullBody body) {
+        if (body == null) {
+            return;
+        }
+        active.remove(body);
+        if (body instanceof NullPlayer) {
+            withdraw((NullPlayer) body);
+        }
+    }
 
     /**
      * A {@link BlockView} backed by a real {@link ServerLevel}.
