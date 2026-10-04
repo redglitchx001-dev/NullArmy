@@ -22,7 +22,18 @@ public interface NullBody {
     /** The profile/display name, e.g. {@code uH3WR2v0ti0uTHJ}. */
     String profileName();
 
-    Vec3d position();
+    /**
+     * The body's current server-side position.
+     *
+     * <p>Named {@code bodyPosition()} rather than {@code position()} on
+     * purpose: since 1.21.9 every {@code net.minecraft.world.entity.Entity}
+     * implements {@code ItemOwner}, which declares
+     * {@code net.minecraft.world.phys.Vec3 position()}. A class cannot
+     * implement {@code position()} twice with two different return types, and
+     * an NMS entity cannot return the version-neutral {@link Vec3d}, so the
+     * SPI method must have its own name.</p>
+     */
+    Vec3d bodyPosition();
 
     /**
      * Applies a bounded steering force for this tick.

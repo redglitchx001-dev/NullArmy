@@ -63,10 +63,10 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     public int id() { return getId(); }
 
     @Override
-    public String profileName() { return getGameProfile().getName(); }
+    public String profileName() { return getGameProfile().name(); }
 
     @Override
-    public Vec3d position() {
+    public Vec3d bodyPosition() {
         return new Vec3d(getX(), getY(), getZ());
     }
 
@@ -83,7 +83,7 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         if (target == null) {
             return;
         }
-        Vec3d from = position();
+        Vec3d from = bodyPosition();
         Vec3d delta = target.sub(from);
         if (delta.horizontalLength() < 1e-6) {
             return;

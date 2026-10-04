@@ -159,8 +159,13 @@ public final class EndpointConfig {
         return id + " [" + modelId + "] " + endpoint + " " + keyPart;
     }
 
-    /** Shows only the first 3 and last 2 characters of a literal key. */
-    static String mask(String key) {
+    /**
+     * Shows only the first 3 and last 2 characters of a literal key.
+     *
+     * <p>Public so {@code CoreTestSuite} can assert the masking shape directly;
+     * it never exposes more of the key than {@link #describe()} does.</p>
+     */
+    public static String mask(String key) {
         if (key == null || key.length() <= 5) {
             return "*****";
         }
@@ -228,11 +233,18 @@ public final class EndpointConfig {
             return this;
         }
 
-        public Builder withTimeoutMillis(long v) { this.timeoutMillis = v; return this; }
-        public Builder withCallsPerMinute(int v) { this.callsPerMinute = v; return this; }
-        public Builder withMaxJsonBytes(int v) { this.maxJsonBytes = v; return this; }
-        public Builder withMaxRetries(int v) { this.maxRetries = v; return this; }
-        public Builder withEnabled(boolean v) { this.enabled = v; return this; }
+        /*
+         * Property setters follow the naming used by the other builders in
+         * core (AgentBinding, Objective, CombatSituation) and by every call
+         * site: the plain property name. The "with" prefix is kept only for
+         * the two api-key helpers, which are real conversions rather than
+         * plain field assignments.
+         */
+        public Builder timeoutMillis(long v) { this.timeoutMillis = v; return this; }
+        public Builder callsPerMinute(int v) { this.callsPerMinute = v; return this; }
+        public Builder maxJsonBytes(int v) { this.maxJsonBytes = v; return this; }
+        public Builder maxRetries(int v) { this.maxRetries = v; return this; }
+        public Builder enabled(boolean v) { this.enabled = v; return this; }
 
         public EndpointConfig build() {
             if (id == null || id.trim().isEmpty()) {

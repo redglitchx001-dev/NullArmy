@@ -5,6 +5,8 @@
  * NOTHING. No Paper, no Bukkit, no NMS, no third-party library.
  * That is what makes it testable without a Minecraft server.
  */
+import org.gradle.api.tasks.testing.Test
+
 plugins {
     java
 }
@@ -32,4 +34,14 @@ val coreTestSuite by tasks.registering(JavaExec::class) {
 
 tasks.named("check") {
     dependsOn(coreTestSuite)
+}
+
+/*
+ * The standard `test` task finds no JUnit tests: ADR-004 keeps core
+ * dependency-free and the whole suite runs as `coreTestSuite` above. Gradle 9
+ * fails a test task that has test sources but discovers no tests, so it is told
+ * that discovering none here is expected rather than a misconfiguration.
+ */
+tasks.named<Test>("test") {
+    failOnNoDiscoveredTests.set(false)
 }
