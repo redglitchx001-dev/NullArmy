@@ -340,6 +340,16 @@ public final class CommanderManager implements Listener, Reloadable {
 
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
+        // A listener is one of the four places an exception must never escape
+        // (spec 2.1): this GUI edits real items, so it is exactly where a
+        // surprise is most expensive.
+        Guard.attempt(plugin.getLogger(), "Commander loadout click", () -> handleClick(event));
+    }
+
+    private void handleClick(InventoryClickEvent event) {
+        if (event == null || event.getInventory() == null) {
+            return;
+        }
         if (!(event.getInventory().getHolder() instanceof CommanderInventoryGui)) {
             return;
         }
@@ -363,12 +373,26 @@ public final class CommanderManager implements Listener, Reloadable {
             } else if (slot == CommanderInventoryGui.BUTTON_CANCEL) {
                 player.closeInventory();
             } else if (slot == CommanderInventoryGui.BUTTON_SAVE) {
-                gui.commitFromView();
-                ItemStack[] edited = gui.working();
-                System.arraycopy(edited, 0, loadout, 0, Math.min(edited.length, LOADOUT_SLOTS));
-                save();
-                applyLoadout();
-                player.sendMessage("Commander loadout saved.");
+                // Each step is isolated: a failed save must still report the
+                // truth, and a failed apply must not lose the edit silently.
+                boolean copied = Guard.attempt(plugin.getLogger(), "reading the loadout editor",
+                        () -> {
+                            gui.commitFromView();
+                            ItemStack[] edited = gui.working();
+                            System.arraycopy(edited, 0, loadout, 0,
+                                    Math.min(edited.length, LOADOUT_SLOTS));
+                        });
+                boolean saved = copied
+                        && Guard.attempt(plugin.getLogger(), "saving the Commander loadout", this::save);
+                boolean applied = copied
+                        && Guard.attempt(plugin.getLogger(), "applying the Commander loadout",
+                                this::applyLoadout);
+                player.sendMessage(saved
+                        ? "Commander loadout saved."
+                        : "The loadout could not be saved - see the server log; nothing was changed.");
+                if (saved && !applied) {
+                    player.sendMessage("Saved, but the live Commander could not be re-equipped yet.");
+                }
                 player.closeInventory();
             }
             return;
@@ -381,14 +405,19 @@ public final class CommanderManager implements Listener, Reloadable {
 
     @EventHandler
     public void onInventoryClose(InventoryCloseEvent event) {
-        if (!(event.getInventory().getHolder() instanceof CommanderInventoryGui)) {
-            return;
-        }
-        // Closing without pressing Save discards the edit, so a mis-click can
-        // never silently overwrite a loadout the owner was happy with.
-        if (event.getPlayer() instanceof Player) {
-            ((Player) event.getPlayer()).sendMessage("Loadout editor closed without saving.");
-        }
+        Guard.attempt(plugin.getLogger(), "Commander loadout close", () -> {
+            if (event == null || event.getInventory() == null) {
+                return;
+            }
+            if (!(event.getInventory().getHolder() instanceof CommanderInventoryGui)) {
+                return;
+            }
+            // Closing without pressing Save discards the edit, so a mis-click
+            // can never silently overwrite a loadout the owner was happy with.
+            if (event.getPlayer() instanceof Player) {
+                ((Player) event.getPlayer()).sendMessage("Loadout editor closed without saving.");
+            }
+        });
     }
 
     /** True when the material is one we refuse to store (purely defensive). */
