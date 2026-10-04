@@ -152,6 +152,15 @@ public final class SquadManager implements Reloadable {
     /** Stop distance for "come here" objectives. */
     private static final double ARRIVE_DISTANCE = 2.0;
 
+    /**
+     * Minimum distance between two planned spawn spots, in blocks.
+     *
+     * <p>A body is 0.6 wide, so anything under that puts two Nulls inside each
+     * other - and the adapter now refuses a spot another entity already occupies,
+     * which is what turned one tight doorway into a lost Null.</p>
+     */
+    private static final double MIN_SPOT_SPACING = 1.1;
+
     /** How close a Null must be to react to a greeting. */
     private static final double GREET_DISTANCE = 24.0;
 
@@ -297,12 +306,16 @@ public final class SquadManager implements Reloadable {
         int remaining = count - assigned;
         if (remaining > 0) {
             // Open ground, searched the way it always was: rings of increasing
-            // radius, never a spot already taken by a doorway arrival.
-            for (Vec3d spot : planSpawnSpots(worldName, origin, remaining + arrival.spots.size())) {
+            // radius, never a spot already taken - and now never within a body
+            // width of a doorway arrival either, which is what used to make the
+            // adapter refuse the spot and cost the summon a Null.
+            List<Vec3d> ground = planSpawnSpots(worldName, origin,
+                    remaining + arrival.spots.size() + 6);
+            for (Vec3d spot : ground) {
                 if (remaining <= 0) {
                     break;
                 }
-                if (arrival.spots.contains(spot)) {
+                if (tooClose(arrival.spots, spot, MIN_SPOT_SPACING)) {
                     continue;
                 }
                 arrival.spots.add(spot);
@@ -585,6 +598,11 @@ public final class SquadManager implements Reloadable {
                 plugin.kits().applyTo(body);
             }
             return body;
+        } catch (VersionAdapter.SpawnRefusedException refusal) {
+            // This position was wrong, not the server. Latching the whole spawn
+            // path for one bad spot would turn a single refused Null into "no
+            // Null can ever be created again this session".
+            throw refusal;
         } catch (Throwable t) {
             String reason = Guard.describe(t);
             plugin.spawnBreaker().trip(reason, t, logger,
@@ -613,8 +631,9 @@ public final class SquadManager implements Reloadable {
         }
         int radius = Math.max(1, config == null ? 6 : config.spawnSearchRadius());
 
-        // Ring 0 is the summoner's own feet block: always try it first.
-        if (isSafe(worldName, origin)) {
+        // Ring 0 is the summoner's own feet block: always try it first, unless
+        // somebody (usually the summoner) is already standing in it.
+        if (isSafe(worldName, origin) && isFree(worldName, origin)) {
             out.add(origin);
         }
         double step = 1.5;
@@ -630,7 +649,7 @@ public final class SquadManager implements Reloadable {
                 if (alreadyUsed(out, candidate)) {
                     continue;
                 }
-                if (isSafe(worldName, candidate)) {
+                if (isSafe(worldName, candidate) && isFree(worldName, candidate)) {
                     out.add(candidate);
                 }
             }
@@ -638,11 +657,25 @@ public final class SquadManager implements Reloadable {
         return out;
     }
 
+    /** True when a candidate is too close to a spot that is already planned. */
     private static boolean alreadyUsed(List<Vec3d> used, Vec3d candidate) {
+        return tooClose(used, candidate, MIN_SPOT_SPACING);
+    }
+
+    /** True when any of {@code used} is within {@code minDistance} of the candidate. */
+    private static boolean tooClose(List<Vec3d> used, Vec3d candidate, double minDistance) {
+        if (used == null || candidate == null) {
+            return false;
+        }
+        double limit = minDistance * minDistance;
         for (Vec3d existing : used) {
+            if (existing == null) {
+                continue;
+            }
             double dx = existing.x() - candidate.x();
+            double dy = existing.y() - candidate.y();
             double dz = existing.z() - candidate.z();
-            if (dx * dx + dz * dz < 0.25) {
+            if (dx * dx + dy * dy + dz * dz < limit) {
                 return true;
             }
         }
@@ -655,6 +688,22 @@ public final class SquadManager implements Reloadable {
             return adapter.isSpawnSafe(worldName, position);
         } catch (Throwable t) {
             logger.fine("[NullArmy] spawn-safety check failed: " + Guard.describe(t));
+            return false;
+        }
+    }
+
+    /**
+     * Entity-occupancy check that can never throw.
+     *
+     * <p>Block safety alone lets two Nulls be planned into the same space; the
+     * adapter then refuses the second one, which is a lost Null the owner is told
+     * about. Checking first means the planner picks a different spot instead.</p>
+     */
+    public boolean isFree(String worldName, Vec3d position) {
+        try {
+            return adapter.isEntitySpaceFree(worldName, position);
+        } catch (Throwable t) {
+            logger.fine("[NullArmy] entity-space check failed: " + Guard.describe(t));
             return false;
         }
     }

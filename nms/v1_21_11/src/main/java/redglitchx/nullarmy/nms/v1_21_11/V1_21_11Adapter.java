@@ -111,7 +111,7 @@ public final class V1_21_11Adapter implements VersionAdapter {
 
         World bukkitWorld = Bukkit.getWorld(request.worldName());
         if (bukkitWorld == null) {
-            throw new IllegalStateException("world not found: " + request.worldName());
+            throw new SpawnRefusedException("world not found: " + request.worldName());
         }
         ServerLevel level = ((CraftWorld) bukkitWorld).getHandle();
 
@@ -126,25 +126,26 @@ public final class V1_21_11Adapter implements VersionAdapter {
                 ? isAirborneSpawnSafe(request.worldName(), request.position())
                 : isSpawnSafe(request.worldName(), request.position());
         if (!safe) {
-            throw new IllegalStateException("refusing to spawn Null at unsafe position "
+            throw new SpawnRefusedException("refusing to spawn Null at unsafe position "
                     + request.position()
                     + (request.airborne()
                         ? " - the air-drop position is not clear of blocks"
                         : " - no teleporting out of bad spots"));
         }
         if (!isEntitySpaceFree(level, request.position())) {
-            throw new IllegalStateException("refusing to spawn Null at " + request.position()
+            throw new SpawnRefusedException("refusing to spawn Null at " + request.position()
                     + " - another entity is already standing there");
         }
 
         String name = request.profileName();
         if (name == null || name.trim().isEmpty()) {
-            throw new IllegalStateException("a Null needs a profile name");
+            throw new SpawnRefusedException("a Null needs a profile name");
         }
         if (name.length() > 16) {
             // A longer name is rejected by the protocol's PLAYER_NAME codec, which
             // would fail the whole spawn far away from the real cause.
-            throw new IllegalStateException("profile name is longer than 16 characters: " + name);
+            throw new SpawnRefusedException(
+                    "profile name is longer than 16 characters: " + name);
         }
 
         GameProfile profile = new GameProfile(UUID.randomUUID(), name);

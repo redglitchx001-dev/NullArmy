@@ -104,6 +104,25 @@ public interface VersionAdapter {
     }
 
     /**
+     * A spawn was refused for a reason that is <b>not</b> a broken adapter: the
+     * position is not collision-safe, another entity is already standing there,
+     * the world is gone, or the name is unusable.
+     *
+     * <p>Callers must not latch a session-wide spawn breaker for one of these -
+     * the next candidate position may be perfectly good. Everything else the
+     * adapter throws means the registration itself failed, which is a different
+     * thing and does deserve the latch.</p>
+     */
+    class SpawnRefusedException extends IllegalStateException {
+
+        private static final long serialVersionUID = 1L;
+
+        public SpawnRefusedException(String message) {
+            super(message);
+        }
+    }
+
+    /**
      * Spawns a Null at a position the caller has already verified as safe.
      *
      * <p>The adapter must re-verify: safe spawn validation is a server-authority
