@@ -246,11 +246,11 @@ public final class NullLifecycleListener implements Listener {
      * vanilla one, only counted here.
      */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onPickup(org.bukkit.event.player.PlayerPickupItemEvent event) {
-        if (event == null || event.getPlayer() == null || plugin.brain() == null) {
+    public void onPickup(org.bukkit.event.entity.EntityPickupItemEvent event) {
+        if (event == null || event.getEntity() == null || plugin.brain() == null) {
             return;
         }
-        UUID id = event.getPlayer().getUniqueId();
+        UUID id = event.getEntity().getUniqueId();
         if (plugin.adapter() == null || !plugin.adapter().isNullEntity(id)) {
             return;
         }
@@ -260,7 +260,7 @@ public final class NullLifecycleListener implements Listener {
         }
         plugin.brain().notePickup(body);
         if (plugin.chatGate() != null) {
-            plugin.chatGate().event("loot.pickup", "null", event.getPlayer().getName(),
+            plugin.chatGate().event("loot.pickup", "null", event.getEntity().getName(),
                     "item", event.getItem() == null || event.getItem().getItemStack() == null
                             ? "?" : event.getItem().getItemStack().getType().name());
         }

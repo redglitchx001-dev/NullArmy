@@ -915,14 +915,19 @@ public final class NullBrain implements Reloadable {
      * guarding after greeting his commander.</p>
      */
     private void homecomingSalute(NullBody body, Mind mind, String world, Vec3d pos) {
-        if (v3 == null || !v3.campLife() || mind.order == null) {
+        if (v3 == null || !v3.campLife()) {
             return;
         }
-        Mind.Verb verb = mind.order.verb;
-        if (verb != Mind.Verb.HOLD && verb != Mind.Verb.DEFEND && verb != Mind.Verb.PATROL) {
+        // L-03: a guard salutes when the owner comes within 8 blocks - whether
+        // he was told to hold, to defend, to patrol, or nothing at all.
+        if (mind.order != null && mind.order.verb != Mind.Verb.HOLD && mind.order.verb != Mind.Verb.DEFEND
+                && mind.order.verb != Mind.Verb.PATROL) {
             return;
         }
-        UUID ownerUuid = mind.order.issuer;
+        UUID ownerUuid = mind.order == null ? null : mind.order.issuer;
+        if (ownerUuid == null && plugin.squads() != null) {
+            ownerUuid = plugin.squads().ownerOf(body);
+        }
         if (ownerUuid == null) {
             return;
         }
@@ -942,6 +947,13 @@ public final class NullBrain implements Reloadable {
         }
         mind.lastOwnerNearTick = now;
         Mind.Order standing = mind.order;
+        if (standing != null) {
+            mind.orderAfterSalute = standing;
+            mind.order = new Mind.Order(Mind.Verb.SALUTE, null, ownerUuid, ownerUuid, now, 1);
+            mind.saluted = false;
+            return;
+        }
+        // Idle: salute in place and go back to whatever it was doing (nothing).
         mind.order = new Mind.Order(Mind.Verb.SALUTE, null, ownerUuid, ownerUuid, now, 1);
         mind.saluted = false;
         mind.orderAfterSalute = standing;

@@ -348,7 +348,7 @@ final class SelfTestV4 {
         for (int i = 0; i < 6; i++) {
             steps.add(() -> t.gap(20));
         }
-        steps.add(this::l07Check);        // S-114 chase
+        steps.add(this::l07Kill);         // S-114
         steps.add(() -> t.gap(20));
         steps.add(() -> t.gap(20));
         steps.add(this::l07Regroup);      // S-114 regroup
@@ -376,7 +376,7 @@ final class SelfTestV4 {
             victim = squadB.members().get(0);
             plugin.brain().combat().resetCounters();
             plugin.brain().order(List.of(attacker), Mind.Verb.HUNT, null, victim.uuid(),
-                    attacker.uuid(), 1);
+                    plugin.squads().ownerOf(attacker), 1);
             Mind mind = plugin.brain().mind(attacker);
             if (mind != null && mind.order != null) {
                 mind.order.chaser = true;
@@ -506,7 +506,7 @@ final class SelfTestV4 {
             victim = squadB.members().get(0);
             plugin.brain().combat().resetCounters();
             plugin.brain().order(List.of(attacker), Mind.Verb.HUNT, null, victim.uuid(),
-                    attacker.uuid(), 1);
+                    plugin.squads().ownerOf(attacker), 1);
             Mind mind = plugin.brain().mind(attacker);
             if (mind != null && mind.order != null) {
                 mind.order.chaser = true;
@@ -579,17 +579,27 @@ final class SelfTestV4 {
         boolean obsidian = false;
         boolean staggered = false;
         int frames = 0;
+        String refusal = "";
         try {
-            List<Vec3d> spots = new ArrayList<>();
-            for (int i = 0; i < 6; i++) {
-                spots.add(at(36 + (i % 3) * 2, 24 + (i / 3) * 2));
-            }
-            long before = plugin.currentTick();
-            squad = plugin.squads().spawnSquadAt(owner("p03b"), worldName, spots);
             // Ask the portal manager where it really put the doorways rather
             // than guessing around the bodies: a portal is a frame, not a body.
-            List<redglitchx.nullarmy.plugin.portal.PortalBuilder.BuiltPortal> standing =
-                    plugin.portals() == null ? List.of() : plugin.portals().standing();
+            // Sites can be refused (something already standing there), so try a
+            // couple of clearings before concluding the frame was never built.
+            List<redglitchx.nullarmy.plugin.portal.PortalBuilder.BuiltPortal> standing = List.of();
+            for (int attempt = 0; attempt < 3 && standing.isEmpty(); attempt++) {
+                if (squad != null) {
+                    dismissAll();
+                }
+                List<Vec3d> here = new ArrayList<>();
+                for (int i = 0; i < 6; i++) {
+                    here.add(at(36 + attempt * 14 + (i % 3) * 2, 24 + (i / 3) * 2));
+                }
+                squad = plugin.squads().spawnSquadAt(owner("p03b"), worldName, here);
+                standing = plugin.portals() == null ? List.of() : plugin.portals().standing();
+                if (plugin.portals() != null && !standing.isEmpty()) {
+                    refusal = plugin.portals().lastRefusal();
+                }
+            }
             frames = standing.size();
             for (redglitchx.nullarmy.plugin.portal.PortalBuilder.BuiltPortal portal : standing) {
                 if (!worldName.equals(portal.worldName())) {
@@ -621,7 +631,8 @@ final class SelfTestV4 {
         }
         check("S-90", "P-03", obsidian && staggered, "the arrival portal is built from real obsidian blocks"
                 + " and the squad emerges from it staggered, not in one tick (" + frames + " frame(s) standing,"
-                + " obsidian=" + obsidian + ", staggered=" + staggered + ")");
+                + " obsidian=" + obsidian + ", staggered=" + staggered
+                + (refusal == null || refusal.isEmpty() ? "" : ", last refusal: " + refusal) + ")");
         dismissAll();
         if (plugin.portals() != null) {
             Guard.attempt(plugin.getLogger(), "v4 portal cleanup", plugin.portals()::restoreAll);
@@ -748,7 +759,8 @@ final class SelfTestV4 {
         boolean wired = settings() != null && Math.abs(settings().aimSkill() - 0.65D) < 0.001D;
         double maxError = AimSkill.maxAngleErrorDeg(AimSkill.DEFAULT);
         boolean spread = maxError >= 4.0D && maxError <= 10.0D
-                && Math.abs(AimSkill.angleErrorDeg(AimSkill.DEFAULT, 0.5D)) > 0.0D
+                && Math.abs(AimSkill.angleErrorDeg(AimSkill.DEFAULT, 0.75D)) > 0.0D
+                && Math.abs(AimSkill.angleErrorDeg(AimSkill.DEFAULT, 0.25D)) > 0.0D
                 && AimSkill.maxAngleErrorDeg(1.0D) == 0.0D;
         check("S-94", "P-05", band && wired && spread,
                 "at 15 blocks the aim model hits " + String.format(Locale.ROOT, "%.0f%%", rate * 100.0D)
@@ -1101,6 +1113,7 @@ final class SelfTestV4 {
     // ------------------------------------------------------------------- L-02
 
     private final List<Material> dugMaterials = new ArrayList<>();
+    private volatile int gapSurfaceY;
 
     private void l02Setup() {
         dismissAll();
@@ -1110,7 +1123,10 @@ final class SelfTestV4 {
             Vec3d spot = at(50, 20);
             int bx = (int) Math.floor(spot.x());
             int bz = (int) Math.floor(spot.z());
+            // by is the block a walker stands ON; the gap takes it and the one
+            // below away, so a bridge is the deck coming back.
             int by = world.getHighestBlockYAt(bx, bz);
+            gapSurfaceY = by;
             for (int dz = 1; dz <= 2; dz++) {
                 for (int dy = 0; dy <= 1; dy++) {
                     Block block = world.getBlockAt(bx, by - dy, bz + dz);
@@ -1156,10 +1172,11 @@ final class SelfTestV4 {
             int by = world.getHighestBlockYAt(bx, bz);
             int solid = 0;
             for (int dz = 1; dz <= 2; dz++) {
-                if (!world.getBlockAt(bx, by - 1, bz + dz).getType().isAir()) {
+                if (!world.getBlockAt(bx, by, bz + dz).getType().isAir()) {
                     solid++;
                 }
             }
+            gapSurfaceY = by;
             detail = bridged + " block(s) placed, " + solid + " of 2 gap blocks now solid, "
                     + carried + " planks left in the pack";
             ok = bridged >= 1 && solid >= 1 && carried < 32;
@@ -1285,6 +1302,7 @@ final class SelfTestV4 {
             SquadManager.Squad stand = plugin.squads().spawnSquadAt(owner("l06owner"), worldName,
                     List.of(at(70, 20)));
             Player ownerHandle = handle(stand.members().get(0));
+            owners.add(ownerHandle.getUniqueId());   // dismissed with everything else
             squad = plugin.squads().spawnSquadAt(ownerHandle.getUniqueId(), worldName, List.of(at(72, 20)));
             NullBody body = squad.members().get(0);
             attachment = ownerHandle.addAttachment(plugin, "nullarmy.summon", true);
@@ -1469,12 +1487,21 @@ final class SelfTestV4 {
                 }
             }
             dropsBefore = itemsBefore;
+            int carried = 0;
+            for (ItemStack stack : handle.getInventory().getContents()) {
+                if (stack != null && stack.getType() != Material.AIR) {
+                    carried++;
+                }
+            }
+            carriedBefore = carried;
             dropsAt = handle.getLocation();
             handle.setHealth(0.0D);
         } catch (Throwable e) {
             notes.add("p10 kill threw " + Guard.describe(e));
         }
     }
+
+    private int carriedBefore;
 
     private Location dropsAt;
     private int dropsBefore;
@@ -1495,10 +1522,11 @@ final class SelfTestV4 {
             boolean enabled = settings() == null || settings().dropsEnabled();
             boolean chance = DeathDrops.shouldDrop(true, 1.0D, 0.5D);
             boolean legacyWins = !DeathDrops.enabled(false, true);
-            detail = "drops enabled=" + enabled + ", chance 1.0 drops=" + chance + ", legacy no-drops wins="
-                    + legacyWins + ", the death listed " + recorded + " item(s), " + itemsAfter
+            detail = "the Null carried " + carriedBefore + " stack(s), drops enabled=" + enabled
+                    + ", chance 1.0 drops=" + chance + ", legacy no-drops wins=" + legacyWins
+                    + ", the death listed " + recorded + " item(s), " + itemsAfter
                     + " on the ground (was " + dropsBefore + ")";
-            ok = enabled && chance && legacyWins && (recorded >= 3 || itemsAfter >= 3);
+            ok = enabled && chance && legacyWins && carriedBefore >= 3 && (recorded >= 3 || itemsAfter >= 3);
         } catch (Throwable e) {
             ok = false;
             detail = Guard.describe(e);
@@ -1620,24 +1648,13 @@ final class SelfTestV4 {
             SquadManager.Squad stand = plugin.squads().spawnSquadAt(owner("l07owner"), worldName,
                     List.of(at(94, 20)));
             Player commander = handle(stand.members().get(0));
+            owners.add(commander.getUniqueId());   // dismissed with everything else
             squad = plugin.squads().spawnSquadAt(commander.getUniqueId(), worldName,
                     List.of(at(97, 20), at(99, 20), at(101, 20), at(103, 20)));
             squadB = plugin.squads().spawnSquadAt(owner("l07b"), worldName, List.of(at(106, 20)));
             NullBody prey = squadB.members().get(0);
             plugin.brain().hunt(squad.members(), prey.uuid(), commander.getUniqueId(), 2);
-        } catch (Throwable e) {
-            notes.add("l07 setup threw " + Guard.describe(e));
-        }
-    }
-
-    private int huntChasers;
-    private int huntHolders;
-
-    /** Two chase, the rest hold. */
-    private void l07Check() {
-        huntChasers = 0;
-        huntHolders = 0;
-        try {
+            // Who chases and who holds is decided the moment the order lands.
             for (NullBody body : squad.members()) {
                 Mind mind = plugin.brain().mind(body);
                 if (mind == null || mind.order == null || mind.order.verb != Mind.Verb.HUNT) {
@@ -1651,9 +1668,12 @@ final class SelfTestV4 {
                 }
             }
         } catch (Throwable e) {
-            notes.add("l07 check threw " + Guard.describe(e));
+            notes.add("l07 setup threw " + Guard.describe(e));
         }
-        // The target dies in its own step: the army has to notice by itself.
+    }
+
+    /** The target dies in its own step: the army has to notice by itself. */
+    private void l07Kill() {
         try {
             NullBody prey = squadB.members().get(0);
             Player preyHandle = handle(prey);
@@ -1664,6 +1684,9 @@ final class SelfTestV4 {
             notes.add("l07 kill threw " + Guard.describe(e));
         }
     }
+
+    private int huntChasers;
+    private int huntHolders;
 
     /** Once the target is gone, everyone comes home on its own. */
     private void l07Regroup() {
@@ -1678,6 +1701,9 @@ final class SelfTestV4 {
                 }
             }
             int engagements = plugin.brain().huntEngagements();
+            if (huntChasers == 0 && huntHolders == 0) {
+                notes.add("l07: no HUNT order survived to the regroup step");
+            }
             detail = huntChasers + " chasing, " + huntHolders + " holding, engagements " + engagements
                     + ", regrouping after the kill " + regrouping;
             ok = huntChasers >= 1 && huntChasers <= 2 && huntHolders >= 1 && regrouping >= 1;

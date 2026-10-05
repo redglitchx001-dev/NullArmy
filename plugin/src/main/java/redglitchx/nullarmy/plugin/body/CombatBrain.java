@@ -229,13 +229,19 @@ public final class CombatBrain {
         float cooldown = handle.getAttackCooldown();
         double reach = reach();
         float gate = threshold();
+        // A shield that is up stays up: a player cannot swing and block at the
+        // same time, and a guard who drops his guard to take a free swing is
+        // not guarding. The brain lowers it (raiseShield, below) on the tick it
+        // decides to press the attack, and swings on the next one.
+        boolean blocking = mind.shieldUp || (handle.isHandRaised() && handle.getActiveItem() != null
+                && handle.getActiveItem().getType() == Material.SHIELD);
         if (dist > reach - 0.3D) {
             // Close the gap; sprinting, so the first hit carries sprint knockback.
             intent.dx = dx / dist;
             intent.dz = dz / dist;
             intent.gait = dist > 4.0D ? NullBody.GAIT_SPRINT : NullBody.GAIT_RUN;
             // P-02: swing as soon as the meter is worth it, not only at full.
-            if (SwingCadence.ready(cooldown) && strikeAllowed(handle, target)) {
+            if (!blocking && SwingCadence.ready(cooldown) && strikeAllowed(handle, target)) {
                 strike(handle, mind, target, now, fallingFor(body));
             }
             brain.raiseShield(handle, mind, v3.shields() && cooldown < gate && dist < 5.0D);
@@ -254,7 +260,7 @@ public final class CombatBrain {
         intent.dz = nx * mind.strafeDir * 0.6D + nz * radial;
         intent.gait = NullBody.GAIT_RUN;
 
-        if (SwingCadence.ready(cooldown) && dist <= reach) {
+        if (!blocking && SwingCadence.ready(cooldown) && dist <= reach) {
             // P-01: the strike still has to be legal - inside reach AND with a
             // clear line of sight. A Null that cannot see its target does not
             // swing at it, and it certainly does not damage it.
