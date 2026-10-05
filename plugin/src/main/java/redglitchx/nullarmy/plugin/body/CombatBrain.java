@@ -364,9 +364,17 @@ public final class CombatBrain {
                 && handle.getActiveItem().getType() == Material.SHIELD;
     }
 
-    /** True when vanilla would call this a falling strike (the crit condition). */
+    /**
+     * True when vanilla would call this a falling strike (the crit condition).
+     *
+     * <p>A body off the ground is a falling body. Measuring its downward
+     * velocity and its fall distance as well looked precise and was not: those
+     * two readings can lag a tick behind the body itself, so a crit jump was
+     * waited out instead of struck on the way down - which is a fighter that
+     * jumps and never lands the blow it jumped for.</p>
+     */
     private boolean fallingFor(NullBody body) {
-        return !body.onGround() && body.velocity().y() < 0.0D && body.fallDistance() > 0.0D;
+        return !body.onGround();
     }
 
     /** One vanilla swing: arm swing, then {@code Player#attack}. */

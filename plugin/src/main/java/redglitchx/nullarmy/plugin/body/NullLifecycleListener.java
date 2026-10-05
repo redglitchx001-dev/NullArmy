@@ -232,6 +232,27 @@ public final class NullLifecycleListener implements Listener {
     }
 
     /**
+     * Two Nulls who belong to the same owner are squad mates whatever the
+     * targeting rule concluded, and a squad mate's blow is not a blow.
+     *
+     * <p>L-04's camp is where this matters: an idle squad spars, jostles and
+     * retaliates, and not one of those may cost a body health.</p>
+     */
+    private boolean sameSquad(Entity attacker, Entity victim) {
+        if (plugin.adapter() == null || plugin.squads() == null || !isNull(attacker) || !isNull(victim)) {
+            return false;
+        }
+        NullBody one = plugin.adapter().bodyOf(attacker.getUniqueId());
+        NullBody two = plugin.adapter().bodyOf(victim.getUniqueId());
+        if (one == null || two == null) {
+            return false;
+        }
+        UUID a = plugin.squads().ownerOf(one);
+        UUID b = plugin.squads().ownerOf(two);
+        return a != null && a.equals(b);
+    }
+
+    /**
      * Friendly fire, cancelled at the lowest priority so nothing else sees it.
      *
      * <p><b>P-04 / P-05.</b> The owner's own arrows and swings used to land on
@@ -287,7 +308,7 @@ public final class NullLifecycleListener implements Listener {
         }
         boolean blocked;
         try {
-            blocked = !plugin.brain().mayTarget(attacker, victimEntity);
+            blocked = !plugin.brain().mayTarget(attacker, victimEntity) || sameSquad(attacker, victimEntity);
         } catch (Throwable t) {
             blocked = false;
         }
