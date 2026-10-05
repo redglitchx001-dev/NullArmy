@@ -1,5 +1,79 @@
 # NullArmy release notes
 
+## v4 — "an army, not a crowd" (branch `arena/01a10afa-nullarmy`)
+
+Everything in the v4 dossier (P-01 … P-12, L-01 … L-08) is implemented **in place** on top of v3
+and ships with a live regression check (`S-85` … `S-115`) that runs on a real Paper 1.21.11 server
+inside `./gradlew build`. The v3 checks (S-27 … S-84), the original 26 and the core suite still run
+and still pass.
+
+Two standing laws were kept throughout: **the verification law** (a fix is only claimed when its
+check passes in the live runtime smoke; a check that cannot run headless prints
+`BLOCKED: <reason>` and then asserts the closest measurable thing — BLOCKED is never a pass) and
+**physical honesty** (no fly, no noclip, no invulnerability, no schematic paste; every block is
+walked to, swung at, placed or broken by hand, one per swing).
+
+### The promises, and how each one is measured
+
+| Promise | What it means | Live check |
+| --- | --- | --- |
+| **P-01** | Melee reach is exactly vanilla: ≤ 3.0 eye-to-target **with** line of sight, never through a wall or a corner. | S-85 damage really lands inside reach; S-86 zero damage with the reach forced below the fighting distance, and the gate refuses a strike through a real wall |
+| **P-02** | Swing at the cooldown (≥ ~5 swings in 3 s), crits every 1-2 swings while falling. | S-87, S-88 |
+| **P-03** | Readable unique names ≤ 16 chars (a themed word + a small number: `Voidwalker`, `Null_07`, `Grimjaw_12`), never hex, never a UUID; staggered portal emergence, swirl at the mouth only, real obsidian + purple frame. | S-89, S-90 |
+| **P-04** | The totem/horn holder is the sole commander; Nulls never hit the owner, the Commander or their mates; an order that is not the owner's moves nothing. | S-91, S-92 |
+| **P-05** | No friendly fire — a `NullArmy-<owner8>` team with friendly fire off **and** an event filter behind it. Imperfect aim (`combat.aim-skill`, 0-1, default 0.65): ±4-10° of error, lead error, 0.3-0.8 s of reaction time, full misses beyond 12 blocks. Perfect aim is banned. | S-93, S-94 |
+| **P-06** | Nulls keep the netherite kit; the Commander gets a boss kit (mace, elytra, ×2 totems, ×4 enchanted gapples, wind charges, rockets, netherite sword). Fresh installs get it; a saved `commander.yml` is never overwritten. | S-95 |
+| **P-07** | Build v2: owner-relative goals (`bridge in front of me` → ≥ 5 blocks along the facing from 2 ahead; `a throne` → seat, back, armrests, gold/wool accents, facing the owner). `ai.builder.endpoint` accepts any OpenAI-compatible base URL **or** `id:<name>` from `ai.endpoints`. | S-96, S-97, S-98 |
+| **P-08** | The Orbital Wither Cannon fires **wither-blue skulls** instead of TNT minecarts. Rod aiming (`/null cannon aim` → rod `NullAim`; stand = launch column, look = raycast to `range`, right-click locks the target with a particle marker + coordinates). Opt-in (`nullarmy.admin`, `enabled: false`), a confirm step, `blocks-damage: false`, and it never hurts the owner or his Nulls. | S-99, S-100 |
+| **P-09** | Natural chat orders through a **pure, core, testable** `OrderParser`. Wake words `null`/`commander` **or** `@<commander.name>`/name prefix. An attack persists until the target is dead or gone; the owner, mates and `policy.protected` are never targeted; `destroy` needs `policy.griefing-enabled` **and** a confirm, otherwise **one console refusal line** and nothing said in chat. A non-owner's sentence is ignored in silence. | S-106 … S-109 |
+| **P-10** | Nulls drop armour, hands and inventory on death (`drops.enabled: true`, `drops.chance: 1.0`). Player drops stay vanilla; nothing is void-deleted. | S-110 |
+| **P-11** | `ServerListPingEvent`: `numPlayers` = real online + live Nulls, `max` = `motd.max-players` (2026), MOTD = `motd.format` (`NULL ARMY - {nulls} strong`), hover sample lists the army first. | S-111, S-112 |
+| **P-12** | `commander.name` (default `NullCommander`) with a live rename `/null name <new>`. Anybody may talk to him by name and gets a one-or-two-line in-chat reply; only the owner is obeyed. | S-113 |
+| **L-01** | March and drill on **one shared cadence**, locked formation, cycling line → wedge → phalanx. | S-101 |
+| **L-02** | Auto-bridge gaps shallower than 4 blocks out of the body's own pack, sneaking at the edge. | S-102 |
+| **L-03** | `patrol <a> <b>` for ever; `guard here` with head sweeps and a salute when the owner returns within 8 blocks. | S-103 |
+| **L-04** | Camp life — ring round the light, spar in pairs with **zero** damage, eat when hurt, haul blocks to a builder in need (`behaviour.camp-life: true`). | S-104 |
+| **L-05** | One scoreboard team per squad, friendly fire off, shared trim. | S-93 |
+| **L-06** | Sneak + horn is the **recall** — the squad comes home in formation on the march cadence, never a new summon prompt. | S-105 |
+| **L-07** | Hunt to the end: the order persists, at most two chasers, the rest hold, everyone regroups when the target is gone. | S-114 |
+| **L-08** | Loot discipline — pick up the drops of the players they defeat. | S-115 |
+
+### New commands
+
+| Command | What it does |
+| --- | --- |
+| `/null name <new>` | Renames the Commander live and writes `commander.yml` (P-12). |
+| `/null cannon aim` | Hands you the `NullAim` rod: stand = launch column, look = raycast to `range`, right-click locks the target. |
+| `/null cannon fire [shots]` | Opens a confirm. Nothing is created until `/null cannon confirm`. `/null cannon cancel` stands down. |
+| `/null ai test [id]` | One real HTTP call: prints the endpoint, the **HTTP status**, the **model** and the round trip (P-07). |
+| `/null ai endpoints` | Every configured endpoint, what resolves, and a warning for any inline API key. |
+| `/null order … march\|drill\|patrol\|bridge\|salute\|regroup\|hunt\|destroy` | The L-01…L-08 and P-09 orders. `patrol here to <x> <y> <z>`, `bridge [blocks]`, `hunt <player> [chasers]`. |
+
+### New settings (appended to an existing config.yml automatically, with a backup)
+
+`commander.name` · `chat.mention-prefix: "@"`, `chat.silence-units` · `policy.protected: []` ·
+`combat.aim-skill: 0.65`, `combat.melee-reach: 3.0`, `combat.initiate: false` ·
+`drops.enabled: true`, `drops.chance: 1.0` · `motd.show-army: true`, `motd.max-players: 2026`,
+`motd.format: "NULL ARMY - {nulls} strong"` · `behaviour.camp-life|auto-bridge|march-cadence: true` ·
+`names.style: "words"` · `wither-cannon.shots: 3`, `.minecarts-per-shot: 24`, `.pattern: "sphere"`,
+`.fuse-ticks: 60`, `.shot-delay-ticks: 10`, `.range: 120`, `.enabled: false`, `.blocks-damage: false` ·
+`ai.builder.endpoint: ""`, `ai.builder.gather-outside-zone: false`.
+
+Every count is capped at 100. **Every new boolean defaults to true except**
+`wither-cannon.enabled` (false), `combat.initiate` (false), `ai.builder.gather-outside-zone` (false)
+and `policy.griefing-enabled` (false) — nothing destructive or expensive is on by default.
+
+### The one change you asked for by name
+
+> Instead of TNT minecarts, use wither blue skulls.
+
+The barrage no longer creates a TNT minecart or a TNT entity anywhere. The payload count
+(`wither-cannon.minecarts-per-shot`, 24) is kept and now means *skulls per shot*; each skull is a
+real `WitherSkull` with `setCharged(true)` — charged is what makes a wither skull **blue**. S-100
+asserts that **not one TNT entity exists in the world** for the barrage.
+
+---
+
 ## v3 — "bodies that behave like players" (branch `arena/01a10811-nullarmy`)
 
 Every bug in the v3 dossier (B-01 … B-17) is fixed **at its root** and ships with a regression
