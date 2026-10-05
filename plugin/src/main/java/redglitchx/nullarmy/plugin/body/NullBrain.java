@@ -652,7 +652,7 @@ public final class NullBrain implements Reloadable {
             return Intent.stop();
         }
         double fromCell = Math.hypot(cell.x() - pos.x(), cell.z() - pos.z());
-        Intent intent = mind.atCell && fromCell < 0.35D ? null
+        Intent intent = mind.atCell && fromCell < 0.25D ? null
                 : steerTo(body, mind, world, pos, cell, 0.15D, NullBody.GAIT_RUN);
         mind.atCell = intent == null;
         if (intent == null) {

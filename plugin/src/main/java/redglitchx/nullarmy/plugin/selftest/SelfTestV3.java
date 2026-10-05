@@ -242,10 +242,19 @@ final class SelfTestV3 {
         }
         int removed = 0;
         for (Entity e : world.getNearbyEntities(new Location(world, origin.x(), origin.y(), origin.z()), 72, 32, 72)) {
-            if (e instanceof org.bukkit.entity.Enemy && !(e instanceof Player)) {
-                e.remove();
-                removed++;
+            if (!(e instanceof org.bukkit.entity.LivingEntity) || e instanceof Player) {
+                continue;
             }
+            if (plugin.adapter() != null && plugin.adapter().isNullEntity(e.getUniqueId())) {
+                continue; // our own bodies
+            }
+            if (extraEntities.contains(e)) {
+                continue; // a deliberate fixture (the thrown pig)
+            }
+            // Anything else wandering here - slimes, cows, bats - bumps bodies
+            // mid-measurement and ruins timing and distance checks.
+            e.remove();
+            removed++;
         }
         enemiesRemoved += removed;
     }
@@ -719,7 +728,8 @@ final class SelfTestV3 {
             cellPoints.add(new double[] {cell.x(), cell.z()});
         }
         check("S-51", "B-07", worst <= 0.3D && squad.members().size() == 9,
-                "9 Nulls stand in the rotated square matrix, each within 0.3 of its cell (worst "
+                "9 Nulls stand in the rotated square matrix, each within 0.3 of its cell ("
+                        + squad.members().size() + " members, worst "
                         + String.format(Locale.ROOT, "%.2f", worst) + (worst > 0.3D ? "; " + worstNote : "") + ")");
         double minCell = redglitchx.nullarmy.core.formation.FormationMatrix.minPairDistance(cellPoints);
         check("S-52", "B-07", cells.size() == squad.members().size() && minCell >= 1.1D - 1.0e-6,
