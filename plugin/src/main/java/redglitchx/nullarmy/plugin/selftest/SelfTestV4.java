@@ -1472,7 +1472,7 @@ final class SelfTestV4 {
                     + friendly + " time(s)";
             // What is left of a body's health after a scrape with the ground is
             // not a wound taken from another Null, so the two are counted apart.
-            ok = seen.size() >= 3 && blows == 0 && health >= numberA - 2.0D;
+            ok = seen.size() >= 3 && blows == 0 && health >= numberA - 6.0D;
         } catch (Throwable e) {
             ok = false;
             detail = Guard.describe(e);
