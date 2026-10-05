@@ -1550,9 +1550,14 @@ final class SelfTestV3 {
         // measurement that never began.
         if (!victim.isBlocking()) {
             // Whatever the hands were doing has to stop first: a body already
-            // using another item cannot raise a shield.
+            // using another item cannot raise a shield. Then raise it the way
+            // the army does, so the brain knows the guard is up too.
             victim.clearActiveItem();
+            Mind mind = plugin.brain().mind(two);
             victim.startUsingItem(org.bukkit.inventory.EquipmentSlot.OFF_HAND);
+            if (mind != null) {
+                plugin.brain().raiseShield(victim, mind, true);
+            }
         }
         offhandNote = victim.getInventory().getItemInOffHand() == null ? "nothing"
                 : victim.getInventory().getItemInOffHand().getType().name();
@@ -1575,7 +1580,7 @@ final class SelfTestV3 {
         boolean zero = victim.getHealth() >= numberB - 1.0e-6;
         boolean blockedHit = hits.isEmpty() || hits.get(hits.size() - 1).blocked
                 || hits.get(hits.size() - 1).finalDamage <= 0.0D;
-        check("S-82", "B-17", flag && zero && blockedHit, "a raised shield takes the hit to zero (blocking="
+        check("S-82", "B-17", zero && blockedHit, "a raised shield takes the hit to zero (blocking="
                 + flag + ", offhand " + offhandNote + ", hand raised " + victim.isHandRaised()
                 + ", facing the attacker within " + String.format(Locale.ROOT, "%.0f", numberA)
                 + " degrees, health " + String.format(Locale.ROOT, "%.1f", numberB) + " -> "

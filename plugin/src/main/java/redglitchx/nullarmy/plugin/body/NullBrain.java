@@ -1739,7 +1739,8 @@ public final class NullBrain implements Reloadable {
     }
 
     /** Raises or lowers the offhand shield. */
-    void raiseShield(Player handle, Mind mind, boolean up) {
+    /** Raises or lowers a shield, the way a Null does it in a fight. */
+    public void raiseShield(Player handle, Mind mind, boolean up) {
         if (handle == null) {
             return;
         }

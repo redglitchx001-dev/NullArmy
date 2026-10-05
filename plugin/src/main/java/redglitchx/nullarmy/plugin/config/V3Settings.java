@@ -89,6 +89,7 @@ public final class V3Settings {
     private volatile Boolean dropsOverride;
     /** Self test override for {@code combat.melee-reach} (P-01 wiring). */
     private volatile Double meleeReachOverride;
+    private volatile Boolean bowsOverride;
     /** Self test override for {@code combat.aim-skill} (P-05 wiring). */
     private volatile Double aimSkillOverride;
     /** Self test override for {@code behaviour.camp-life} (L-04). */
@@ -286,7 +287,17 @@ public final class V3Settings {
     public boolean nullsCanHitNulls() { return nullsCanHitNulls; }
     public boolean crits() { return crits; }
     public boolean shields() { return shields; }
-    public boolean bows() { return bows; }
+    /**
+     * Whether Nulls use bows.
+     *
+     * <p>The override exists because a check about MELEE reach has to be able to
+     * take the bow out of the fight: an arrow is not a sword blow, and its range
+     * is not governed by {@code combat.melee-reach}.</p>
+     */
+    public boolean bows() { return bowsOverride == null ? bows : bowsOverride; }
+
+    /** Self test: forces bows on or off without touching the config on disk. */
+    public void setBowsOverride(Boolean override) { this.bowsOverride = override; }
     public boolean retaliate() { return retaliate; }
     public boolean initiate() { return initiate; }
     public boolean fallDamage() { return fallDamage; }
