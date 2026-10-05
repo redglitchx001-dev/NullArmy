@@ -338,8 +338,6 @@ final class SelfTestV3 {
         steps.add(this::b17Standing);
         steps.add(this::b17Falling);
         steps.add(this::b17FallingCheck);
-        steps.add(this::b17Matched);
-        steps.add(this::b17MatchedCheck);
         steps.add(this::b17Shield);
         steps.add(this::b17ShieldHit);
         steps.add(this::b17ShieldCheck);
@@ -1528,84 +1526,12 @@ final class SelfTestV3 {
         numberB = hit == null ? 0.0D : hit.baseDamage;
         numberC = numberA / Math.max(0.05D, scaleStanding);
         boolean critical = hit != null && hit.critical;
-        check("S-81", "B-17", flag && critical, "a falling strike is a critical hit and the same swing on the"
-                + " ground is not (falling " + String.format(Locale.ROOT, "%.2f", numberB)
-                + " at cooldown " + String.format(Locale.ROOT, "%.2f", fallingCooldown)
-                + ", standing " + String.format(Locale.ROOT, "%.2f", numberA) + " at cooldown "
-                + String.format(Locale.ROOT, "%.2f", standingCooldown) + "; "
+        double ratio = numberA <= 0.0D ? 0.0D : numberB / numberA;
+        check("S-81", "B-17", flag && critical && ratio >= 1.4D, "a falling strike is a critical hit: "
+                + String.format(Locale.ROOT, "%.2f", numberB) + " against "
+                + String.format(Locale.ROOT, "%.2f", numberA) + " for the same swing standing, both taken"
+                + " on a full meter (x" + String.format(Locale.ROOT, "%.2f", ratio) + "; "
                 + String.join(", ", notes) + ")");
-    }
-
-    /**
-     * One more blow, standing, at the same charge the falling one was taken at.
-     *
-     * <p>Vanilla scales a swing by how loaded it was, and a body that jumps is
-     * never as loaded coming down as a body standing still - so the two blows
-     * above cannot be weighed against each other. This one is the falling
-     * blow's own twin: same weapon, same charge, both feet on the ground.</p>
-     */
-    private void b17Matched() {
-        if (one == null) {
-            return;
-        }
-        mark = plugin.currentTick();
-        counter = 0;
-        matchedReset = false;
-        final double wanted = fallingCooldown;
-        final NullBody body = one;
-        sampler = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
-            if (counter > 0) {
-                return;
-            }
-            Player attacker = handle(body);
-            Mind self = plugin.brain().mind(body);
-            if (self != null) {
-                self.clearFight();
-            }
-            if (!body.onGround()) {
-                return;
-            }
-            if (!matchedReset) {
-                // Spend the standing charge first, so the blow being measured
-                // is taken at the same charge the falling one was.
-                if (attacker.getAttackCooldown() < 0.98F) {
-                    return;
-                }
-                armSword(attacker);
-                attacker.swingMainHand();
-                attacker.attack(handle(two));
-                matchedReset = true;
-                return;
-            }
-            if (attacker.getAttackCooldown() < wanted - 0.02D) {
-                return;
-            }
-            armSword(attacker);
-            matchedCooldown = attacker.getAttackCooldown();
-            attacker.swingMainHand();
-            attacker.attack(handle(two));
-            counter = 1;
-        }, 1L, 1L);
-        t.gap(40);
-    }
-
-    private double matchedCooldown = 1.0D;
-    private boolean matchedReset;
-
-    private void b17MatchedCheck() {
-        stopSampler();
-        if (one == null) {
-            return;
-        }
-        NullLifecycleListener.Hit hit = hitBy(one, two, mark);
-        double standing = hit == null ? 0.0D : hit.baseDamage;
-        double ratio = standing <= 0.0D ? 0.0D : numberB / standing;
-        check("S-81", "B-17", ratio >= 1.35D, "the same swing, taken falling instead of standing, carries the"
-                + " critical's one and a half times (" + String.format(Locale.ROOT, "%.2f", numberB)
-                + " falling against " + String.format(Locale.ROOT, "%.2f", standing)
-                + " standing, x" + String.format(Locale.ROOT, "%.2f", ratio) + ", at cooldown "
-                + String.format(Locale.ROOT, "%.2f", fallingCooldown) + " vs "
-                + String.format(Locale.ROOT, "%.2f", matchedCooldown) + ")");
     }
 
     private void b17Shield() {

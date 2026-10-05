@@ -1396,6 +1396,9 @@ final class SelfTestV4 {
                 // nobody gets hurt in, and the one thing that can start a fight
                 // with nobody attacking is a remembered blow.
                 settings().setRetaliateOverride(false);
+                // Nor a shooting range: L-04 is about how an idle squad lives,
+                // and an arrow between two mates is not camp life.
+                settings().setBowsOverride(false);
             }
             plugin.brain().resetBehaviourCounters();
             double health = 0.0D;
@@ -1444,6 +1447,7 @@ final class SelfTestV4 {
         if (settings() != null) {
             settings().setCampLifeOverride(null);
             settings().setRetaliateOverride(null);
+            settings().setBowsOverride(null);
         }
         dismissAll();
     }
