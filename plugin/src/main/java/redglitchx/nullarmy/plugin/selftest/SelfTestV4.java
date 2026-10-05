@@ -447,7 +447,12 @@ final class SelfTestV4 {
                 Player attackerHandle = handle(attacker);
                 if (victimHandle != null && attackerHandle != null) {
                     Location at = attackerHandle.getLocation();
-                    victimHandle.teleport(new Location(world, at.getX() + 2.0D, at.getY(), at.getZ()));
+                    // Keep them comfortably inside the check's four-block
+                    // observation window while still outside the forced
+                    // half-block reach.  Even with the same X/Z, the eye to
+                    // target-point distance is about 0.54 blocks, so one block
+                    // of separation cannot pass the 0.5 reach gate.
+                    victimHandle.teleport(new Location(world, at.getX() + 1.0D, at.getY(), at.getZ()));
                 }
                 victim.heal(1000.0D);
             }

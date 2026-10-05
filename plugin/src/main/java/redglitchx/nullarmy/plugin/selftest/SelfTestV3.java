@@ -1550,10 +1550,12 @@ final class SelfTestV3 {
         plugin.brain().forceLook(two, eye(one), 200, false);
         victim.startUsingItem(EquipmentSlot.OFF_HAND);
         counter = 0;
+        shieldWait = 0;
         t.gap(12);
     }
 
     private String offhandNote = "nothing";
+    private int shieldWait;
 
     private void b17ShieldHit() {
         if (one == null) {
@@ -1595,13 +1597,22 @@ final class SelfTestV3 {
                 plugin.brain().raiseShield(victim, mind, true);
             }
         }
+        Player attacker = handle(one);
+        armSword(attacker);
+        if ((!victim.isBlocking() || attacker.getAttackCooldown() < 0.9F) && shieldWait < 8) {
+            // startUsingItem() and the server's attack meter both settle on tick
+            // boundaries.  Do not sample a shield block until the hand is really
+            // raised and the incoming blow can actually be delivered.
+            shieldWait++;
+            t.gap(3);
+            t.retry(this::b17ShieldHit);
+            return;
+        }
         offhandNote = victim.getInventory().getItemInOffHand() == null ? "nothing"
                 : victim.getInventory().getItemInOffHand().getType().name();
         numberB = victim.getHealth();
         flag = victim.isBlocking();
         mark = plugin.currentTick();
-        Player attacker = handle(one);
-        armSword(attacker);
         attacker.swingMainHand();
         attacker.attack(victim);
         t.gap(2);
