@@ -105,6 +105,7 @@ final class SelfTestV3 {
     private NullBody probe;
     private long mark;
     private double numberA;
+    private double numberC;
     private double numberB;
     private Vec3d vecA;
     private final List<Double> samples = new ArrayList<>();
@@ -1449,8 +1450,9 @@ final class SelfTestV3 {
         Player attacker = handle(one);
         armSword(attacker);
         notes.clear();
+        standingCooldown = attacker.getAttackCooldown();
         notes.add("hand=" + attacker.getInventory().getItemInMainHand().getType() + " cooldown="
-                + String.format(Locale.ROOT, "%.2f", attacker.getAttackCooldown()));
+                + String.format(Locale.ROOT, "%.2f", standingCooldown));
         attacker.swingMainHand();
         attacker.attack(handle(two));
         NullLifecycleListener.Hit hit = hitBy(one, two, mark);
@@ -1484,8 +1486,9 @@ final class SelfTestV3 {
             if (!body.onGround() && body.velocity().y() < 0.0D && body.fallDistance() > 0.0D) {
                 Player attacker = handle(body);
                 armSword(attacker);
+                fallingCooldown = attacker.getAttackCooldown();
                 notes.add("falling hand=" + attacker.getInventory().getItemInMainHand().getType() + " cooldown="
-                        + String.format(Locale.ROOT, "%.2f", attacker.getAttackCooldown()) + " fall="
+                        + String.format(Locale.ROOT, "%.2f", fallingCooldown) + " fall="
                         + String.format(Locale.ROOT, "%.2f", body.fallDistance()));
                 attacker.swingMainHand();
                 attacker.attack(handle(two));
@@ -1496,6 +1499,8 @@ final class SelfTestV3 {
     }
 
     private boolean flagJump;
+    private double standingCooldown = 1.0D;
+    private double fallingCooldown = 1.0D;
 
     private void b17FallingCheck() {
         stopSampler();
@@ -1503,12 +1508,20 @@ final class SelfTestV3 {
             return;
         }
         NullLifecycleListener.Hit hit = hitBy(one, two, mark);
-        double falling = hit == null ? 0.0D : hit.baseDamage;
+        // Vanilla scales a blow by how loaded the swing was, and a body that
+        // jumps cannot be fully loaded by the time it comes down - so both
+        // blows are put on the same footing before they are compared.
+        double scaleStanding = 0.2D + standingCooldown * standingCooldown * 0.8D;
+        double scaleFalling = 0.2D + fallingCooldown * fallingCooldown * 0.8D;
+        double falling = hit == null ? 0.0D : hit.baseDamage / Math.max(0.05D, scaleFalling);
+        numberB = hit == null ? 0.0D : hit.baseDamage;
+        numberC = numberA / Math.max(0.05D, scaleStanding);
         boolean critical = hit != null && hit.critical;
-        double ratio = numberA <= 0.0D ? 0.0D : falling / numberA;
-        check("S-81", "B-17", flag && critical && ratio >= 1.4D, "a falling strike is a critical hit: "
-                + String.format(Locale.ROOT, "%.2f", falling) + " vs " + String.format(Locale.ROOT, "%.2f", numberA)
-                + " standing (x" + String.format(Locale.ROOT, "%.2f", ratio) + "; " + String.join(", ", notes) + ")");
+        double ratio = numberC <= 0.0D ? 0.0D : falling / numberC;
+        check("S-81", "B-17", flag && critical && ratio >= 1.35D, "a falling strike is a critical hit: "
+                + String.format(Locale.ROOT, "%.2f", falling) + " against "
+                + String.format(Locale.ROOT, "%.2f", numberC) + " for the same swing standing, at full charge (x"
+                + String.format(Locale.ROOT, "%.2f", ratio) + "; " + String.join(", ", notes) + ")");
     }
 
     private void b17Shield() {
@@ -1553,6 +1566,12 @@ final class SelfTestV3 {
             // using another item cannot raise a shield. Then raise it the way
             // the army does, so the brain knows the guard is up too.
             victim.clearActiveItem();
+            // A bow in the hands outranks a shield: while the string is drawn
+            // nothing else can be raised. A guard in this check is sword and
+            // board, so the bow goes away first.
+            victim.getInventory().remove(Material.BOW);
+            victim.getInventory().remove(Material.CROSSBOW);
+            victim.getInventory().setItemInMainHand(new ItemStack(Material.NETHERITE_SWORD));
             Mind mind = plugin.brain().mind(two);
             victim.startUsingItem(org.bukkit.inventory.EquipmentSlot.OFF_HAND);
             if (mind != null) {

@@ -90,6 +90,7 @@ public final class V3Settings {
     /** Self test override for {@code combat.melee-reach} (P-01 wiring). */
     private volatile Double meleeReachOverride;
     private volatile Boolean bowsOverride;
+    private volatile Boolean retaliateOverride;
     /** Self test override for {@code combat.aim-skill} (P-05 wiring). */
     private volatile Double aimSkillOverride;
     /** Self test override for {@code behaviour.camp-life} (L-04). */
@@ -298,7 +299,11 @@ public final class V3Settings {
 
     /** Self test: forces bows on or off without touching the config on disk. */
     public void setBowsOverride(Boolean override) { this.bowsOverride = override; }
-    public boolean retaliate() { return retaliate; }
+    /** Whether a Null hits back. The self test can force it for one check. */
+    public boolean retaliate() { return retaliateOverride == null ? retaliate : retaliateOverride; }
+
+    /** Self test: forces retaliation on or off without touching the config. */
+    public void setRetaliateOverride(Boolean override) { this.retaliateOverride = override; }
     public boolean initiate() { return initiate; }
     public boolean fallDamage() { return fallDamage; }
     public int shieldDisableTicks() { return shieldDisableTicks; }
