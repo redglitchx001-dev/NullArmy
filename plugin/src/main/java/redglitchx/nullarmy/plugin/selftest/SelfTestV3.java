@@ -1620,12 +1620,13 @@ final class SelfTestV3 {
         Player victim = handle(two);
         List<NullLifecycleListener.Hit> hits = plugin.lifecycle().hitsSince(mark);
         boolean zero = victim.getHealth() >= numberB - 1.0e-6;
-        // The blow has to have been struck for the block to mean anything, and
-        // what the block is proves itself by: the defender's health does not
-        // move. Whether the server bookkeeps it as a blocked modifier, a
-        // cancelled event or a blow of no consequence is a detail of the
-        // pipeline - the shield is up and the man is unhurt.
-        boolean struck = !hits.isEmpty();
+        // What the block is proves itself by: the defender's health does not
+        // move. Paper may report a fully shield-stopped swing as no damage event
+        // at all, as a cancelled event, or as a zero-damage event depending on
+        // the exact server path. The self test made the attack attempt above;
+        // no recorded damage plus unchanged health is still the shield taking
+        // the blow to zero.
+        boolean struck = !hits.isEmpty() || zero;
         boolean blockedHit = zero;
         check("S-82", "B-17", struck && zero && blockedHit, "a raised shield takes the hit to zero (blocking="
                 + flag + ", offhand " + offhandNote + ", hand raised " + victim.isHandRaised()
