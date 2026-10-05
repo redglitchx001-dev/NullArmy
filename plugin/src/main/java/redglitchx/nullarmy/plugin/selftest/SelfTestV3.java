@@ -1543,15 +1543,27 @@ final class SelfTestV3 {
             return;
         }
         Player victim = handle(two);
+        Player attacker = handle(one);
+        // S-81 leaves the attacker coming down from a jump and the victim can be
+        // nudged off its exact mark.  A shield check needs a stable, face-on
+        // sword blow, not fall/knockback noise from the previous sample.
+        Vec3d base = ground(-24, 28);
+        attacker.teleport(new Location(world, base.x(), base.y(), base.z()));
+        victim.teleport(new Location(world, base.x() + 2.2D, base.y(), base.z()));
+        attacker.setVelocity(new org.bukkit.util.Vector(0, 0, 0));
+        victim.setVelocity(new org.bukkit.util.Vector(0, 0, 0));
+        attacker.setFallDistance(0.0F);
+        victim.setFallDistance(0.0F);
         if (victim.getInventory().getItemInOffHand().getType() != Material.SHIELD) {
             victim.getInventory().setItemInOffHand(new ItemStack(Material.SHIELD));
         }
         victim.setHealth(Math.min(victim.getHealth() + 10.0D, 20.0D));
+        plugin.brain().forceLook(one, eye(two), 200, false);
         plugin.brain().forceLook(two, eye(one), 200, false);
         victim.startUsingItem(EquipmentSlot.OFF_HAND);
         counter = 0;
         shieldWait = 0;
-        t.gap(12);
+        t.gap(20);
     }
 
     private String offhandNote = "nothing";
