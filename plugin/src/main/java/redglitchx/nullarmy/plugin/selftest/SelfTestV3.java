@@ -1647,9 +1647,12 @@ final class SelfTestV3 {
         // measurement that never began.
         if (!victim.isBlocking()) {
             // Whatever the hands were doing has to stop first: a body already
-            // using another item cannot raise a shield. Then raise it the way
-            // the army does, so the brain knows the guard is up too.
+            // using another item cannot raise a shield. The shield itself is
+            // put back in the offhand here, in this tick - the body's inventory
+            // is restored from its own ledger between ticks, and a shield that
+            // was equipped several ticks ago may no longer be in the hand.
             victim.clearActiveItem();
+            victim.getInventory().setItemInOffHand(new ItemStack(Material.SHIELD));
             // A bow in the hands outranks a shield: while the string is drawn
             // nothing else can be raised. A guard in this check is sword and
             // board, so the bow goes away first.
