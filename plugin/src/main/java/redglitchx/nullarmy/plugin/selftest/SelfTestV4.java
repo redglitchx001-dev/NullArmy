@@ -1408,6 +1408,11 @@ final class SelfTestV4 {
                 health += body.health();
             }
             numberA = health;
+            // Start the damage window after the camp is assembled.  The live
+            // smoke runs L-04 immediately after patrol/salute combat-adjacent
+            // checks, and the lifecycle hit ring is global, so a stale mark can
+            // make an idle camp look like it traded blows it never saw.
+            mark = plugin.currentTick() + 1L;
         } catch (Throwable e) {
             notes.add("l04 setup threw " + Guard.describe(e));
         }
@@ -1424,12 +1429,19 @@ final class SelfTestV4 {
                 health += body.health();
             }
             int friendly = plugin.lifecycle() == null ? 0 : plugin.lifecycle().friendlyFireBlocked();
+            Set<UUID> camp = new HashSet<>();
+            for (NullBody body : squad.members()) {
+                camp.add(body.uuid());
+            }
             // A blow that was cancelled before it cost anybody health is the
-            // friendly-fire rule doing its job, not a blow that landed.
+            // friendly-fire rule doing its job, not a blow that landed.  Count
+            // only blows inside this camp; other self-test arenas share the same
+            // lifecycle recorder and may still have recent hits in its ring.
             int blows = 0;
             for (redglitchx.nullarmy.plugin.body.NullLifecycleListener.Hit hit
                     : plugin.lifecycle().hitsSince(mark)) {
-                if (!hit.blocked && !hit.cancelled && hit.finalDamage >= 0.5D) {
+                boolean betweenCampNulls = camp.contains(hit.victim) && camp.contains(hit.attacker);
+                if (betweenCampNulls && !hit.blocked && !hit.cancelled && hit.finalDamage >= 0.5D) {
                     blows++;
                 }
             }
