@@ -1526,6 +1526,8 @@ final class SelfTestV3 {
         t.gap(12);
     }
 
+    private String offhandNote = "nothing";
+
     private void b17ShieldHit() {
         if (one == null) {
             return;
@@ -1547,8 +1549,13 @@ final class SelfTestV3 {
         // dropped it, a tick that ended it) is not a failed block - it is a
         // measurement that never began.
         if (!victim.isBlocking()) {
+            // Whatever the hands were doing has to stop first: a body already
+            // using another item cannot raise a shield.
+            victim.clearActiveItem();
             victim.startUsingItem(org.bukkit.inventory.EquipmentSlot.OFF_HAND);
         }
+        offhandNote = victim.getInventory().getItemInOffHand() == null ? "nothing"
+                : victim.getInventory().getItemInOffHand().getType().name();
         numberB = victim.getHealth();
         flag = victim.isBlocking();
         mark = plugin.currentTick();
@@ -1569,7 +1576,8 @@ final class SelfTestV3 {
         boolean blockedHit = hits.isEmpty() || hits.get(hits.size() - 1).blocked
                 || hits.get(hits.size() - 1).finalDamage <= 0.0D;
         check("S-82", "B-17", flag && zero && blockedHit, "a raised shield takes the hit to zero (blocking="
-                + flag + ", facing the attacker within " + String.format(Locale.ROOT, "%.0f", numberA)
+                + flag + ", offhand " + offhandNote + ", hand raised " + victim.isHandRaised()
+                + ", facing the attacker within " + String.format(Locale.ROOT, "%.0f", numberA)
                 + " degrees, health " + String.format(Locale.ROOT, "%.1f", numberB) + " -> "
                 + String.format(Locale.ROOT, "%.1f", victim.getHealth()) + ")");
         victim.clearActiveItem();

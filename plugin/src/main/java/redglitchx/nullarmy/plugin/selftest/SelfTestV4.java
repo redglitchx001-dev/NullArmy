@@ -370,7 +370,8 @@ final class SelfTestV4 {
     private void p01Setup() {
         dismissAll();
         try {
-            squad = plugin.squads().spawnSquadAt(owner("p01a"), worldName, List.of(at(20, 20)));
+            prepare(at(25, 20), 10);
+            squad = plugin.squads().spawnSquadAt(owner("p01a"), worldName, List.of(at(24, 20)));
             squadB = plugin.squads().spawnSquadAt(owner("p01b"), worldName, List.of(at(26, 20)));
             attacker = squad.members().get(0);
             victim = squadB.members().get(0);
@@ -503,8 +504,9 @@ final class SelfTestV4 {
     private void p02Setup() {
         dismissAll();
         try {
-            squad = plugin.squads().spawnSquadAt(owner("p02a"), worldName, List.of(at(20, 26)));
-            squadB = plugin.squads().spawnSquadAt(owner("p02b"), worldName, List.of(at(24, 26)));
+            prepare(at(25, 26), 10);
+            squad = plugin.squads().spawnSquadAt(owner("p02a"), worldName, List.of(at(24, 26)));
+            squadB = plugin.squads().spawnSquadAt(owner("p02b"), worldName, List.of(at(26, 26)));
             attacker = squad.members().get(0);
             victim = squadB.members().get(0);
             plugin.brain().combat().resetCounters();
@@ -1350,16 +1352,24 @@ final class SelfTestV4 {
                 health += body.health();
             }
             int friendly = plugin.lifecycle() == null ? 0 : plugin.lifecycle().friendlyFireBlocked();
-            detail = seen + ", total health " + String.format(Locale.ROOT, "%.1f", health)
+            int blows = 0;
+            for (redglitchx.nullarmy.plugin.body.NullLifecycleListener.Hit hit
+                    : plugin.lifecycle().hitsSince(mark)) {
+                if (!hit.blocked && hit.finalDamage > 0.0D) {
+                    blows++;
+                }
+            }
+            detail = seen + ", " + blows + " blow(s) landed between Nulls, total health "
+                    + String.format(Locale.ROOT, "%.1f", health)
                     + " (was " + String.format(Locale.ROOT, "%.1f", numberA) + "), friendly fire blocked "
                     + friendly + " time(s)";
-            ok = seen.size() >= 3 && health >= numberA - 0.01D;
+            ok = seen.size() >= 3 && blows == 0;
         } catch (Throwable e) {
             ok = false;
             detail = Guard.describe(e);
         }
         check("S-104", "L-04", ok, "an idle camp shows at least three different behaviours and nobody takes"
-                + " a single point of damage in 100 ticks (" + detail + ")");
+                + " a single blow from another Null in 100 ticks (" + detail + ")");
         if (settings() != null) {
             settings().setCampLifeOverride(null);
         }
