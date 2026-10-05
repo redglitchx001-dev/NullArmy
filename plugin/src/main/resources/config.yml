@@ -87,7 +87,21 @@ portals:
   # How many doorways may be standing in the world at once.
   max-active: 32
   # How long a doorway stays before its blocks are put back (20 ticks = 1s).
+  # Superseded by lifetime-s below when that key is present.
   lifetime-ticks: 600
+  # v3: a doorway is an upright, complete obsidian frame (4 wide, 5 tall) around
+  # a 2x3 opening that stays AIR - there are no portal blocks, so nothing that
+  # walks or is thrown into it is ever teleported. Nulls start inside the opening
+  # and step out. Seconds before the frame is removed and the blocks restored
+  # (it also closes as soon as the last Null has stepped clear, see below).
+  lifetime-s: 30
+  restore-after-exit: true
+  # Share of doorways that hang in the air instead of standing on the ground.
+  # Nulls drop out of a floating doorway and take real fall damage.
+  floating-chance: 0.35
+  # Height of the air gap under a floating doorway, in blocks.
+  air-height-min: 4
+  air-height-max: 12
   # How far from the summoner a build site is searched for.
   search-radius: 6
   # !! MAP PROTECTION !! Leave false. True would let a player who stands in one
@@ -138,18 +152,32 @@ totem:
 loadout:
   apply-to-nulls: true
   apply-to-commander: true
+  # v3 format: slot:MATERIAL[:count][|enchantment=level,...,potion=type]
+  # 0-8 hotbar, 9-35 storage, 36 boots, 37 leggings, 38 chestplate, 39 helmet, 40 offhand.
+  # A list that is exactly the pre-v3 iron kit is treated as unedited and upgraded.
   default-kit:
-    - "0:IRON_SWORD:1"
-    - "1:BOW:1"
-    - "2:ARROW:64"
-    - "3:GOLDEN_APPLE:4"
-    - "4:COOKED_BEEF:16"
-    - "5:IRON_PICKAXE:1"
-    - "6:ENDER_PEARL:8"
+    - "0:NETHERITE_SWORD:1|sharpness=5,unbreaking=3"
+    - "1:BOW:1|power=5,infinity=1"
+    - "2:NETHERITE_AXE:1|efficiency=5,unbreaking=3"
+    - "3:NETHERITE_PICKAXE:1|efficiency=5,fortune=3,unbreaking=3"
+    - "4:GOLDEN_APPLE:4"
+    - "5:POTION:2|potion=strong_healing"
+    - "6:COBBLESTONE:64"
     - "7:WATER_BUCKET:1"
-    - "8:TORCH:32"
-    - "38:IRON_CHESTPLATE:1"
-    - "40:SHIELD:1"
+    - "8:ENDER_PEARL:4"
+    - "9:ARROW:1"
+    - "10:NETHERITE_SHOVEL:1"
+    - "11:POTION:1|potion=strong_strength"
+    - "12:POTION:1|potion=strong_regeneration"
+    - "13:ENCHANTED_GOLDEN_APPLE:1"
+    - "14:DEEPSLATE:64"
+    - "15:OBSIDIAN:16"
+    - "16:TORCH:32"
+    - "36:NETHERITE_BOOTS:1|protection=4,unbreaking=3,feather_falling=4"
+    - "37:NETHERITE_LEGGINGS:1|protection=4,unbreaking=3"
+    - "38:NETHERITE_CHESTPLATE:1|protection=4,unbreaking=3"
+    - "39:NETHERITE_HELMET:1|protection=4,unbreaking=3"
+    - "40:SHIELD:1|unbreaking=3"
 
 menu:
   # Title of the /null menu inventory. Plain text; the plugin styles it itself.
@@ -173,9 +201,10 @@ chat:
   nulls-orders-only: true
   commander-chat-prefix: true
   wake-words:
-    - null
-    - nulls
-    - commander
+    # Quoted: an unquoted `null` is YAML's null value, not the word.
+    - "null"
+    - "nulls"
+    - "commander"
   # Orders one player may give per minute through chat.
   commands-per-minute: 20
   # Longest reply the plugin will print, in characters.
@@ -186,6 +215,12 @@ chat:
     # Quoted on purpose: an unquoted `null` key is YAML's null value.
     "null": ""
     commander: ""
+  # v3: a line that starts with a wake word OR the Commander's plain name (any
+  # case) is a public conversation: the player's line stays in chat and the
+  # Commander answers in public chat. Order words are obeyed; Nulls gesture and
+  # never speak. Every other line is left alone.
+  commander-public-replies: true
+  commander-name-trigger: true
 
 # ---------------------------------------------------------------------
 #  NULLS THEMSELVES
@@ -199,6 +234,71 @@ chat:
 nulls:
   show-in-tab-list: true
   plain-names: true
+  # v3 bodies. A Null that dies plays the death animation and drops nothing.
+  no-death-drops: true
+  # Nulls pick up items they walk over (the builder relies on it).
+  pickup-items: true
+  # Nulls push and are pushed like players, and keep this far from each other.
+  collisions: true
+  separation-radius: 1.0
+  # Every Null walks at its own pace: 90-110 % of a player's base speed.
+  speed-variance: true
+  # Idle life: glance at players nearby, look around, crouch to rest after a while,
+  # eat a golden apple (or drink healing) below this share of health.
+  idle-behaviour: true
+  eat-below-health: 0.6
+  rest-after-idle-s: 60
+
+# ---------------------------------------------------------------------
+#  SUMMON ZONE  (v3)
+#
+#  A summon opens a square zone of this edge length centred on the horn user.
+#  Every doorway, every arrival and every AI build step stays inside it; when
+#  nothing fits, the summoner is told why instead of anything being built
+#  outside. /null zone shows the border for five seconds. Clamped to 16..200.
+# ---------------------------------------------------------------------
+summon:
+  zone-size: 100
+
+# ---------------------------------------------------------------------
+#  COMBAT  (v3)  -  vanilla combat, nothing scripted
+#
+#  Nulls swing only with a full attack cooldown, crit by striking while falling,
+#  carry sprint knockback, strafe at 2-3 blocks, raise shields between swings,
+#  lead and arc their bow shots, and back off to eat below 30 % health.
+#  They fight what they are ordered to fight and, with retaliate, whoever hits
+#  them, a squad mate or their owner. initiate: false means they never start a
+#  fight on their own. Server PvP rules for real players are never overridden.
+# ---------------------------------------------------------------------
+combat:
+  enabled: true
+  # A real player's melee and arrows hurt a Null (even on a pvp=false server).
+  players-can-hit-nulls: true
+  nulls-can-hit-nulls: true
+  crits: true
+  shields: true
+  bows: true
+  retaliate: true
+  initiate: false
+  fall-damage: true
+  # An axe on a raised shield disables it for this many ticks (30 = 1.5 s).
+  shield-disable-ticks: 30
+
+# ---------------------------------------------------------------------
+#  FORMATIONS AND ORDERS  (v3)
+#
+#  line, rank, column, square, wedge, phalanx, arrow (and encircle, turtle):
+#  fixed cells rotated by the anchor's facing, never closer than 1.1 blocks.
+#  /null order <name|all> <walk|run|sprint|jump|stop|follow|hold|gather|build|
+#  attack|defend> - or the same words in chat to the Commander.
+# ---------------------------------------------------------------------
+formations:
+  spacing: 1.5
+  auto-reform: true
+
+orders:
+  # A Null that takes an order swings its arm and nods.
+  gesture-ack: true
 
 # ---------------------------------------------------------------------
 #  MECHANICS
@@ -240,6 +340,24 @@ selftest:
 #  AI ENDPOINTS  —  add as many as you want
 # ---------------------------------------------------------------------
 ai:
+  # v3 AI builder: /null ai build <goal> (or "Commander, build a hut" in chat).
+  # endpoint is an OpenAI-compatible base URL, e.g. https://api.openai.com/v1 -
+  # /chat/completions is appended. The model must answer with strict JSON steps;
+  # a bad plan is retried once, then the offline planner (hut, bridge, wall,
+  # tower, platform) builds instead. Every block is placed by hand, one per swing.
+  # The key can also come from the environment variable NULLARMY_AI_KEY, or use
+  # "env:NAME" here. Never commit a key.
+  api-key: ""
+  builder:
+    enabled: true
+    endpoint: ""
+    api-key: ""
+    model: ""
+    timeout-ms: 20000
+    max-steps: 400
+    place-rate-ticks: 10
+    gather-outside-zone: false
+
   # Master switch. TRUE means the Commander may ask a model what the squad
   # should do next. FALSE (or no usable endpoint) means the local deterministic
   # coordinator does it instead - and /null ai says plainly which one you have.
@@ -333,6 +451,18 @@ skins:
 
   # Skin for the Commander. Empty = same as the Null skin above.
   commander: ""
+
+  # v3 priority chain: 1) value + signature pasted here, 2) proxy-url,
+  # 3) the Mojang account above, 4) a bundled skin.png (reported as unsigned -
+  # clients only display signed textures). /null skin shows what every Null wears
+  # and why; /null reload and /null clearskins re-apply the skin live.
+  value: ""
+  signature: ""
+  # Any URL answering {"value":"...","signature":"..."} (MineSkin and Mojang
+  # session shapes work too) or raw base64. Failures log the HTTP status and the
+  # first 80 characters of the answer.
+  proxy-url: ""
+  live-reapply: true
 
 commander:
   # The Commander's in-game username. It is used exactly as a normal player name

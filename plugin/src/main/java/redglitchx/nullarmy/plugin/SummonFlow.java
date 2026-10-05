@@ -93,7 +93,13 @@ public final class SummonFlow implements Listener, Reloadable {
     // ------------------------------------------------------------------ triggers
 
     /** Player clicks with a summon item: opened from a listener, so it is wrapped. */
-    @EventHandler(priority = EventPriority.NORMAL, ignoreCancelled = true)
+    /**
+     * Not {@code ignoreCancelled}: Bukkit reports every right-click into the AIR
+     * as cancelled ({@code useInteractedBlock} is DENY when no block was
+     * clicked), so with ignoreCancelled the horn did nothing unless it was used
+     * on a block. Item use that another plugin really denied is respected below.
+     */
+    @EventHandler(priority = EventPriority.NORMAL)
     public void onInteract(PlayerInteractEvent event) {
         Guard.attempt(plugin.getLogger(), "summon-item interaction", () -> handleInteract(event));
     }
@@ -105,6 +111,9 @@ public final class SummonFlow implements Listener, Reloadable {
         Action action = event.getAction();
         if (action != Action.RIGHT_CLICK_AIR && action != Action.RIGHT_CLICK_BLOCK) {
             return;
+        }
+        if (event.useItemInHand() == org.bukkit.event.Event.Result.DENY) {
+            return; // another plugin denied using the item
         }
         // Both hands fire an event; only the main hand should start a prompt.
         if (event.getHand() != EquipmentSlot.HAND) {
@@ -149,7 +158,18 @@ public final class SummonFlow implements Listener, Reloadable {
 
         Pending existing = pending.get(player.getUniqueId());
         if (existing != null) {
-            player.sendMessage(PREFIX + "You already have a summon request open. Answer it or type 'cancel'.");
+            // Chat silence: pressing the horn again only refreshes the open prompt
+            // (its timer and its position) - no new line in chat.
+            Location again = player.getLocation();
+            if (again != null && again.getWorld() != null) {
+                pending.put(player.getUniqueId(), new Pending(player.getUniqueId(), plugin.currentTick(),
+                        again.getWorld().getName(),
+                        new Vec3d(again.getX(), Math.floor(again.getY()), again.getZ()), existing.itemKind));
+            }
+            hornRefreshes++;
+            if (plugin.chatGate() != null) {
+                plugin.chatGate().event("horn.refresh", "player", player.getName());
+            }
             return;
         }
 
@@ -266,22 +286,19 @@ public final class SummonFlow implements Listener, Reloadable {
             SquadManager.Squad squad = squads.createSquad(
                     request.player, request.worldName, request.origin, decision.granted());
             int spawned = squad.members().size();
+            // The answer to the count question; the details are events
+            // (console + /null status), not chat.
             player.sendMessage(PREFIX + "Summoned " + spawned
-                    + (spawned == 1 ? " Null." : " Nulls."));
-            // How they arrived: real doorways, how many, and what had to use open
-            // ground instead. An arrival made of particles alone is not reported
-            // as a portal.
-            String arrival = squad.arrivalNote();
-            if (arrival != null && !arrival.isEmpty()) {
-                player.sendMessage(PREFIX + "  " + arrival);
-            }
-            if (spawned < decision.granted()) {
-                player.sendMessage(PREFIX + "Only " + spawned + " of " + decision.granted()
-                        + " Nulls could be placed on verified safe ground; the rest were NOT"
-                        + " spawned rather than being put inside a wall, a block or each other.");
-            }
-            for (String failure : squad.spawnFailures()) {
-                player.sendMessage(PREFIX + "  failed: " + failure);
+                    + (spawned == 1 ? " Null." : " Nulls.")
+                    + (spawned < decision.granted() ? " " + (decision.granted() - spawned)
+                        + " could not be placed safely - see /null status." : ""));
+            if (plugin.chatGate() != null) {
+                String arrival = squad.arrivalNote();
+                plugin.chatGate().event("null.arrived", "count", spawned, "owner", player.getName(),
+                        "note", arrival == null || arrival.isEmpty() ? "on open ground" : arrival);
+                for (String failure : squad.spawnFailures()) {
+                    plugin.chatGate().event("squad.spawn.failed", "owner", player.getName(), "reason", failure);
+                }
             }
         } catch (IllegalStateException refusal) {
             // Clear, honest failure - no partial army (spec 3).
@@ -293,6 +310,11 @@ public final class SummonFlow implements Listener, Reloadable {
     }
 
     // ------------------------------------------------------------------- housekeeping
+
+    private int hornRefreshes;
+
+    /** How many repeated horn presses refreshed an open prompt silently (self test). */
+    public int hornRefreshes() { return hornRefreshes; }
 
     /** Expires stale requests. Runs on the main thread, never throws. */
     public void tick(long tickCounter) {
@@ -320,6 +342,13 @@ public final class SummonFlow implements Listener, Reloadable {
     }
 
     /** True when this player owes an answer to the prompt. */
+    /** Drops an open prompt without a message (self test clean-up). */
+    public void clearPending(UUID player) {
+        if (player != null) {
+            pending.remove(player);
+        }
+    }
+
     public boolean hasPending(UUID player) {
         return player != null && pending.containsKey(player);
     }

@@ -11,12 +11,15 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
-import net.minecraft.world.entity.MoverType;
+import net.minecraft.world.entity.Pose;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.level.block.Portal;
 import net.minecraft.world.phys.Vec3;
 
 import redglitchx.nullarmy.core.ledger.ItemLedger;
 import redglitchx.nullarmy.core.math.Vec3d;
+import redglitchx.nullarmy.nms.BodySettings;
 import redglitchx.nullarmy.nms.LoadoutSlot;
 import redglitchx.nullarmy.nms.NullBody;
 import redglitchx.nullarmy.nms.VersionAdapter;
@@ -69,18 +72,17 @@ import java.util.logging.Level;
  *
  * <h3>How movement stays honest</h3>
  * There is no {@code teleport} and no {@code setPos} entry point on
- * {@link NullBody}. The only way to move a Null is {@link #applySteering}, which
- * feeds a bounded force into the entity's real vanilla movement via
- * {@link MoverType#SELF}. The no-teleport rule is enforced by the interface, not
+ * {@link NullBody}. The only way to move a Null is a movement intent
+ * ({@link #setMovement}, or the legacy {@link #applySteering}), which becomes the
+ * same strafe/forward input a client sends and is run through vanilla
+ * {@code travel}: friction, gravity, collisions, step height, water and ladders
+ * are the server's own. The no-teleport rule is enforced by the interface, not
  * by convention. The one exception is {@link #portalTo}, called only by the
  * adapter's verified portal crossing.
  *
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
  */
 public final class NullPlayer extends ServerPlayer implements NullBody {
-
-    /** Blocks per tick. Bounded so no steering force can exceed legal speed. */
-    private static final double MAX_SPEED = 0.28;
 
     /**
      * A body that keeps throwing from {@code tick()} is removed rather than
@@ -90,24 +92,32 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
      */
     private static final int TICK_FAILURE_LIMIT = 3;
 
-    /** Vanilla gravity per tick. Applied so an airborne Null really falls. */
-    private static final double GRAVITY = 0.08D;
-
-    /** Vanilla terminal fall speed: the air drop must not exceed real physics. */
-    private static final double TERMINAL_FALL_SPEED = 3.92D;
-
-    /** Anything smaller than this is noise, and normalising it yields NaN. */
-    private static final double MIN_SPEED = 1.0e-4D;
-
     /** Hard bound on what a viewer probe records, so a probe cannot grow. */
     private static final int PROBE_PACKET_LIMIT = 1024;
 
     /** How often a Null drops the chunk queue its own listener never drains. */
     private static final int QUEUE_SWEEP_INTERVAL = 100;
 
+    /** A movement intent that is not refreshed for this many ticks expires. */
+    private static final int INTENT_TTL = 5;
+
+    /** A look target that is not refreshed for this many ticks expires. */
+    private static final int LOOK_TTL = 80;
+
+    /** Degrees per tick the head may turn: quick, but never a snap. */
+    private static final float HEAD_TURN_PER_TICK = 28.0F;
+
+    /** Degrees per tick the travel frame (body) may turn. */
+    private static final float BODY_TURN_PER_TICK = 36.0F;
+
+    /** Vanilla keeps the head within this many degrees of the body. */
+    private static final float MAX_HEAD_BODY_DIFF = 75.0F;
+
+    /** Vanilla's jump cooldown ({@code LivingEntity.noJumpDelay}). */
+    private static final int JUMP_COOLDOWN = 10;
+
     private final ItemLedger inventory;
     private final V1_21_11Adapter adapter;
-    private final Vec3d[] pendingForce = new Vec3d[1];
 
     /** Non-null only for a viewer probe: outbound packet class names. */
     private final List<String> recordedPackets;
@@ -115,6 +125,21 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     private int tickFailures;
     private int upkeepFailures;
     private boolean upkeepDisabled;
+    private int optionalFailures;
+
+    // Movement intent, written by the plugin's brain once per tick.
+    private double moveX;
+    private double moveZ;
+    private int gait = GAIT_STOP;
+    private boolean sneakKey;
+    private int jumpLatch;
+    private int intentAge = INTENT_TTL + 1;
+    private int jumpCooldown;
+
+    // Look intent.
+    private Vec3d lookTarget;
+    private boolean lookHeadOnly;
+    private int lookAge = LOOK_TTL + 1;
 
     NullPlayer(MinecraftServer server, ServerLevel level, GameProfile profile,
                VersionAdapter.SpawnRequest request, V1_21_11Adapter adapter) {
@@ -142,6 +167,8 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         this.connection = new ServerGamePacketListenerImpl(server,
                 new NullConnection(this.recordedPackets), this,
                 CommonListenerCookie.createInitial(profile, false));
+        markClientLoaded();
+        silenceAdvancements();
     }
 
     /**
@@ -218,32 +245,108 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     public UUID profileId() { return getUUID(); }
 
     @Override
+    public UUID uuid() { return getUUID(); }
+
+    @Override
     public Vec3d bodyPosition() {
         return new Vec3d(getX(), getY(), getZ());
     }
 
+    /**
+     * Legacy steering entry point, kept for every existing caller: a force is
+     * turned into the same movement intent the brain sends, so it is still fed
+     * through vanilla travel physics and can never exceed a player's speed.
+     */
     @Override
     public void applySteering(Vec3d force) {
-        if (force == null) {
+        if (force == null || !isFinite(force)) {
             return;
         }
-        pendingForce[0] = force;
+        double horizontal = Math.sqrt(force.x() * force.x() + force.z() * force.z());
+        if (horizontal < 1.0e-4) {
+            setMovement(0.0D, 0.0D, GAIT_STOP, false, false);
+            return;
+        }
+        double throttle = Math.min(1.0D, horizontal / 0.22D);
+        setMovement(force.x() / horizontal * throttle, force.z() / horizontal * throttle,
+                horizontal >= 0.25D ? GAIT_SPRINT : GAIT_RUN, false, false);
+    }
+
+    @Override
+    public void setMovement(double dirX, double dirZ, int gait, boolean jump, boolean sneak) {
+        if (!Double.isFinite(dirX) || !Double.isFinite(dirZ)) {
+            dirX = 0.0D;
+            dirZ = 0.0D;
+        }
+        double length = Math.sqrt(dirX * dirX + dirZ * dirZ);
+        if (length > 1.0D) {
+            dirX /= length;
+            dirZ /= length;
+        }
+        this.moveX = dirX;
+        this.moveZ = dirZ;
+        this.gait = gait;
+        this.sneakKey = sneak;
+        if (jump) {
+            this.jumpLatch = 5;
+        }
+        this.intentAge = 0;
     }
 
     @Override
     public void lookAt(Vec3d target) {
-        if (target == null) {
+        setLookTarget(target, false);
+    }
+
+    @Override
+    public void setLookTarget(Vec3d target, boolean headOnly) {
+        if (target != null && !isFinite(target)) {
             return;
         }
-        Vec3d from = bodyPosition();
-        Vec3d delta = target.sub(from);
-        if (delta.horizontalLength() < 1e-6) {
-            return;
+        this.lookTarget = target;
+        this.lookHeadOnly = headOnly;
+        this.lookAge = 0;
+    }
+
+    @Override
+    public float headYaw() { return getYHeadRot(); }
+
+    @Override
+    public float bodyYaw() { return getYRot(); }
+
+    @Override
+    public float pitch() { return getXRot(); }
+
+    @Override
+    public Vec3d velocity() {
+        Vec3 delta = getDeltaMovement();
+        return delta == null ? Vec3d.ZERO : new Vec3d(delta.x, delta.y, delta.z);
+    }
+
+    @Override
+    public double fallDistance() { return (double) this.fallDistance; }
+
+    @Override
+    public boolean inWater() { return isInWater(); }
+
+    @Override
+    public boolean horizontalCollision() { return this.horizontalCollision; }
+
+    @Override
+    public int deathTicks() {
+        if (isRemoved() || !this.valid) {
+            return Integer.MAX_VALUE;
         }
-        double yaw = Math.toDegrees(Math.atan2(-delta.x(), delta.z()));
-        double pitch = Math.toDegrees(-Math.atan2(delta.y(), delta.horizontalLength()));
-        setYRot((float) yaw);
-        setXRot((float) pitch);
+        return isDeadOrDying() ? this.deathTime : -1;
+    }
+
+    @Override
+    public boolean releaseUseItem() {
+        if (!isUsingItem()) {
+            return false;
+        }
+        releaseUsingItem();
+        return true;
     }
 
     /**
@@ -320,7 +423,95 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         if (adapter != null) {
             adapter.forget(this);
         }
+        if (isDeadOrDying() && !isRemoved()) {
+            // The end of the death animation: vanilla's poof of smoke.
+            try {
+                level().broadcastEntityEvent(this, (byte) 60);
+            } catch (Throwable ignored) {
+                // Cosmetic.
+            }
+        }
         discard();
+    }
+
+    // ------------------------------------------------------------ combat rules
+
+    /**
+     * "Can {@code other} hurt this body?" - asked by vanilla for every melee hit
+     * and every player-owned arrow.
+     *
+     * <p>{@code ServerPlayer} answers with the world's PvP flag, which is why a
+     * Null on a {@code pvp=false} server could not be hit at all. A Null is not
+     * a player account, so the plugin's own rule decides instead:
+     * {@code combat.players-can-hit-nulls} for real players (and the self-test
+     * probe that stands in for one), and Null-versus-Null for ordered fights.
+     * A Null hitting a <i>real</i> player still goes through that player's own
+     * {@code canHarmPlayer}, so server PvP rules for humans are untouched.</p>
+     */
+    @Override
+    public boolean canHarmPlayer(net.minecraft.world.entity.player.Player other) {
+        BodySettings settings = adapter == null ? BodySettings.DEFAULTS : adapter.bodySettings();
+        if (other instanceof NullPlayer attacker && !attacker.isProbe()) {
+            return settings.nullsCanHitNulls();
+        }
+        return settings.playersCanHitNulls();
+    }
+
+    /**
+     * Marks the body's (non-existent) client as loaded.
+     *
+     * <p>Since 1.21.4 {@code ServerPlayer.isInvulnerableTo} returns true for
+     * every damage source until {@code connection.hasClientLoaded()}. A real
+     * client reports that with a packet, or the server times out after 60 ticks
+     * - but the timeout is counted down in {@code ServerPlayer.tick()}, which a
+     * Null overrides. That is the root cause of Nulls that could not be hit, did
+     * not take fall damage and could not die. The field is written directly; if
+     * that ever fails the per-tick fallback below runs the vanilla timeout.</p>
+     */
+    private void markClientLoaded() {
+        try {
+            java.lang.reflect.Field timer =
+                    ServerGamePacketListenerImpl.class.getDeclaredField("clientLoadedTimeoutTimer");
+            timer.setAccessible(true);
+            timer.setInt(this.connection, 0);
+        } catch (Throwable ignored) {
+            // ensureClientLoaded() runs the vanilla countdown instead.
+        }
+    }
+
+    /** The per-tick fallback for {@link #markClientLoaded()}. */
+    private void ensureClientLoaded() {
+        try {
+            if (!this.connection.hasClientLoaded()) {
+                markClientLoaded();
+                if (!this.connection.hasClientLoaded()) {
+                    this.connection.tickClientLoadTimeout();
+                }
+            }
+        } catch (Throwable ignored) {
+            // Never fatal: the worst case is the old invulnerable body.
+        }
+    }
+
+    /**
+     * Stops advancement criteria for this body.
+     *
+     * <p>A Null is not an account: killing a mob or picking up a diamond must not
+     * make "Null has made the advancement [Monster Hunter]" appear in public
+     * chat, which is exactly what PlayerAdvancements would do.</p>
+     */
+    private void silenceAdvancements() {
+        try {
+            getAdvancements().stopListening();
+        } catch (Throwable ignored) {
+            // The plugin also clears advancement messages for Nulls.
+        }
+    }
+
+    /** Called by the adapter once the body is in the world and verified. */
+    void afterRegistration() {
+        markClientLoaded();
+        silenceAdvancements();
     }
 
     // ------------------------------------------------------------- diagnostics
@@ -329,6 +520,7 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     public boolean packetListenerReady() { return this.connection != null; }
 
     /** True for the smoke-test probe, whose outbound packets are recorded. */
+    @Override
     public boolean isProbe() { return recordedPackets != null; }
 
     /** Packet class names this body's listener was asked to send. */
@@ -362,14 +554,15 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     // ------------------------------------------------------------------- ticking
 
     /**
-     * Drives movement through vanilla physics.
+     * Runs the body through vanilla physics.
      *
      * <p>Overridden because a server-only {@code ServerPlayer} must not run
      * normal client synchronization: {@code ServerPlayer.tick()} sends chunk
      * cache centers, flushes menus, triggers advancements and writes player
      * statistics, none of which apply to a body with no client and no account.
-     * What a Null does keep is real world interaction ({@code baseTick}: fire,
-     * water, suffocation) and real collision-respecting movement.</p>
+     * What a Null does keep is everything a body needs: world interaction
+     * ({@code baseTick}), vanilla travel physics, fall damage, entity
+     * collisions, item use, attack cooldown and item pickup.</p>
      */
     @Override
     public void tick() {
@@ -378,7 +571,7 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         } catch (Throwable t) {
             tickFailures++;
             if (tickFailures <= TICK_FAILURE_LIMIT) {
-                org.bukkit.Bukkit.getLogger().log(Level.SEVERE,
+                org.bukkit.Bukkit.getLogger().log(Level.WARNING,
                         "[NullArmy] a Null failed to tick (" + tickFailures
                                 + " time(s)); the server is unaffected: " + t, t);
             }
@@ -416,62 +609,48 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         // every chunk/block lookup downstream throws or spins. Throw the body
         // away instead - one lost Null, not a dead server.
         if (!Double.isFinite(getX()) || !Double.isFinite(getY()) || !Double.isFinite(getZ())) {
-            org.bukkit.Bukkit.getLogger().severe("[NullArmy] a Null reached an invalid"
+            org.bukkit.Bukkit.getLogger().warning("[NullArmy] a Null reached an invalid"
                     + " position and was removed; the server is unaffected.");
             destroyQuietly();
             return;
         }
 
+        ensureClientLoaded();
         upkeep();
+        int deathBefore = this.deathTime;
         worldInteraction();
-
-        Vec3 delta = getDeltaMovement();
-        if (delta == null || !isFinite(delta)) {
-            delta = Vec3.ZERO;
+        if (isRemoved()) {
+            return;
         }
-
-        // Gravity, the way vanilla applies it: every tick, and the collision
-        // resolution inside move() cancels whatever the ground stops. Without
-        // this an airborne Null would hang in the sky for ever and the air
-        // drop's real-fall-damage promise would be a lie.
-        if (!onGround()) {
-            delta = delta.add(0.0D, -GRAVITY, 0.0D);
-            if (delta.y < -TERMINAL_FALL_SPEED) {
-                delta = new Vec3(delta.x, -TERMINAL_FALL_SPEED, delta.z);
+        if (isDeadOrDying()) {
+            // The death animation: the client tips the body over while health is
+            // zero; vanilla's tickDeath counts it. If this build's baseTick did
+            // not, count it here so the plugin knows when the animation is over.
+            if (this.deathTime == deathBefore && this.deathTime < 60) {
+                this.deathTime++;
             }
+            setMovement(0.0D, 0.0D, GAIT_STOP, false, false);
+            return;
         }
 
-        Vec3d force = pendingForce[0];
-        pendingForce[0] = null;
-
-        if (force != null && isFinite(force)) {
-            // Blend toward the desired velocity, then clamp - never snap.
-            Vec3d desired = force.clampLength(MAX_SPEED);
-            double speed = Math.min(MAX_SPEED, desired.length());
-            if (speed > MIN_SPEED) {
-                Vec3 blended = delta.add(new Vec3(desired.x(), desired.y(), desired.z()))
-                        .scale(0.5D);
-                double length = blended.length();
-                if (length <= MIN_SPEED) {
-                    // The blend cancelled itself out; take the desired direction
-                    // directly rather than normalising a zero vector (NaN).
-                    blended = new Vec3(desired.x(), desired.y(), desired.z()).scale(speed);
-                } else {
-                    blended = blended.scale(speed / length);
-                }
-                delta = blended;
-            }
+        optional(this::tickItemUse);
+        optional(this::updateSwingTime);
+        optional(this::applyLook);
+        applyMovement();
+        BodySettings settings = adapter == null ? BodySettings.DEFAULTS : adapter.bodySettings();
+        if (settings.collisions()) {
+            optional(this::pushEntities);
         }
-
-        // Last line of defence before touching the world.
-        if (!isFinite(delta)) {
-            delta = Vec3.ZERO;
+        if (settings.pickupItems()) {
+            optional(this::touchNearby);
         }
-
-        setDeltaMovement(delta);
-        // Real collision-respecting movement. This is the only thing that ever
-        // changes a Null's position.
-        move(MoverType.SELF, delta);
+        if ((this.tickCount & 1) == 0) {
+            // Vanilla's own equipment pass: applies armour attributes and tells
+            // every viewer what the body holds and wears. Changes made through the
+            // Bukkit inventory (the loadout GUI, the builder's tool choice) show
+            // up within two ticks.
+            Tracking.syncEquipment(this);
+        }
 
         // The chunk sender of a Null's listener is never drained (that happens in
         // ServerGamePacketListenerImpl#tick, which the server runs for listed
@@ -481,12 +660,27 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         }
     }
 
+    /** Runs a non-essential step; a body keeps ticking if one of them fails. */
+    private void optional(Runnable step) {
+        try {
+            step.run();
+        } catch (Throwable t) {
+            optionalFailures++;
+            if (optionalFailures <= 3) {
+                org.bukkit.Bukkit.getLogger().warning("[NullArmy] a Null body step failed ("
+                        + t.getClass().getSimpleName() + ": " + t.getMessage()
+                        + "); the body keeps ticking.");
+            }
+        }
+    }
+
     /**
-     * The timers the server would normally decay in {@code Player#tick}.
+     * The timers the server would normally decay in {@code ServerPlayer#tick}
+     * and {@code Player#tick}.
      *
      * <p>Without this a Null that is hurt once keeps {@code invulnerableTime} at
-     * its hurt value forever and becomes permanently damage-immune, and a dead
-     * body never advances its death animation.</p>
+     * its hurt value forever and becomes permanently damage-immune, and its
+     * attack cooldown never recharges, so every swing would be a weak one.</p>
      */
     private void upkeep() {
         if (upkeepDisabled) {
@@ -499,9 +693,7 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
             if (this.hurtTime > 0) {
                 this.hurtTime--;
             }
-            if (this.deathTime < 20 && getHealth() <= 0.0F) {
-                this.deathTime++;
-            }
+            AttackTicker.increment(this);
         } catch (Throwable t) {
             upkeepFailures++;
             if (upkeepFailures >= TICK_FAILURE_LIMIT) {
@@ -514,11 +706,12 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     }
 
     /**
-     * Real interaction with the world: fire, water, suffocation, freeze.
+     * Real interaction with the world: fire, water, suffocation, freeze,
+     * potion effects and the death countdown.
      *
      * <p>{@code Entity.baseTick()} also runs the portal countdown, which is
-     * neutralised here (see {@link #handlePortal()}), so standing in one of the
-     * plugin's arrival portals can never send a Null to the Nether.</p>
+     * neutralised here (see {@link #handlePortal()}), so standing in a portal
+     * can never send a Null to the Nether.</p>
      */
     private void worldInteraction() {
         if (upkeepDisabled) {
@@ -537,14 +730,213 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         }
     }
 
+    /**
+     * Item use the way {@code LivingEntity.tick} drives it: eating counts down
+     * and completes, a drawn bow keeps charging, a raised shield starts blocking
+     * after its delay. Switching away from the item stops using it.
+     */
+    private void tickItemUse() {
+        if (!isUsingItem()) {
+            return;
+        }
+        net.minecraft.world.item.ItemStack inHand = getItemInHand(getUsedItemHand());
+        net.minecraft.world.item.ItemStack using = getUseItem();
+        if (net.minecraft.world.item.ItemStack.isSameItem(inHand, using)) {
+            updateUsingItem(using);
+        } else {
+            stopUsingItem();
+        }
+    }
+
+    /** Turns head and body toward the look intent, never faster than a player. */
+    private void applyLook() {
+        if (lookAge <= LOOK_TTL) {
+            lookAge++;
+        }
+        boolean moving = intentAge <= INTENT_TTL && gait != GAIT_STOP
+                && (moveX * moveX + moveZ * moveZ) > 4.0e-4;
+        float moveYaw = moving ? yawOf(moveX, moveZ) : Float.NaN;
+        Vec3d look = lookAge <= LOOK_TTL ? lookTarget : null;
+
+        float head = getYHeadRot();
+        float body = getYRot();
+        float pitch = getXRot();
+        float headGoal = head;
+        float pitchGoal = pitch;
+        boolean hasLookYaw = false;
+        if (look != null) {
+            double dx = look.x() - getX();
+            double dy = look.y() - getEyeY();
+            double dz = look.z() - getZ();
+            double horizontal = Math.sqrt(dx * dx + dz * dz);
+            if (horizontal > 1.0e-3) {
+                headGoal = (float) Math.toDegrees(Math.atan2(-dx, dz));
+                hasLookYaw = true;
+            }
+            pitchGoal = (float) Math.toDegrees(-Math.atan2(dy, Math.max(1.0e-3, horizontal)));
+        } else if (moving) {
+            headGoal = moveYaw;
+            pitchGoal = pitch * 0.8F;
+        }
+
+        float newHead = approach(head, headGoal, HEAD_TURN_PER_TICK);
+        float bodyGoal = (look != null && !lookHeadOnly && hasLookYaw) ? headGoal
+                : (moving ? moveYaw : body);
+        float newBody = approach(body, bodyGoal, BODY_TURN_PER_TICK);
+        float diff = wrap(newHead - newBody);
+        if (diff > MAX_HEAD_BODY_DIFF) {
+            newBody = newHead - MAX_HEAD_BODY_DIFF;
+        } else if (diff < -MAX_HEAD_BODY_DIFF) {
+            newBody = newHead + MAX_HEAD_BODY_DIFF;
+        }
+        float newPitch = approach(pitch, Math.max(-90.0F, Math.min(90.0F, pitchGoal)), 20.0F);
+
+        setYRot(wrap(newBody));
+        setYBodyRot(wrap(newBody));
+        setYHeadRot(wrap(newHead));
+        setXRot(newPitch);
+    }
+
+    /**
+     * Movement through vanilla physics.
+     *
+     * <p>The intent becomes the same strafe/forward input a client sends, in the
+     * body's own frame; {@code travel} then applies friction, gravity,
+     * collisions, step height, water and ladders exactly as for a player.
+     * Fall damage is checked the way a real player's movement packet triggers
+     * it. A Null therefore cannot fly, cannot clip into a block and cannot
+     * outrun a sprinting player.</p>
+     */
+    private void applyMovement() {
+        if (intentAge <= INTENT_TTL) {
+            intentAge++;
+        }
+        boolean expired = intentAge > INTENT_TTL;
+        double mx = expired ? 0.0D : moveX;
+        double mz = expired ? 0.0D : moveZ;
+        int g = expired ? GAIT_STOP : gait;
+        double throttle = Math.sqrt(mx * mx + mz * mz);
+        boolean moving = g != GAIT_STOP && throttle > 0.02D;
+        boolean sneaking = !expired && sneakKey;
+        boolean usingItem = isUsingItem();
+
+        boolean sprint = moving && g == GAIT_SPRINT && !sneaking && !usingItem;
+        if (isSprinting() != sprint) {
+            setSprinting(sprint);
+        }
+        if (isShiftKeyDown() != sneaking) {
+            setShiftKeyDown(sneaking);
+        }
+        optional(() -> {
+            Pose wanted = sneaking ? Pose.CROUCHING : Pose.STANDING;
+            Pose now = getPose();
+            if ((now == Pose.STANDING || now == Pose.CROUCHING) && now != wanted) {
+                setPose(wanted);
+            }
+        });
+
+        double ix = 0.0D;
+        double iz = 0.0D;
+        if (moving) {
+            double scale = g == GAIT_WALK ? 0.6D : 1.0D;
+            if (sneaking) {
+                scale *= 0.3D;
+            }
+            if (usingItem) {
+                scale *= 0.2D;
+            }
+            double nx = mx / throttle;
+            double nz = mz / throttle;
+            double magnitude = Math.min(1.0D, throttle) * scale;
+            double yaw = Math.toRadians(getYRot());
+            double sin = Math.sin(yaw);
+            double cos = Math.cos(yaw);
+            ix = (nx * cos + nz * sin) * magnitude;
+            iz = (-nx * sin + nz * cos) * magnitude;
+        }
+
+        if (jumpCooldown > 0) {
+            jumpCooldown--;
+        }
+        boolean wantJump = jumpLatch > 0;
+        if (jumpLatch > 0) {
+            jumpLatch--;
+        }
+        if (moving && this.horizontalCollision && onGround()) {
+            // Auto-step over a one-block rise, like a player tapping space.
+            wantJump = true;
+        }
+        if (isInWater() || isInLava()) {
+            if (wantJump || isUnderWater() || (moving && this.horizontalCollision)) {
+                // Swimming up: vanilla's jumpInLiquid impulse.
+                setDeltaMovement(getDeltaMovement().add(0.0D, 0.04D, 0.0D));
+            }
+        } else if (wantJump && onGround() && jumpCooldown == 0) {
+            jumpFromGround();
+            jumpCooldown = JUMP_COOLDOWN;
+            jumpLatch = 0;
+        }
+
+        setSpeed((float) getAttributeValue(Attributes.MOVEMENT_SPEED));
+        double x0 = getX();
+        double y0 = getY();
+        double z0 = getZ();
+        travel(new Vec3(ix, 0.0D, iz));
+        // What a real player's movement packet does after every move: supporting
+        // block bookkeeping and fall damage (Feather Falling included). This is
+        // also what makes fallDistance grow while falling, which vanilla's
+        // critical hit needs. Whether fall damage is allowed at all is decided by
+        // the plugin's combat.fall-damage rule in the damage event.
+        doCheckFallDamage(getX() - x0, getY() - y0, getZ() - z0, onGround());
+    }
+
+    /** Picks up item entities and orbs the body walks over, like Player#aiStep. */
+    private void touchNearby() {
+        AABB reach = getBoundingBox().inflate(1.0D, 0.5D, 1.0D);
+        List<net.minecraft.world.entity.Entity> nearby = level().getEntities(this, reach);
+        for (net.minecraft.world.entity.Entity entity : nearby) {
+            // Exactly Player#touch: every entity in reach is told it was touched.
+            // Items and orbs are picked up, arrows are collected, and a slime
+            // hurts the body just as it would hurt a player.
+            if (entity != null && !entity.isRemoved()) {
+                entity.playerTouch(this);
+            }
+        }
+    }
+
+    private static float yawOf(double dirX, double dirZ) {
+        return (float) Math.toDegrees(Math.atan2(-dirX, dirZ));
+    }
+
+    private static float wrap(float degrees) {
+        float d = degrees % 360.0F;
+        if (d >= 180.0F) {
+            d -= 360.0F;
+        }
+        if (d < -180.0F) {
+            d += 360.0F;
+        }
+        return d;
+    }
+
+    private static float approach(float current, float target, float maxStep) {
+        float delta = wrap(target - current);
+        if (delta > maxStep) {
+            delta = maxStep;
+        } else if (delta < -maxStep) {
+            delta = -maxStep;
+        }
+        return current + delta;
+    }
+
     // --------------------------------------------------------- portal containment
 
     /**
      * A Null never enters a portal on its own.
      *
-     * <p>The plugin builds temporary arrival portals out of real portal blocks.
-     * A Null standing in one must not be transported anywhere: the only
-     * relocation a Null ever makes is the adapter's verified portal crossing.</p>
+     * <p>A Null standing in a real Nether portal must not be transported
+     * anywhere: the only relocation a Null ever makes is the adapter's verified
+     * portal crossing.</p>
      */
     @Override
     public void setAsInsidePortal(Portal portal, BlockPos pos) {
@@ -564,12 +956,6 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     }
 
     // ------------------------------------------------------------------- cleanup
-
-    /** True when every component is a real number, never NaN or infinite. */
-    private static boolean isFinite(Vec3 v) {
-        return v != null
-                && Double.isFinite(v.x) && Double.isFinite(v.y) && Double.isFinite(v.z);
-    }
 
     /** True when every component is a real number, never NaN or infinite. */
     private static boolean isFinite(Vec3d v) {

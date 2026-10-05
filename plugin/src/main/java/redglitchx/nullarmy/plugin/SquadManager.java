@@ -97,6 +97,12 @@ public final class SquadManager implements Reloadable {
         private final List<String> spawnFailures = new ArrayList<>();
         /** One stored role per member, index-aligned with {@link #members}. */
         private List<SquadRole> roles = Collections.emptyList();
+        /** A held formation's anchor; null means "behind the target player". */
+        private Vec3d formationAnchor;
+        private float formationYaw;
+        /** Member index -> formation cell index, nearest-first; recomputed when the shape changes. */
+        private int[] formationAssignment;
+        private String formationAssignmentKey = "";
 
         Squad(UUID owner, String worldName) {
             this.owner = owner;
@@ -111,6 +117,28 @@ public final class SquadManager implements Reloadable {
         public String targetLabel() { return targetLabel; }
         public String formation() { return formation; }
         public String tactics() { return tactics; }
+
+        /** The stored destination, or null. */
+        public Vec3d point() { return point; }
+
+        /** The player the objective is about (follow, formation, attack), or null. */
+        public UUID targetId() { return targetId; }
+
+        /** A held formation's fixed anchor, or null when it follows its player. */
+        public Vec3d formationAnchor() { return formationAnchor; }
+
+        /** The facing a held formation is rotated by. */
+        public float formationYaw() { return formationYaw; }
+
+        /** Member index -> cell index of the current formation, or null when not computed yet. */
+        public int[] formationAssignment() { return formationAssignment; }
+
+        public String formationAssignmentKey() { return formationAssignmentKey; }
+
+        public void setFormationAssignment(int[] assignment, String key) {
+            this.formationAssignment = assignment;
+            this.formationAssignmentKey = key == null ? "" : key;
+        }
 
         /** How this squad walked in, for the summon message and {@code /null status}. */
         public String arrivalNote() { return arrivalNote; }
@@ -207,7 +235,7 @@ public final class SquadManager implements Reloadable {
 
         // Real doorways first: a random number of temporary portals, a random
         // split of the squad between them, and a validated exit spot per Null.
-        Arrival arrival = planArrival(worldName, origin, count);
+        Arrival arrival = planArrival(owner, worldName, origin, count);
         if (arrival.spots.isEmpty()) {
             discardEmptyOwnerEntry(owner, existing);
             throw new IllegalStateException(arrival.failure == null
@@ -216,7 +244,14 @@ public final class SquadManager implements Reloadable {
                     : arrival.failure);
         }
 
-        Squad squad = spawnAll(owner, worldName, arrival.spots, false, existing);
+        pendingDoors.clear();
+        pendingDoors.putAll(arrival.doors);
+        Squad squad;
+        try {
+            squad = spawnAll(owner, worldName, arrival.spots, false, existing);
+        } finally {
+            pendingDoors.clear();
+        }
         squad.arrivalNote = arrival.describe(count);
         lastArrivalNote = squad.arrivalNote;
 
@@ -230,8 +265,12 @@ public final class SquadManager implements Reloadable {
         return squad;
     }
 
+    /** Doorway of each planned spot while a squad is being spawned. */
+    private final Map<Vec3d, PortalBuilder.BuiltPortal> pendingDoors = new LinkedHashMap<>();
+
     /** What one summon's arrival planning produced. */
     private static final class Arrival {
+        private final Map<Vec3d, PortalBuilder.BuiltPortal> doors = new LinkedHashMap<>();
         private final List<Vec3d> spots = new ArrayList<>();
         private final List<Vec3d> mouths = new ArrayList<>();
         private int portalsBuilt;
@@ -270,13 +309,17 @@ public final class SquadManager implements Reloadable {
      * searched safe ground. A Null is never dropped to make the arithmetic
      * work - {@code requested - spots.size()} is reported to the owner.</p>
      */
-    private Arrival planArrival(String worldName, Vec3d origin, int count) {
+    private Arrival planArrival(UUID owner, String worldName, Vec3d origin, int count) {
         Arrival arrival = new Arrival();
         PortalPlan plan = plugin.portals() == null
                 ? PortalPlan.none(count) : plugin.portals().plan(count);
+        redglitchx.nullarmy.core.zone.SummonZone zone = plugin.zones() == null
+                ? new redglitchx.nullarmy.core.zone.SummonZone(origin.x(), origin.z(),
+                        config == null ? 100 : config.v3().zoneSize())
+                : plugin.zones().open(owner, worldName, origin).zone();
 
         List<PortalBuilder.BuiltPortal> doorways = plan.portalCount() > 0 && plugin.portals() != null
-                ? plugin.portals().buildDoorways(worldName, origin, plan.portalCount())
+                ? plugin.portals().buildDoorways(worldName, origin, plan.portalCount(), zone)
                 : new ArrayList<>();
         arrival.portalsBuilt = doorways.size();
         if (plan.portalCount() > 0 && doorways.size() < plan.portalCount()) {
@@ -298,6 +341,7 @@ public final class SquadManager implements Reloadable {
                     break; // this doorway is full; the rest go to open ground
                 }
                 arrival.spots.add(spot);
+                arrival.doors.put(spot, doorway);
                 arrival.throughPortals++;
                 assigned++;
             }
@@ -315,7 +359,7 @@ public final class SquadManager implements Reloadable {
                 if (remaining <= 0) {
                     break;
                 }
-                if (tooClose(arrival.spots, spot, MIN_SPOT_SPACING)) {
+                if (tooClose(arrival.spots, spot, MIN_SPOT_SPACING) || !zone.contains(spot.x(), spot.z())) {
                     continue;
                 }
                 arrival.spots.add(spot);
@@ -324,8 +368,12 @@ public final class SquadManager implements Reloadable {
             }
         }
         if (arrival.spots.isEmpty()) {
-            arrival.failure = "no portal site was clear and no collision-safe ground within "
-                    + config.spawnSearchRadius() + " blocks of you";
+            String portalWhy = plugin.portals() == null ? "" : plugin.portals().lastRefusal();
+            arrival.failure = redglitchx.nullarmy.core.text.MessageTemplates.render("zone.refused",
+                    "size", zone.size(), "reason", (portalWhy == null || portalWhy.isEmpty()
+                            ? "no doorway site was clear" : portalWhy)
+                            + ", and no collision-safe ground within " + config.spawnSearchRadius()
+                            + " blocks of you inside the zone");
         }
         if (plan.spill() > 0 && arrival.spots.size() < count) {
             arrival.portalNote = "(" + (count - arrival.spots.size())
@@ -423,6 +471,7 @@ public final class SquadManager implements Reloadable {
     private Squad spawnAll(UUID owner, String worldName, List<Vec3d> spots,
                            boolean airborne, List<Squad> existing) {
         Squad squad = new Squad(owner, worldName);
+        List<Vec3d> used = new ArrayList<>(spots);
         for (Vec3d spot : spots) {
             if (plugin.spawnBreaker().isOpen()) {
                 squad.spawnFailures.add("the NMS spawn path is latched off: "
@@ -430,7 +479,7 @@ public final class SquadManager implements Reloadable {
                 break;
             }
             try {
-                NullBody body = spawnOne(owner, worldName, spot, airborne);
+                NullBody body = spawnWithRetry(owner, worldName, spot, airborne, used);
                 String problem = verifyBody(body);
                 if (problem != null) {
                     Guard.attempt(logger, "cleaning up an unusable Null", body::destroy);
@@ -439,6 +488,16 @@ public final class SquadManager implements Reloadable {
                 }
                 equip(body, squad);
                 squad.members.add(body);
+                PortalBuilder.BuiltPortal door = pendingDoors.get(spot);
+                if (door != null) {
+                    door.assign(body.uuid());
+                    if (plugin.brain() != null) {
+                        plugin.brain().stepOut(body, door.stepOutPoint(), 100);
+                    }
+                }
+                if (plugin.skinChain() != null) {
+                    plugin.skinChain().noteSpawned(body, false);
+                }
             } catch (RuntimeException e) {
                 squad.spawnFailures.add(e.getMessage() == null
                         ? Guard.describe(e) : e.getMessage());
@@ -468,6 +527,69 @@ public final class SquadManager implements Reloadable {
         existing.add(squad);
         return squad;
     }
+
+    /**
+     * Spawns at a spot, and when that one spot is refused - occupied, unsafe, or
+     * an add cancelled by a protection plugin - tries the ring of neighbouring
+     * cells before giving up. A refusal never latches the spawn breaker: the next
+     * cell, and the next summon, may be perfectly fine.
+     */
+    NullBody spawnWithRetry(UUID owner, String worldName, Vec3d spot, boolean airborne, List<Vec3d> used) {
+        try {
+            return spawnOne(owner, worldName, spot, airborne);
+        } catch (VersionAdapter.SpawnRefusedException refusal) {
+            for (Vec3d cell : neighbourRing(spot)) {
+                if (tooClose(used, cell, MIN_SPOT_SPACING)) {
+                    continue;
+                }
+                boolean safe = airborne ? isAirborneSafe(worldName, cell) : isSafe(worldName, cell);
+                if (!safe || !isFree(worldName, cell)) {
+                    continue;
+                }
+                try {
+                    NullBody body = spawnOne(owner, worldName, cell, airborne);
+                    used.add(cell);
+                    lastRetryNote = "spawn at " + round(spot.x()) + "," + round(spot.y()) + "," + round(spot.z())
+                            + " was refused (" + refusal.getMessage() + "); the neighbouring cell "
+                            + round(cell.x()) + "," + round(cell.y()) + "," + round(cell.z()) + " was used";
+                    retries++;
+                    logger.info("[NullArmy] " + lastRetryNote);
+                    return body;
+                } catch (VersionAdapter.SpawnRefusedException again) {
+                    // try the next neighbour
+                }
+            }
+            throw refusal;
+        }
+    }
+
+    /** Neighbouring cells around a refused spot: an inner ring of 8, an outer ring of 12. */
+    static List<Vec3d> neighbourRing(Vec3d spot) {
+        List<Vec3d> out = new ArrayList<>();
+        int[][] inner = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {-1, -1}, {1, -1}, {-1, 1}};
+        for (int[] d : inner) {
+            out.add(new Vec3d(spot.x() + d[0] * 1.2, spot.y(), spot.z() + d[1] * 1.2));
+        }
+        for (int i = 0; i < 12; i++) {
+            double angle = 2.0 * Math.PI * i / 12.0;
+            out.add(new Vec3d(spot.x() + Math.cos(angle) * 2.4, spot.y(), spot.z() + Math.sin(angle) * 2.4));
+        }
+        return out;
+    }
+
+    private int forcedRefusals;
+    private int retries;
+    private String lastRetryNote = "";
+
+    /** Self test: the next {@code count} spawn attempts are refused as a protection plugin would. */
+    public void forceRefusals(int count) {
+        this.forcedRefusals = Math.max(0, count);
+    }
+
+    /** How many refused spawns were rescued by a neighbouring cell this session. */
+    public int spawnRetries() { return retries; }
+
+    public String lastRetryNote() { return lastRetryNote; }
 
     /**
      * Proves a body is really there.
@@ -530,6 +652,15 @@ public final class SquadManager implements Reloadable {
         }
     }
 
+    /**
+     * Spawns a squad at exact spots, without doorways - used by the self test,
+     * which needs bodies in known places (a 3x3 crowd, a formation anchor).
+     */
+    public Squad spawnSquadAt(UUID owner, String worldName, List<Vec3d> spots) {
+        List<Squad> existing = preflight(owner, spots.size());
+        return spawnAll(owner, worldName, spots, false, existing);
+    }
+
     /** Spread in the air under a sky mouth: rings of eight, capped at 3 blocks. */
     public List<Vec3d> planAirSpots(String worldName, Vec3d mouth, int count) {
         List<Vec3d> out = new ArrayList<>();
@@ -568,15 +699,21 @@ public final class SquadManager implements Reloadable {
             throw new IllegalStateException("Nulls may only be created on the main server thread");
         }
 
+        if (forcedRefusals > 0) {
+            forcedRefusals--;
+            throw new VersionAdapter.SpawnRefusedException("refused at " + round(spot.x()) + ","
+                    + round(spot.y()) + "," + round(spot.z()) + " (self test: simulated protection plugin)");
+        }
         String skinValue = "";
         String skinSignature = "";
         try {
-            if (plugin.skins() != null && config != null) {
-                SkinData skin = plugin.skins().resolveCached(config.nullSkinName());
-                if (skin != null && skin.complete()) {
-                    skinValue = skin.value();
-                    skinSignature = skin.signature();
-                }
+            SkinData skin = plugin.skinChain() == null ? null : plugin.skinChain().current(false);
+            if ((skin == null || !skin.complete()) && plugin.skins() != null && config != null) {
+                skin = plugin.skins().resolveCached(config.nullSkinName());
+            }
+            if (skin != null && skin.complete()) {
+                skinValue = skin.value();
+                skinSignature = skin.signature();
             }
         } catch (Throwable t) {
             // Cosmetic only: a Null without a skin is still a Null.
@@ -585,7 +722,7 @@ public final class SquadManager implements Reloadable {
 
         VersionAdapter.SpawnRequest request = new VersionAdapter.SpawnRequest(
                 owner, uniqueProfileName(), worldName, spot, 36 * 64,
-                skinValue, skinSignature, airborne);
+                skinValue, skinSignature, airborne, crowdTest);
         try {
             NullBody body = adapter.spawnNull(request);
             if (body == null) {
@@ -594,6 +731,7 @@ public final class SquadManager implements Reloadable {
             // Every Null this plugin creates gets the configured default kit, in
             // the right slots, here - the one place an NPC is born. Applying it
             // later (or only from the squad path) is how a Null ends up naked.
+            postSpawn(body);
             if (plugin.kits() != null && config != null && config.kitAppliesToNulls()) {
                 plugin.kits().applyTo(body);
             }
@@ -610,6 +748,23 @@ public final class SquadManager implements Reloadable {
                             + " Restart or run /null reload to try again after fixing the cause.");
             throw new IllegalStateException("the server refused to create the NPC: " + reason);
         }
+    }
+
+    private boolean crowdTest;
+
+    /** Self test only: the next spawns may overlap other bodies (the 3x3 crowd check). */
+    public void allowCrowding(boolean allowed) {
+        this.crowdTest = allowed;
+    }
+
+    /** A Null is a survival body whatever the server's default game mode is. */
+    private void postSpawn(NullBody body) {
+        Guard.attempt(logger, "setting a Null to survival", () -> {
+            Player handle = redglitchx.nullarmy.plugin.body.Bodies.player(body);
+            if (handle != null && handle.getGameMode() != org.bukkit.GameMode.SURVIVAL) {
+                handle.setGameMode(org.bukkit.GameMode.SURVIVAL);
+            }
+        });
     }
 
     /**
@@ -1067,10 +1222,8 @@ public final class SquadManager implements Reloadable {
                     // Commander succession after a loss (spec 3).
                     assignCommanders(squad);
                 }
-                if (!shutdownRequested) {
-                    steer(squad, tickCounter);
-                    Guard.attempt(logger, "idle gestures", () -> idleGesture(squad, tickCounter));
-                }
+                // Movement, look and behaviour are driven by NullBrain, which the
+                // plugin ticks right after this; nothing here steers bodies.
             }
         }
     }
@@ -1086,6 +1239,17 @@ public final class SquadManager implements Reloadable {
                 alive = false;
             }
             if (!alive) {
+                int deathTicks;
+                try {
+                    deathTicks = body.deathTicks();
+                } catch (Throwable t) {
+                    deathTicks = Integer.MAX_VALUE;
+                }
+                if (deathTicks >= 0 && deathTicks < 22) {
+                    // The death animation is still playing: the body tips over on
+                    // every client first, then goes with vanilla's puff of smoke.
+                    continue;
+                }
                 it.remove();
                 Guard.attempt(logger, "forgetting a dead Null", () -> body.destroy());
             }
@@ -1369,6 +1533,27 @@ public final class SquadManager implements Reloadable {
             squad.targetId = target;
             squad.targetLabel = label == null ? "" : label;
             squad.point = point;
+            squad.formationAnchor = null;
+            if (formation != null) {
+                squad.formation = formation;
+            }
+            count += squad.members.size();
+        }
+        return count;
+    }
+
+    /**
+     * A formation held at a fixed anchor and facing: every member walks to its own
+     * cell of the rotated matrix and stands still there.
+     */
+    public int holdFormation(UUID owner, Vec3d anchor, float yaw, String formation) {
+        int count = 0;
+        for (Squad squad : squadsOf(owner)) {
+            squad.objective = Objective.FORMATION;
+            squad.targetLabel = "holding " + (formation == null ? squad.formation : formation);
+            squad.point = anchor;
+            squad.formationAnchor = anchor;
+            squad.formationYaw = yaw;
             if (formation != null) {
                 squad.formation = formation;
             }
@@ -1586,23 +1771,25 @@ public final class SquadManager implements Reloadable {
                 if (look != null) {
                     body.lookAt(look);
                 }
+                Player handle = redglitchx.nullarmy.plugin.body.Bodies.player(body);
                 switch (gesture) {
                     case "wave":
                     case "salute":
                     case "nod":
-                        body.applySteering(new Vec3d(0, 0, 0));
-                        break;
                     case "point":
-                        if (look != null) {
-                            body.lookAt(look);
+                        if (handle != null) {
+                            handle.swingMainHand();
+                        }
+                        if (plugin.brain() != null) {
+                            plugin.brain().acknowledge(body, plugin.brain().mind(body));
                         }
                         break;
                     case "dance":
-                        // Bouncing reads as dancing through real physics.
-                        body.applySteering(new Vec3d(0, 0.12, 0));
+                        // A real jump: vanilla physics, nothing faked.
+                        body.setMovement(0, 0, NullBody.GAIT_STOP, true, false);
                         break;
                     case "sit":
-                        body.applySteering(new Vec3d(0, -0.02, 0));
+                        body.setMovement(0, 0, NullBody.GAIT_STOP, false, true);
                         break;
                     default:
                         break;
@@ -1634,21 +1821,20 @@ public final class SquadManager implements Reloadable {
                 if (bodyPosition.distanceTo(look) > GREET_DISTANCE) {
                     continue;
                 }
-                body.lookAt(look);
+                if (plugin.brain() != null) {
+                    plugin.brain().attend(body, target.getUniqueId(), 60);
+                    plugin.brain().acknowledge(body, plugin.brain().mind(body));
+                } else {
+                    body.lookAt(look);
+                }
                 done++;
             } catch (Throwable t) {
                 logger.log(Level.FINE, "[NullArmy] greeting skipped: " + Guard.describe(t));
             }
         }
         playGestureSound(at, "wave");
-        // A lambda cannot capture a variable that changes, so the count is
-        // frozen before the message is built.
-        final int greeted = done;
-        if (greeted > 0) {
-            Guard.attempt(logger, "greeting message", () ->
-                    target.sendMessage(PluginText.PREFIX + greeted
-                            + (greeted == 1 ? " Null" : " Nulls") + " raise a hand to you."));
-        }
+        // Chat silence: the greeting is the gesture. The issuer gets the count as
+        // the command's answer; the greeted player gets no plugin message.
         return done;
     }
 

@@ -121,6 +121,9 @@ public final class PluginConfig {
 
     private final boolean aiEnabled;
     private final Map<String, EndpointConfig> endpoints = new LinkedHashMap<>();
+
+    /** Every v3 setting (combat, zone, portals, skins, builder, bodies). */
+    private final V3Settings v3;
     private final Map<AgentRole, AgentBinding> bindings = new LinkedHashMap<>();
 
     public PluginConfig(FileConfiguration config) {
@@ -139,9 +142,11 @@ public final class PluginConfig {
          * plugin from enabling - that was blocker-shaped behaviour in the first
          * build, and spec 9 wants visible caps, not a dead plugin.
          */
-        int maxLive = clamp(config.getInt("limits.max-live-npcs", 64), 1, 4096,
+        // v3: every count is capped at 100 - a server cannot be talked into a
+        // thousand ServerPlayer bodies by a typo.
+        int maxLive = clamp(config.getInt("limits.max-live-npcs", 64), 1, 100,
                 "limits.max-live-npcs", logger);
-        int hardCap = clamp(config.getInt("limits.summon-hard-cap", 24), 1, 4096,
+        int hardCap = clamp(config.getInt("limits.summon-hard-cap", 24), 1, 100,
                 "limits.summon-hard-cap", logger);
         if (hardCap > maxLive) {
             if (logger != null) {
@@ -280,6 +285,7 @@ public final class PluginConfig {
 
         // ------------------------------------------------------------ endpoints
         this.aiEnabled = config.getBoolean("ai.enabled", false);
+        this.v3 = new V3Settings(config, logger);
 
         ConfigurationSection epSection = config.getConfigurationSection("ai.endpoints");
         if (epSection != null) {
@@ -506,6 +512,12 @@ public final class PluginConfig {
         }
     }
 
+    /** The v3 settings. Never null. */
+    public V3Settings v3() { return v3; }
+
+    /** The parsed file this configuration was built from. */
+    public FileConfiguration file() { return config; }
+
     public Caps caps() { return caps; }
 
     public boolean griefingEnabled() { return griefingEnabled; }
@@ -639,7 +651,15 @@ public final class PluginConfig {
     private static List<String> readWakeWords(FileConfiguration config) {
         List<String> fallback = List.of("null", "nulls", "commander");
         try {
-            List<String> raw = config.getStringList("chat.wake-words");
+            // getStringList() silently drops null elements, and `- null` unquoted
+            // in YAML IS a null element - the owner meant the word "null".
+            List<String> raw = new ArrayList<>();
+            List<?> list = config.getList("chat.wake-words");
+            if (list != null) {
+                for (Object item : list) {
+                    raw.add(item == null ? "null" : String.valueOf(item));
+                }
+            }
             if (raw == null || raw.isEmpty()) {
                 return fallback;
             }

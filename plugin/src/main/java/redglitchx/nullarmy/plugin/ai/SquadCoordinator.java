@@ -467,8 +467,10 @@ public final class SquadCoordinator implements Reloadable {
             }
             Guard.attempt(plugin.getLogger(), "automatic squad coordination", () -> {
                 String result = deterministicStep(owner);
-                if (result != null && !result.startsWith("refused") && !result.contains("status")) {
-                    player.sendMessage(PREFIX + "Commander: " + result);
+                if (result != null && !result.startsWith("refused") && !result.contains("status")
+                        && plugin.chatGate() != null) {
+                    // Chat silence: an unprompted coordination step is an event.
+                    plugin.chatGate().eventRaw("Commander coordinated " + player.getName() + "'s squad: " + result);
                 }
             });
             // One owner per interval: coordination is a nudge, not a broadcast.

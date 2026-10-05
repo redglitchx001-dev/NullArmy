@@ -336,6 +336,22 @@ public final class CommanderManager implements Listener, Reloadable {
         if (commander == null) {
             return;
         }
+        // The owner's saved loadout is applied as full items - enchantments,
+        // potions, names and all - straight into the body's inventory. The old
+        // LoadoutSlot path carried only material and count, which silently turned
+        // an owner's enchanted gear into plain items.
+        org.bukkit.entity.Player handle = redglitchx.nullarmy.plugin.body.Bodies.player(commander);
+        if (handle != null) {
+            org.bukkit.inventory.PlayerInventory inv = handle.getInventory();
+            for (int i = 0; i < loadout.length && i < redglitchx.nullarmy.plugin.body.Bodies.SLOTS; i++) {
+                ItemStack stack = loadout[i];
+                if (stack == null || stack.getType() == null || stack.getType().isAir()) {
+                    continue;
+                }
+                redglitchx.nullarmy.plugin.body.Bodies.set(inv, i, stack.clone());
+            }
+            return;
+        }
         List<LoadoutSlot> slots = new ArrayList<>();
         for (int i = 0; i < loadout.length; i++) {
             ItemStack stack = loadout[i];

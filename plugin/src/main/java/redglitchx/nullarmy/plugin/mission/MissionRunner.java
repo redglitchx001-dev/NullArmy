@@ -184,9 +184,12 @@ public final class MissionRunner implements Reloadable {
 
     private void announce(UUID ownerId, String message) {
         try {
-            Player player = ownerId == null ? null : Bukkit.getPlayer(ownerId);
-            if (player != null && player.isOnline()) {
-                player.sendMessage(message);
+            // Chat silence: mission progress is an event - console and
+            // /null status - never a chat line.
+            if (plugin.chatGate() != null) {
+                Player player = ownerId == null ? null : Bukkit.getPlayer(ownerId);
+                plugin.chatGate().eventRaw("mission (" + (player == null ? "owner offline" : player.getName())
+                        + "): " + redglitchx.nullarmy.plugin.util.PluginText.plain(message));
             }
         } catch (Throwable t) {
             plugin.getLogger().fine("[NullArmy] mission announcement skipped: " + Guard.describe(t));

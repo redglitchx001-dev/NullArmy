@@ -143,6 +143,37 @@ public final class CoreTestSuite {
         run("missions never ask for destruction",
                 CoreTestSuite::testMissionsAreSafe);
 
+        run("v3 kit: netherite Prot IV chest, >=4 enchanted, >=2 potions, >=3 block stacks",
+                CoreTestSuite::testKitV3Contents);
+        run("kit lines round-trip enchantments, potions and counts",
+                CoreTestSuite::testKitSerialization);
+        run("an unedited pre-v3 kit is upgraded, an edited one is kept",
+                CoreTestSuite::testKitLegacyUpgrade);
+        run("fallback planner builds a bridge, a hut and a gather plan",
+                CoreTestSuite::testFallbackPlanner);
+        run("build plan parser reads strict JSON and rejects junk",
+                CoreTestSuite::testBuildPlanParser);
+        run("build plan validator keeps steps in the zone and blocks real",
+                CoreTestSuite::testBuildPlanValidator);
+        run("summon zone bounds math (clamp, contains, outline)",
+                CoreTestSuite::testZoneBounds);
+        run("formation matrix rotates fixed cells and never shares one",
+                CoreTestSuite::testFormationMatrix);
+        run("message templates have no unresolved placeholders",
+                CoreTestSuite::testMessagePlaceholderScan);
+        run("YAML errors are located with line, column and snippet",
+                CoreTestSuite::testYamlProblem);
+        run("skin payloads are read from JSON, MineSkin, Mojang and base64",
+                CoreTestSuite::testSkinPayload);
+        run("bow aim leads a moving target and arcs over distance",
+                CoreTestSuite::testBallistics);
+        run("separation pushes crowded bodies apart and finds piles",
+                CoreTestSuite::testSeparation);
+        run("portal frame: 4x5 obsidian, 2x3 air, support and floating gap",
+                CoreTestSuite::testPortalFrame);
+        run("formation cells are assigned with the least total walking, no crossing",
+                CoreTestSuite::testFormationAssignment);
+
         System.out.println();
         System.out.println("passed: " + passed + "  failed: " + failed);
         if (failed > 0) {
@@ -1133,17 +1164,22 @@ public final class CoreTestSuite {
         java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> kit =
                 redglitchx.nullarmy.core.kit.DefaultKit.DEFAULT;
         java.util.Map<Integer, String> slots = redglitchx.nullarmy.core.kit.DefaultKit.slotMap(kit);
-        checkEquals("IRON_CHESTPLATE", slots.get(38), "iron chestplate in the chestplate slot");
+        checkEquals("NETHERITE_CHESTPLATE", slots.get(38), "netherite chestplate in the chestplate slot");
+        checkEquals("NETHERITE_HELMET", slots.get(39), "netherite helmet in the helmet slot");
+        checkEquals("NETHERITE_LEGGINGS", slots.get(37), "netherite leggings in the leggings slot");
+        checkEquals("NETHERITE_BOOTS", slots.get(36), "netherite boots in the boots slot");
         checkEquals("SHIELD", slots.get(40), "shield in the offhand slot");
-        checkEquals("IRON_SWORD", slots.get(0), "hotbar 0 holds the iron sword");
+        checkEquals("NETHERITE_SWORD", slots.get(0), "hotbar 0 holds the netherite sword");
         checkEquals("BOW", slots.get(1), "hotbar 1 holds the bow");
-        checkEquals("ARROW", slots.get(2), "hotbar 2 holds arrows");
-        checkEquals("GOLDEN_APPLE", slots.get(3), "hotbar 3 holds golden apples");
-        checkEquals("COOKED_BEEF", slots.get(4), "hotbar 4 holds cooked food");
-        checkEquals("IRON_PICKAXE", slots.get(5), "hotbar 5 holds the iron pickaxe");
-        checkEquals("ENDER_PEARL", slots.get(6), "hotbar 6 holds ender pearls");
+        checkEquals("NETHERITE_AXE", slots.get(2), "hotbar 2 holds the netherite axe");
+        checkEquals("NETHERITE_PICKAXE", slots.get(3), "hotbar 3 holds the netherite pickaxe");
+        checkEquals("GOLDEN_APPLE", slots.get(4), "hotbar 4 holds golden apples");
+        checkEquals("POTION", slots.get(5), "hotbar 5 holds healing potions");
+        checkEquals("COBBLESTONE", slots.get(6), "hotbar 6 holds cobblestone");
         checkEquals("WATER_BUCKET", slots.get(7), "hotbar 7 holds the water bucket");
-        checkEquals("TORCH", slots.get(8), "hotbar 8 holds torches");
+        checkEquals("ENDER_PEARL", slots.get(8), "hotbar 8 holds ender pearls");
+        checkEquals("ARROW", slots.get(9), "the one arrow Infinity needs is carried");
+        checkEquals("TORCH", slots.get(16), "torches are carried");
         for (redglitchx.nullarmy.core.kit.DefaultKit.Item item : kit) {
             check(item.slot() >= 0 && item.slot() <= 40, "every kit slot is a real player slot");
             check(item.count() >= 1 && item.count() <= 64, "every count is a legal stack size");
@@ -1188,7 +1224,7 @@ public final class CoreTestSuite {
                 "applying the same kit twice writes nothing, so nothing duplicates");
 
         java.util.Map<Integer, String> edited = new java.util.LinkedHashMap<>(equipped);
-        edited.put(0, "NETHERITE_SWORD");
+        edited.put(0, "IRON_SWORD");
         edited.remove(8);
         java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> missing =
                 redglitchx.nullarmy.core.kit.DefaultKit.missingFrom(kit, edited);
@@ -1583,4 +1619,426 @@ public final class CoreTestSuite {
                 "an invented mission is not a mission");
     }
 
+
+    // ===================================================================
+    //  v3: kit, builder, zone, formations, messages, config, skins, combat
+    // ===================================================================
+
+    private static void testKitV3Contents() {
+        java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> kit =
+                redglitchx.nullarmy.core.kit.DefaultKit.DEFAULT;
+        redglitchx.nullarmy.core.kit.DefaultKit.Item chest = null;
+        redglitchx.nullarmy.core.kit.DefaultKit.Item boots = null;
+        redglitchx.nullarmy.core.kit.DefaultKit.Item sword = null;
+        redglitchx.nullarmy.core.kit.DefaultKit.Item bow = null;
+        for (redglitchx.nullarmy.core.kit.DefaultKit.Item item : kit) {
+            if (item.slot() == 38) chest = item;
+            if (item.slot() == 36) boots = item;
+            if (item.slot() == 0) sword = item;
+            if (item.material().equals("BOW")) bow = item;
+        }
+        check(chest != null && chest.material().equals("NETHERITE_CHESTPLATE"), "netherite chestplate");
+        checkEquals(4, chest.enchants().get("protection"), "chestplate Protection IV");
+        checkEquals(3, chest.enchants().get("unbreaking"), "chestplate Unbreaking III");
+        checkEquals(4, boots.enchants().get("feather_falling"), "boots Feather Falling IV");
+        checkEquals(5, sword.enchants().get("sharpness"), "sword Sharpness V");
+        checkEquals(1, bow.enchants().get("infinity"), "bow Infinity");
+        check(redglitchx.nullarmy.core.kit.DefaultKit.enchantedCount(kit) >= 4, ">= 4 enchanted items");
+        check(redglitchx.nullarmy.core.kit.DefaultKit.potionTypes(kit).size() >= 2, ">= 2 potion types");
+        check(redglitchx.nullarmy.core.kit.DefaultKit.potionTypes(kit).contains("strong_healing"),
+                "Healing II is carried");
+        check(redglitchx.nullarmy.core.kit.DefaultKit.blockStacks(kit) >= 3, ">= 3 building block stacks");
+        java.util.Set<Integer> slots = new java.util.HashSet<>();
+        for (redglitchx.nullarmy.core.kit.DefaultKit.Item item : kit) {
+            check(slots.add(item.slot()), "no two kit entries share slot " + item.slot());
+        }
+    }
+
+    private static void testKitSerialization() {
+        java.util.List<String> errors = new java.util.ArrayList<>();
+        java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> kit =
+                redglitchx.nullarmy.core.kit.DefaultKit.parse(java.util.Arrays.asList(
+                        "0:netherite_sword:1|minecraft:sharpness=5,unbreaking=3",
+                        "5:POTION:2|potion=minecraft:strong_healing",
+                        "6:COBBLESTONE:64",
+                        "7:BOW:1|power=9000,infinity=1",
+                        "8:BOW:1|sharpness=abc"), errors);
+        checkEquals(5, kit.size(), "five lines, five items (bad attributes do not cost the item)");
+        checkEquals("NETHERITE_SWORD", kit.get(0).material(), "material normalised");
+        checkEquals(5, kit.get(0).enchants().get("sharpness"), "namespace stripped from enchantment");
+        checkEquals("strong_healing", kit.get(1).potion(), "potion type read");
+        checkEquals(2, kit.get(1).count(), "potion count kept");
+        checkEquals(64, kit.get(2).count(), "block count kept");
+        check(!kit.get(3).enchants().containsKey("power"), "an absurd level is refused");
+        checkEquals(2, errors.size(), "both bad attributes are reported");
+        java.util.List<String> lines = redglitchx.nullarmy.core.kit.DefaultKit.serialize(kit);
+        checkEquals("0:NETHERITE_SWORD:1|sharpness=5,unbreaking=3", lines.get(0), "enchant line form");
+        checkEquals("5:POTION:2|potion=strong_healing", lines.get(1), "potion line form");
+        java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> again =
+                redglitchx.nullarmy.core.kit.DefaultKit.parse(lines, null);
+        checkEquals(kit, again, "serialize then parse is lossless");
+        java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> builtIn =
+                redglitchx.nullarmy.core.kit.DefaultKit.parse(
+                        redglitchx.nullarmy.core.kit.DefaultKit.serialize(
+                                redglitchx.nullarmy.core.kit.DefaultKit.DEFAULT), null);
+        checkEquals(redglitchx.nullarmy.core.kit.DefaultKit.DEFAULT, builtIn, "the v3 kit round-trips");
+    }
+
+    private static void testKitLegacyUpgrade() {
+        java.util.List<String> notes = new java.util.ArrayList<>();
+        java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> upgraded =
+                redglitchx.nullarmy.core.kit.DefaultKit.resolveConfigured(
+                        redglitchx.nullarmy.core.kit.DefaultKit.LEGACY_V2_LINES, null, notes);
+        check(upgraded == redglitchx.nullarmy.core.kit.DefaultKit.DEFAULT, "untouched v2 kit -> v3 kit");
+        checkEquals(1, notes.size(), "the upgrade is announced");
+        java.util.List<String> edited = new java.util.ArrayList<>(
+                redglitchx.nullarmy.core.kit.DefaultKit.LEGACY_V2_LINES);
+        edited.set(0, "0:DIAMOND_SWORD:1");
+        notes.clear();
+        java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> kept =
+                redglitchx.nullarmy.core.kit.DefaultKit.resolveConfigured(edited, null, notes);
+        checkEquals("DIAMOND_SWORD", kept.get(0).material(), "an owner's edit is respected");
+        check(notes.isEmpty(), "no upgrade note for an edited kit");
+    }
+
+    private static void testFallbackPlanner() {
+        java.util.Map<String, Integer> stock = new java.util.LinkedHashMap<>();
+        stock.put("COBBLESTONE", 64);
+        stock.put("DEEPSLATE", 64);
+        redglitchx.nullarmy.core.construct.FallbackPlanner.Plan bridge =
+                redglitchx.nullarmy.core.construct.FallbackPlanner.plan("build a 6 block bridge", 0, 0, 0, 0, stock);
+        check(bridge != null, "a bridge is planned");
+        checkEquals(6, bridge.placements(), "the bridge is 6 blocks long");
+        int expectedZ = 1;
+        for (redglitchx.nullarmy.core.construct.BuildStep step : bridge.steps()) {
+            if (step.action() == redglitchx.nullarmy.core.construct.BuildStep.Action.PLACE) {
+                checkEquals(-1, step.y(), "bridge blocks are at floor level");
+                checkEquals(expectedZ++, step.z(), "bridge blocks run forward one after another");
+            }
+        }
+        redglitchx.nullarmy.core.construct.FallbackPlanner.Plan hut =
+                redglitchx.nullarmy.core.construct.FallbackPlanner.plan("a small hut", 0, 0, 0, 2, stock);
+        check(hut != null, "a hut is planned");
+        checkEquals(71, hut.placements(), "5x5 hut: 46 wall blocks (door gap) + 25 roof");
+        checkEquals(0, hut.shortfall(), "128 blocks are enough for the hut");
+        int lastY = Integer.MIN_VALUE;
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        boolean moved = false;
+        for (redglitchx.nullarmy.core.construct.BuildStep step : hut.steps()) {
+            if (step.action() == redglitchx.nullarmy.core.construct.BuildStep.Action.MOVE) {
+                moved = true;
+                continue;
+            }
+            check(step.y() >= lastY, "the hut is built bottom-up");
+            lastY = step.y();
+            check(seen.add(step.x() + "," + step.y() + "," + step.z()), "no block is placed twice");
+            check(step.z() <= 0, "facing north (2) puts the hut at negative z");
+        }
+        check(moved, "the hut plan walks between placements");
+        java.util.List<String> problems = redglitchx.nullarmy.core.construct.BuildPlanValidator.validate(
+                hut.steps(), 50, -8, 24, 400, java.util.Collections.emptySet(), b -> true);
+        check(problems.isEmpty(), "the fallback hut passes the validator: " + problems);
+        java.util.List<int[]> logs = java.util.Arrays.asList(new int[] {10, 0, 0}, new int[] {3, 0, 1},
+                new int[] {3, 1, 1}, new int[] {20, 0, 5});
+        redglitchx.nullarmy.core.construct.FallbackPlanner.Plan gather =
+                redglitchx.nullarmy.core.construct.FallbackPlanner.gather(logs, 0, 0, 0, 3);
+        checkEquals(9, gather.steps().size(), "3 logs: move, break, pick up each");
+        checkEquals(3, gather.steps().get(1).x(), "the nearest log is chopped first");
+        checkEquals(redglitchx.nullarmy.core.construct.BuildStep.Action.PICKUP, gather.steps().get(2).action(),
+                "the drop is picked up after the break");
+        check(redglitchx.nullarmy.core.construct.FallbackPlanner.plan("dance", 0, 0, 0, 0, stock) == null,
+                "an unknown goal is not a plan");
+    }
+
+    private static void testBuildPlanParser() {
+        String reply = "Sure! Here is the plan:\n```json\n{\"steps\":[{\"null\":\"Kr4v\",\"action\":\"MOVE\","
+                + "\"x\":1,\"y\":0,\"z\":2},{\"action\":\"place\",\"x\":1,\"y\":0,\"z\":3,"
+                + "\"block\":\"minecraft:cobblestone\"},{\"action\":\"WAIT\",\"ticks\":10}]}\n```";
+        redglitchx.nullarmy.core.construct.BuildPlanParser.Result ok =
+                redglitchx.nullarmy.core.construct.BuildPlanParser.parse(reply, 400);
+        check(ok.ok(), "fenced JSON is read: " + ok.error());
+        checkEquals(3, ok.steps().size(), "three steps");
+        checkEquals("Kr4v", ok.steps().get(0).nullName(), "null name kept");
+        checkEquals("COBBLESTONE", ok.steps().get(1).block(), "block normalised");
+        checkEquals(10, ok.steps().get(2).ticks(), "wait ticks read");
+        check(!redglitchx.nullarmy.core.construct.BuildPlanParser.parse("{\"steps\":[{\"action\":\"PASTE\","
+                + "\"x\":0,\"y\":0,\"z\":0}]}", 400).ok(), "an unknown action is refused");
+        check(!redglitchx.nullarmy.core.construct.BuildPlanParser.parse("{\"steps\":[{\"action\":\"PLACE\","
+                + "\"x\":0,\"y\":0,\"z\":0}]}", 400).ok(), "PLACE without a block is refused");
+        check(!redglitchx.nullarmy.core.construct.BuildPlanParser.parse("{\"steps\":[{\"action\":\"MOVE\","
+                + "\"x\":0.5,\"y\":0,\"z\":0}]}", 400).ok(), "fractional coordinates are refused");
+        check(!redglitchx.nullarmy.core.construct.BuildPlanParser.parse("no json here", 400).ok(),
+                "prose is refused");
+        check(!redglitchx.nullarmy.core.construct.BuildPlanParser.parse(
+                "[{\"action\":\"WAIT\"},{\"action\":\"WAIT\"}]", 1).ok(), "max-steps is enforced");
+        String json = redglitchx.nullarmy.core.construct.BuildPlanParser.toJson(ok.steps());
+        checkEquals(ok.steps(), redglitchx.nullarmy.core.construct.BuildPlanParser.parse(json, 400).steps(),
+                "steps round-trip through JSON");
+    }
+
+    private static void testBuildPlanValidator() {
+        java.util.Set<String> names = new java.util.HashSet<>(java.util.Arrays.asList("Kr4v", "Zed"));
+        java.util.List<redglitchx.nullarmy.core.construct.BuildStep> good = java.util.Arrays.asList(
+                redglitchx.nullarmy.core.construct.BuildStep.move(2, 0, 2).forNull("kr4v"),
+                redglitchx.nullarmy.core.construct.BuildStep.place(3, 0, 2, "COBBLESTONE"));
+        check(redglitchx.nullarmy.core.construct.BuildPlanValidator.validate(good, 50, -8, 24, 400, names,
+                b -> b.equals("COBBLESTONE")).isEmpty(), "a sane plan passes");
+        java.util.List<redglitchx.nullarmy.core.construct.BuildStep> bad = java.util.Arrays.asList(
+                redglitchx.nullarmy.core.construct.BuildStep.place(51, 0, 0, "COBBLESTONE"),
+                redglitchx.nullarmy.core.construct.BuildStep.place(1, 40, 0, "COBBLESTONE"),
+                redglitchx.nullarmy.core.construct.BuildStep.place(2, 0, 0, "DIAMOND_SWORD"),
+                redglitchx.nullarmy.core.construct.BuildStep.place(3, 0, 0, "COBBLESTONE").forNull("Ghost"),
+                redglitchx.nullarmy.core.construct.BuildStep.place(4, 0, 0, "COBBLESTONE"),
+                redglitchx.nullarmy.core.construct.BuildStep.place(4, 0, 0, "COBBLESTONE"));
+        java.util.List<String> problems = redglitchx.nullarmy.core.construct.BuildPlanValidator.validate(
+                bad, 50, -8, 24, 400, names, b -> b.equals("COBBLESTONE"));
+        checkEquals(5, problems.size(), "outside zone, too high, not a block, unknown Null, duplicate: "
+                + problems);
+        check(!redglitchx.nullarmy.core.construct.BuildPlanValidator.validate(good, 50, -8, 24, 1, names,
+                b -> true).isEmpty(), "a plan longer than max-steps is refused");
+    }
+
+    private static void testZoneBounds() {
+        checkEquals(16, redglitchx.nullarmy.core.zone.SummonZone.clampSize(3), "size clamps up to 16");
+        checkEquals(200, redglitchx.nullarmy.core.zone.SummonZone.clampSize(999), "size clamps down to 200");
+        redglitchx.nullarmy.core.zone.SummonZone zone = new redglitchx.nullarmy.core.zone.SummonZone(10.5, -20, 100);
+        checkEquals(-39.5, zone.minX(), "min x");
+        checkEquals(60.5, zone.maxX(), "max x");
+        check(zone.contains(10.5, -20), "the centre is inside");
+        check(zone.contains(60.5, 30), "the corner is inside (inclusive)");
+        check(!zone.contains(60.6, 0), "just past the edge is outside");
+        check(zone.containsBlock(59, 29), "the last whole block is inside");
+        check(!zone.containsBlock(60, 29), "a block straddling the edge is outside");
+        double[] clamped = zone.clampInside(500, -500, 2);
+        checkEquals(58.5, clamped[0], "clamped x keeps the margin");
+        checkEquals(-68.0, clamped[1], "clamped z keeps the margin");
+        java.util.List<double[]> outline = zone.outline(2.0);
+        check(outline.size() >= 200, "outline has points every 2 blocks");
+        for (double[] p : outline) {
+            check(zone.contains(p[0], p[1]), "every outline point lies on the zone");
+            boolean onEdge = Math.abs(p[0] - zone.minX()) < 1e-9 || Math.abs(p[0] - zone.maxX()) < 1e-9
+                    || Math.abs(p[1] - zone.minZ()) < 1e-9 || Math.abs(p[1] - zone.maxZ()) < 1e-9;
+            check(onEdge, "every outline point lies on the border");
+        }
+    }
+
+    private static void testFormationMatrix() {
+        for (String kind : redglitchx.nullarmy.core.formation.FormationMatrix.kinds()) {
+            for (int n : new int[] {1, 2, 5, 9, 12}) {
+                java.util.List<double[]> cells =
+                        redglitchx.nullarmy.core.formation.FormationMatrix.offsets(kind, n, 1.1);
+                checkEquals(n, cells.size(), kind + " gives one cell per member (" + n + ")");
+                check(redglitchx.nullarmy.core.formation.FormationMatrix.minPairDistance(cells) >= 1.1 - 1e-9,
+                        kind + " keeps cells >= 1.1 apart (" + n + ")");
+            }
+        }
+        java.util.List<double[]> square = redglitchx.nullarmy.core.formation.FormationMatrix.offsets("square", 9, 1.5);
+        checkEquals(-1.5, square.get(0)[0], "square 3x3 first cell is left");
+        checkEquals(1.5, square.get(0)[1], "square 3x3 first cell is front row");
+        double[] south = redglitchx.nullarmy.core.formation.FormationMatrix.rotate(0, 1, 0f);
+        checkEquals(0.0, Math.round(south[0] * 1e9) / 1e9, "yaw 0: forward is +z (x)");
+        checkEquals(1.0, Math.round(south[1] * 1e9) / 1e9, "yaw 0: forward is +z (z)");
+        double[] rightSouth = redglitchx.nullarmy.core.formation.FormationMatrix.rotate(1, 0, 0f);
+        checkEquals(-1.0, Math.round(rightSouth[0] * 1e9) / 1e9, "yaw 0: right hand is -x");
+        double[] west = redglitchx.nullarmy.core.formation.FormationMatrix.rotate(0, 1, 90f);
+        checkEquals(-1.0, Math.round(west[0] * 1e9) / 1e9, "yaw 90: forward is -x");
+        java.util.List<double[]> a = redglitchx.nullarmy.core.formation.FormationMatrix.worldCells("square", 9, 1.5, 0, 0, 0f);
+        java.util.List<double[]> b = redglitchx.nullarmy.core.formation.FormationMatrix.worldCells("square", 9, 1.5, 0, 0, 30f);
+        for (int i = 0; i < 9; i++) {
+            double ra = Math.hypot(a.get(i)[0], a.get(i)[1]);
+            double rb = Math.hypot(b.get(i)[0], b.get(i)[1]);
+            check(Math.abs(ra - rb) < 1e-9, "rotation keeps every cell's distance to the anchor");
+        }
+        check(Math.abs(b.get(0)[0] - a.get(0)[0]) > 0.1, "a 30 degree yaw really moves the cells");
+        check(redglitchx.nullarmy.core.formation.FormationMatrix.isKnown("Phalanx"), "names are case-insensitive");
+        check(!redglitchx.nullarmy.core.formation.FormationMatrix.isKnown("blob"), "unknown names are refused");
+        checkEquals(1.1, redglitchx.nullarmy.core.formation.FormationMatrix.spacing(0.4), "spacing floor is 1.1");
+    }
+
+    private static void testMessagePlaceholderScan() {
+        java.util.List<String> problems = redglitchx.nullarmy.core.text.MessageTemplates.scan();
+        check(problems.isEmpty(), "no template has a broken placeholder: " + problems);
+        for (java.util.Map.Entry<String, String> entry
+                : redglitchx.nullarmy.core.text.MessageTemplates.all().entrySet()) {
+            java.util.Map<String, Object> values = new java.util.HashMap<>();
+            for (String name : redglitchx.nullarmy.core.text.MessageTemplates.placeholders(entry.getValue())) {
+                values.put(name, "X");
+            }
+            String line = redglitchx.nullarmy.core.text.MessageTemplates.render(entry.getKey(), values);
+            check(line.indexOf('{') < 0 && line.indexOf('}') < 0, entry.getKey() + " renders completely");
+            check(!line.contains("%s") && !line.contains("%d"), entry.getKey() + " has no printf left");
+        }
+        String shutdown = redglitchx.nullarmy.core.text.MessageTemplates.render("shutdown.started",
+                "who", "Steve", "count", 4);
+        check(shutdown.startsWith("Steve destroyed the Totem Of Null"), "the owner's broken line now reads right");
+        boolean refused = false;
+        try {
+            redglitchx.nullarmy.core.text.MessageTemplates.render("shutdown.started", "count", 4);
+        } catch (IllegalArgumentException expected) {
+            refused = true;
+        }
+        check(refused, "a missing value is refused, never printed as a half sentence");
+        check(!redglitchx.nullarmy.core.text.MessageTemplates.problemsOf("t", "%s destroyed %s Totem").isEmpty(),
+                "the scanner catches printf templates");
+        check(!redglitchx.nullarmy.core.text.MessageTemplates.problemsOf("t", "{0} destroyed").isEmpty(),
+                "the scanner catches positional templates");
+        check(!redglitchx.nullarmy.core.text.MessageTemplates.problemsOf("t", "{name destroyed").isEmpty(),
+                "the scanner catches unbalanced braces");
+    }
+
+    private static void testYamlProblem() {
+        String source = "limits:\n  max-live-npcs: 64\n  summon-hard-cap: 24\n bad: [\nportals:\n";
+        String message = "while parsing a block mapping\n in 'reader', line 1, column 1:\n    limits:\n    ^\n"
+                + "expected <block end>, but found '<block mapping start>'\n in 'reader', line 4, column 2:\n"
+                + "     bad: [\n     ^\n";
+        redglitchx.nullarmy.core.config.YamlProblem problem =
+                redglitchx.nullarmy.core.config.YamlProblem.locate("config.yml", message, source);
+        checkEquals(4, problem.line(), "the last mark is the problem line");
+        checkEquals(2, problem.column(), "the problem column");
+        check(problem.problem().contains("expected <block end>"), "the human part of the message is kept");
+        check(!problem.problem().contains("in 'reader'"), "the marks are not repeated in the summary");
+        check(problem.headline().startsWith("config.yml line 4, column 2:"), "headline names file, line, column");
+        checkEquals(4, problem.snippet().size(), "three lines of context plus a caret line");
+        check(problem.snippet().get(1).contains("bad: ["), "the offending line is in the snippet");
+        checkEquals("     |  ^", problem.snippet().get(2), "the caret sits under the column");
+        redglitchx.nullarmy.core.config.YamlProblem none =
+                redglitchx.nullarmy.core.config.YamlProblem.locate("config.yml", "something odd", null);
+        check(!none.hasPosition(), "a message without marks has no position");
+    }
+
+    private static void testSkinPayload() {
+        String value = "ewogICJ0aW1lc3RhbXAiIDogMTcwMDAwMDAwMDAwMA==";
+        String sig = "c2lnbmF0dXJlLWJ5dGVzLWhlcmUtYmFzZTY0LXRleHQ=";
+        check(redglitchx.nullarmy.core.skin.SkinPayload.parse("{\"value\":\"" + value + "\",\"signature\":\""
+                + sig + "\"}").complete(), "flat JSON");
+        redglitchx.nullarmy.core.skin.SkinPayload mineskin = redglitchx.nullarmy.core.skin.SkinPayload.parse(
+                "{\"data\":{\"texture\":{\"value\":\"" + value + "\",\"signature\":\"" + sig + "\"}}}");
+        check(mineskin.complete() && mineskin.signature().equals(sig), "MineSkin nesting");
+        check(redglitchx.nullarmy.core.skin.SkinPayload.parse("{\"id\":\"x\",\"properties\":[{\"name\":\"textures\","
+                + "\"value\":\"" + value + "\",\"signature\":\"" + sig + "\"}]}").complete(), "Mojang session profile");
+        check(redglitchx.nullarmy.core.skin.SkinPayload.parse(value + "\n" + sig).complete(), "two lines of base64");
+        redglitchx.nullarmy.core.skin.SkinPayload unsigned = redglitchx.nullarmy.core.skin.SkinPayload.parse(value);
+        check(!unsigned.complete() && unsigned.value().equals(value), "raw base64 is read but reported unsigned");
+        redglitchx.nullarmy.core.skin.SkinPayload html =
+                redglitchx.nullarmy.core.skin.SkinPayload.parse("<html><body>502 Bad Gateway</body></html>");
+        check(html.error() != null && html.error().contains("502"), "an HTML error page is reported with a preview");
+        checkEquals(83, redglitchx.nullarmy.core.skin.SkinPayload.preview(new String(new char[200]).replace('\0', 'a'),
+                80).length(), "previews are cut at 80 characters");
+    }
+
+    private static void testBallistics() {
+        redglitchx.nullarmy.core.combat.Ballistics.Aim still =
+                redglitchx.nullarmy.core.combat.Ballistics.solve(0, 1.6, 0, 0, 1.0, 30, 0, 0, 0, 3.0);
+        check(still.reachable(), "30 blocks is in range");
+        check(still.pitch() < 0f, "a level 30-block shot is arced upward (negative pitch)");
+        check(Math.abs(still.yaw()) < 1e-3, "aiming straight down +z is yaw 0");
+        redglitchx.nullarmy.core.combat.Ballistics.Aim moving =
+                redglitchx.nullarmy.core.combat.Ballistics.solve(0, 1.6, 0, 0, 1.0, 20, 0.2, 0, 0, 3.0);
+        double lead = redglitchx.nullarmy.core.combat.Ballistics.leadAlongVelocity(moving, 0, 20, 0.2, 0);
+        check(lead > 1.0, "a target walking +x is led by more than a block (" + lead + ")");
+        check(moving.yaw() < 0f, "leading a +x walker turns the aim toward +x (negative yaw)");
+        double[] point = moving.lookPoint(0, 1.6, 0, 10);
+        check(point[0] > 0 && point[2] > 0, "the look point lies forward and toward the lead");
+        double[] h = redglitchx.nullarmy.core.combat.Ballistics.heightAt(30, Math.toRadians(-still.pitch()), 3.0);
+        check(Math.abs(h[0] - (1.0 - 1.6)) < 0.05, "the simulated arrow lands on the target height");
+        checkEquals(1.5, redglitchx.nullarmy.core.combat.Ballistics.CRIT_MULTIPLIER, "vanilla crit multiplier");
+    }
+
+    private static void testSeparation() {
+        java.util.List<double[]> pile = new java.util.ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            pile.add(new double[] {0.1 * i, 64, 0.05 * i});
+        }
+        pile.add(new double[] {10, 64, 10});
+        pile.add(new double[] {0.1, 70, 0.1});
+        java.util.List<java.util.List<Integer>> groups =
+                redglitchx.nullarmy.core.flock.Separation.crowdedGroups(pile, 1.0, 2);
+        checkEquals(1, groups.size(), "one pile of more than two");
+        checkEquals(5, groups.get(0).size(), "the pile has the five close bodies only (not the far or the high one)");
+        double[] push = redglitchx.nullarmy.core.flock.Separation.steer(0, pile, 1.2);
+        check(push[0] < 0, "the leftmost body is pushed further left");
+        double[] same = redglitchx.nullarmy.core.flock.Separation.steer(0,
+                java.util.Arrays.asList(new double[] {0, 64, 0}, new double[] {0, 64, 0}), 1.2);
+        check(Math.hypot(same[0], same[1]) > 0.5, "two bodies on the same spot still split");
+        double[] alone = redglitchx.nullarmy.core.flock.Separation.steer(5, pile, 1.2);
+        checkEquals(0.0, alone[0], "a lone body is not pushed");
+        check(redglitchx.nullarmy.core.flock.Separation.minPairDistance(java.util.Arrays.asList(
+                new double[] {0, 64, 0}, new double[] {0.9, 64, 0}, new double[] {0, 66, 0})) > 0.85,
+                "different levels do not count as close");
+    }
+
+    private static void testPortalFrame() {
+        final java.util.Map<String, String> world = new java.util.HashMap<>();
+        redglitchx.nullarmy.core.portal.PortalFrame.Lookup lookup =
+                new redglitchx.nullarmy.core.portal.PortalFrame.Lookup() {
+                    public String type(int x, int y, int z) {
+                        String t = world.get(x + "," + y + "," + z);
+                        return t != null ? t : (y <= 63 ? "GRASS_BLOCK" : "AIR");
+                    }
+                    public boolean solid(int x, int y, int z) {
+                        return !redglitchx.nullarmy.core.portal.PortalFrame.isAir(type(x, y, z));
+                    }
+                };
+        redglitchx.nullarmy.core.portal.PortalFrame ground = new redglitchx.nullarmy.core.portal.PortalFrame(
+                0, 64, 0, true, redglitchx.nullarmy.core.portal.PortalFrame.Kind.GROUND, 1);
+        checkEquals(14, ground.frameCells().size(), "14 frame blocks");
+        checkEquals(6, ground.interiorCells().size(), "2x3 interior");
+        checkEquals(20, ground.faceCells().size(), "4x5 face");
+        check(ground.siteProblems(lookup, 4, 12).isEmpty(), "open flat ground is a valid site");
+        for (int[] c : ground.frameCells()) {
+            world.put(c[0] + "," + c[1] + "," + c[2], "OBSIDIAN");
+        }
+        check(ground.builtProblems(lookup, 4, 12).isEmpty(), "a complete frame with an air interior is valid");
+        int[] gap = ground.frameCells().get(5);
+        world.put(gap[0] + "," + gap[1] + "," + gap[2], "AIR");
+        check(!ground.builtProblems(lookup, 4, 12).isEmpty(), "a frame with a hole is not");
+        world.put(gap[0] + "," + gap[1] + "," + gap[2], "OBSIDIAN");
+        int[] in = ground.interiorCells().get(0);
+        world.put(in[0] + "," + in[1] + "," + in[2], "NETHER_PORTAL");
+        check(!ground.builtProblems(lookup, 4, 12).isEmpty(), "portal blocks inside are refused (one-way)");
+        world.clear();
+        world.put("1,66,0", "OAK_LOG");
+        check(!ground.siteProblems(lookup, 4, 12).isEmpty(), "a site that cuts into terrain is refused");
+        world.clear();
+        redglitchx.nullarmy.core.portal.PortalFrame floating = new redglitchx.nullarmy.core.portal.PortalFrame(
+                0, 70, 0, false, redglitchx.nullarmy.core.portal.PortalFrame.Kind.FLOATING, -1);
+        checkEquals(6, floating.gapBelow(lookup, 20), "base 70 over ground 63: 6 air blocks below");
+        check(floating.siteProblems(lookup, 4, 12).isEmpty(), "6 up is a valid floating site");
+        redglitchx.nullarmy.core.portal.PortalFrame tooLow = new redglitchx.nullarmy.core.portal.PortalFrame(
+                0, 66, 0, false, redglitchx.nullarmy.core.portal.PortalFrame.Kind.FLOATING, -1);
+        check(!tooLow.siteProblems(lookup, 4, 12).isEmpty(), "2 up is too low for a floating doorway");
+        double[] out = ground.stepOutPoint();
+        check(!ground.containsBody(out[0], out[1], out[2]), "the step-out point is outside the frame");
+        double[] inside = ground.insideSpots().get(0);
+        check(ground.containsBody(inside[0], inside[1], inside[2]), "the start spot is inside the frame");
+        int[] fp = ground.footprint();
+        check(fp[0] == 0 && fp[2] == 3 && fp[3] == 2, "footprint covers the face and the apron");
+    }
+
+    private static void testFormationAssignment() {
+        double[][] cost = {{4, 1, 3}, {2, 0, 5}, {3, 2, 2}};
+        int[] a = redglitchx.nullarmy.core.formation.FormationMatrix.optimalAssignment(cost);
+        double total = cost[0][a[0]] + cost[1][a[1]] + cost[2][a[2]];
+        checkEquals(5.0, total, "the classic 3x3 example costs 5 at best");
+        check(a[0] != a[1] && a[1] != a[2] && a[0] != a[2], "every member gets its own cell");
+        // A squad approaching a line of cells from the east: the leading body must
+        // take the farthest cell, so nobody walks through an occupied one.
+        double[][] bodies = {{5, 0}, {6.5, 0}, {8, 0}};
+        double[][] cells = {{-1.5, 0}, {0, 0}, {1.5, 0}};
+        double[][] dist = new double[3][3];
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                dist[i][j] = Math.hypot(bodies[i][0] - cells[j][0], bodies[i][1] - cells[j][1]);
+            }
+        }
+        int[] b = redglitchx.nullarmy.core.formation.FormationMatrix.optimalAssignment(dist);
+        double sum = dist[0][b[0]] + dist[1][b[1]] + dist[2][b[2]];
+        checkEquals(19.5, Math.round(sum * 1e9) / 1e9, "collinear paths: any order costs the same total");
+        double[][] grid = new double[2][3];
+        grid[0] = new double[] {0, 10, 10};
+        grid[1] = new double[] {10, 10, 0};
+        int[] c = redglitchx.nullarmy.core.formation.FormationMatrix.optimalAssignment(grid);
+        checkEquals(0, c[0], "fewer members than cells: member 0 takes its free cell");
+        checkEquals(2, c[1], "fewer members than cells: member 1 takes its free cell");
+    }
 }

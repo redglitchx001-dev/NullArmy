@@ -335,10 +335,10 @@ public final class ShutdownDirector implements Reloadable {
 
     private void announce(String message) {
         try {
-            for (Player player : Bukkit.getOnlinePlayers()) {
-                if (player != null && player.isOnline()) {
-                    player.sendMessage(message);
-                }
+            // Chat silence: the shutdown is reported to the console and to
+            // /null status, never broadcast to every player.
+            if (plugin.chatGate() != null) {
+                plugin.chatGate().eventRaw("shutdown: " + redglitchx.nullarmy.plugin.util.PluginText.plain(message));
             }
         } catch (Throwable t) {
             plugin.getLogger().fine("[NullArmy] shutdown announcement skipped: "

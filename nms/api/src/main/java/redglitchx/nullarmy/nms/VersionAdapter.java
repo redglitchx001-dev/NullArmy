@@ -67,6 +67,21 @@ public interface VersionAdapter {
         public SpawnRequest(UUID owner, String profileName, String worldName,
                             Vec3d position, int inventoryCapacity,
                             String skinValue, String skinSignature, boolean airborne) {
+            this(owner, profileName, worldName, position, inventoryCapacity, skinValue,
+                    skinSignature, airborne, false);
+        }
+
+        /**
+         * Full form including the crowding switch.
+         *
+         * @param allowCrowding skip the "another entity already stands here"
+         *     refusal. Only the self test uses it, to start twelve Nulls inside a
+         *     3x3 area and prove that separation really pulls them apart.
+         */
+        public SpawnRequest(UUID owner, String profileName, String worldName,
+                            Vec3d position, int inventoryCapacity,
+                            String skinValue, String skinSignature, boolean airborne,
+                            boolean allowCrowding) {
             this.owner = owner;
             this.profileName = profileName;
             this.worldName = worldName;
@@ -75,7 +90,13 @@ public interface VersionAdapter {
             this.skinValue = skinValue == null ? "" : skinValue;
             this.skinSignature = skinSignature == null ? "" : skinSignature;
             this.airborne = airborne;
+            this.allowCrowding = allowCrowding;
         }
+
+        private final boolean allowCrowding;
+
+        /** True when the occupancy refusal is skipped (self test only). */
+        public boolean allowCrowding() { return allowCrowding; }
 
         /** Convenience form with no skin - existing call sites keep working. */
         public SpawnRequest(UUID owner, String profileName, String worldName,
@@ -271,4 +292,43 @@ public interface VersionAdapter {
      * @return true when the packet was handed to the viewer's listener
      */
     default boolean announceTo(NullBody viewer, NullBody target) { return false; }
+
+    // ------------------------------------------------------------------ v3 bridge
+
+    /**
+     * Installs the rules the bodies answer inside vanilla code (who may hurt a
+     * Null, fall damage, item pickup, collisions). Called on enable and reload.
+     */
+    default void applyBodySettings(BodySettings settings) {
+    }
+
+    /** The rules currently installed. */
+    default BodySettings bodySettings() { return BodySettings.DEFAULTS; }
+
+    /**
+     * Replaces the skin of a live body and re-announces it: the player-info
+     * entry is withdrawn and sent again with the new textures, and every viewer
+     * gets the entity re-paired, because a client caches the skin per entity.
+     *
+     * <p>Empty value or signature clears the skin back to the default.</p>
+     *
+     * @return true when the body's profile now carries exactly this texture
+     */
+    default boolean reapplySkin(NullBody body, String value, String signature) { return false; }
+
+    /**
+     * The textures property the body's GameProfile really carries, as
+     * {@code {value, signature}}; null when it has none.
+     */
+    default String[] skinOf(NullBody body) { return null; }
+
+    /**
+     * The body the adapter created with this entity UUID - including one that is
+     * dying - or null. Lets the plugin recognise its own bodies in Bukkit events
+     * (a dying body is no longer in {@link #activeIn}).
+     */
+    default NullBody bodyOf(UUID id) { return null; }
+
+    /** True when the UUID belongs to a body this adapter created (probes included). */
+    default boolean isNullEntity(UUID id) { return bodyOf(id) != null; }
 }

@@ -24,7 +24,11 @@ public final class SkinData {
         /** Fetched live from Mojang this session. */
         NETWORK,
         /** In-memory only (already resolved earlier this session). */
-        MEMORY
+        MEMORY,
+        /** Pasted into config.yml as skins.value + skins.signature. */
+        CONFIG,
+        /** Returned by skins.proxy-url. */
+        PROXY
     }
 
     private final String value;
