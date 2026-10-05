@@ -135,7 +135,10 @@ public final class ConfigMigration {
             }
 
             File backup = backup(file);
-            String block = renderBlock(result.additions(), version, backup);
+            // A server that answered a pre-v4 switch keeps its answer: the v4
+            // key is appended carrying the old value, not the shipped default.
+            Map<String, Object> additions = ConfigMerge.foldLegacy(existing, result.additions());
+            String block = renderBlock(additions, version, backup);
             Files.write(file.toPath(), block.getBytes(StandardCharsets.UTF_8),
                     StandardOpenOption.APPEND, StandardOpenOption.CREATE);
 

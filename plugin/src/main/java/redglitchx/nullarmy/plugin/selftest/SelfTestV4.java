@@ -585,8 +585,13 @@ final class SelfTestV4 {
             // than guessing around the bodies: a portal is a frame, not a body.
             // Sites can be refused (something already standing there), so try a
             // couple of clearings before concluding the frame was never built.
+            // The portal ceiling is real: earlier squads' doorways are still
+            // standing, so clear them or there is no room for this one.
             List<redglitchx.nullarmy.plugin.portal.PortalBuilder.BuiltPortal> standing = List.of();
             for (int attempt = 0; attempt < 3 && standing.isEmpty(); attempt++) {
+                if (plugin.portals() != null) {
+                    Guard.attempt(plugin.getLogger(), "v4 portal cleanup", plugin.portals()::restoreAll);
+                }
                 if (squad != null) {
                     dismissAll();
                 }
@@ -757,6 +762,7 @@ final class SelfTestV4 {
                 && AimSkill.hitChance(15.0D, AimSkill.DEFAULT) >= 0.40D
                 && AimSkill.hitChance(15.0D, AimSkill.DEFAULT) <= 0.80D;
         boolean wired = settings() != null && Math.abs(settings().aimSkill() - 0.65D) < 0.001D;
+        double live = settings() == null ? -1.0D : settings().aimSkill();
         double maxError = AimSkill.maxAngleErrorDeg(AimSkill.DEFAULT);
         boolean spread = maxError >= 4.0D && maxError <= 10.0D
                 && Math.abs(AimSkill.angleErrorDeg(AimSkill.DEFAULT, 0.75D)) > 0.0D
@@ -764,10 +770,10 @@ final class SelfTestV4 {
                 && AimSkill.maxAngleErrorDeg(1.0D) == 0.0D;
         check("S-94", "P-05", band && wired && spread,
                 "at 15 blocks the aim model hits " + String.format(Locale.ROOT, "%.0f%%", rate * 100.0D)
-                        + " of its shots (40-80 % required), its spread is "
-                        + String.format(Locale.ROOT, "%.1f", maxError) + " degrees (4-10 required), the live"
-                        + " config really is 0.65, and only a perfect-skill Null aims perfectly - which is"
-                        + " banned");
+                        + " of its shots (40-80 % required), live config=" + live + " (0.65 required),"
+                        + " spread " + String.format(Locale.ROOT, "%.1f", maxError)
+                        + " degrees (4-10 required), and only a perfect-skill Null aims perfectly"
+                        + " - which is banned");
     }
 
     // ------------------------------------------------------------------- P-06
@@ -1114,6 +1120,7 @@ final class SelfTestV4 {
 
     private final List<Material> dugMaterials = new ArrayList<>();
     private volatile int gapSurfaceY;
+    private volatile int planksBefore;
 
     private void l02Setup() {
         dismissAll();
@@ -1140,6 +1147,12 @@ final class SelfTestV4 {
             Player handle = handle(body);
             if (handle != null) {
                 handle.getInventory().setItem(0, new ItemStack(Material.OAK_PLANKS, 32));
+                planksBefore = 0;
+                for (ItemStack stack : handle.getInventory().getContents()) {
+                    if (stack != null && stack.getType() == Material.OAK_PLANKS) {
+                        planksBefore += stack.getAmount();
+                    }
+                }
             }
             plugin.brain().resetBehaviourCounters();
             Vec3d ahead = new Vec3d(spot.x(), spot.y(), spot.z() + 8.0D);
@@ -1178,8 +1191,8 @@ final class SelfTestV4 {
             }
             gapSurfaceY = by;
             detail = bridged + " block(s) placed, " + solid + " of 2 gap blocks now solid, "
-                    + carried + " planks left in the pack";
-            ok = bridged >= 1 && solid >= 1 && carried < 32;
+                    + carried + " planks left in the pack (was " + planksBefore + ")";
+            ok = bridged >= 1 && solid >= 2 && carried < planksBefore;
         } catch (Throwable e) {
             ok = false;
             detail = Guard.describe(e);
@@ -1208,6 +1221,7 @@ final class SelfTestV4 {
     /** A patrol walks for ever; a guard sweeps his head and salutes when the owner returns. */
     private int lapsSeen;
     private int salutesBefore;
+    private String saluteDetail = "no squad";
 
     private void l03Check() {
         lapsSeen = plugin.brain().patrolLaps();
@@ -1224,6 +1238,7 @@ final class SelfTestV4 {
                 mind.order = new Mind.Order(Mind.Verb.HOLD, body.bodyPosition(), ownerHandle.getUniqueId(),
                         ownerHandle.getUniqueId(), plugin.currentTick(), 1);
                 salutesBefore = plugin.brain().salutes();
+                saluteDetail = "holding, owner " + ownerHandle.getName();
             }
         } catch (Throwable e) {
             notes.add("l03 salute setup threw " + Guard.describe(e));
@@ -1234,7 +1249,7 @@ final class SelfTestV4 {
         int now = plugin.brain().salutes();
         boolean salute = now > salutesBefore;
         check("S-103", "L-03", salute, "the guard salutes when the owner comes within 8 blocks (salutes "
-                + salutesBefore + " -> " + now + ")");
+                + salutesBefore + " -> " + now + ", guard " + saluteDetail + ")");
         dismissAll();
     }
 
@@ -1521,18 +1536,23 @@ final class SelfTestV4 {
             int recorded = plugin.lifecycle() == null ? -1 : plugin.lifecycle().lastDropCount();
             boolean enabled = settings() == null || settings().dropsEnabled();
             boolean chance = DeathDrops.shouldDrop(true, 1.0D, 0.5D);
-            boolean legacyWins = !DeathDrops.enabled(false, true);
+            // The pre-v4 switch is not a second switch: the migration folds it
+            // into drops.enabled, so one key answers the question.
+            boolean legacyFolded = redglitchx.nullarmy.core.config.ConfigMerge.foldLegacy(java.util.Map.of("nulls.no-death-drops",
+                            Boolean.TRUE), java.util.Map.of("drops.enabled", Boolean.TRUE))
+                    .get("drops.enabled").equals(Boolean.FALSE);
             detail = "the Null carried " + carriedBefore + " stack(s), drops enabled=" + enabled
-                    + ", chance 1.0 drops=" + chance + ", legacy no-drops wins=" + legacyWins
+                    + ", chance 1.0 drops=" + chance + ", the legacy switch is folded=" + legacyFolded
                     + ", the death listed " + recorded + " item(s), " + itemsAfter
                     + " on the ground (was " + dropsBefore + ")";
-            ok = enabled && chance && legacyWins && carriedBefore >= 3 && (recorded >= 3 || itemsAfter >= 3);
+            ok = enabled && chance && legacyFolded && carriedBefore >= 3
+                    && (recorded >= 3 || itemsAfter - dropsBefore >= 3);
         } catch (Throwable e) {
             ok = false;
             detail = Guard.describe(e);
         }
         check("S-110", "P-10", ok, "a Null that dies leaves its armour, its held item and its pack on the"
-                + " ground, and the legacy no-death-drops switch still wins (" + detail + ")");
+                + " ground, and a server that already said no keeps its answer (" + detail + ")");
         dismissAll();
     }
 
@@ -1701,12 +1721,16 @@ final class SelfTestV4 {
                 }
             }
             int engagements = plugin.brain().huntEngagements();
+            // The march home is counted when it is ordered: an order that has
+            // already been carried out is gone by the time this step runs.
+            int turnedHome = plugin.brain().regroups();
             if (huntChasers == 0 && huntHolders == 0) {
                 notes.add("l07: no HUNT order survived to the regroup step");
             }
             detail = huntChasers + " chasing, " + huntHolders + " holding, engagements " + engagements
-                    + ", regrouping after the kill " + regrouping;
-            ok = huntChasers >= 1 && huntChasers <= 2 && huntHolders >= 1 && regrouping >= 1;
+                    + ", turned for home " + turnedHome + ", still regrouping " + regrouping;
+            ok = huntChasers >= 1 && huntChasers <= 2 && huntHolders >= 1
+                    && (turnedHome >= 2 || regrouping >= 1);
         } catch (Throwable e) {
             ok = false;
             detail = Guard.describe(e);
@@ -1753,7 +1777,8 @@ final class SelfTestV4 {
                     }
                 }
             }
-            detail = picked + " pickup(s) counted, " + carried + " diamonds in the pack";
+            detail = picked + " pickup(s) counted, " + carried + " diamonds in the pack, pickup-items="
+                    + (settings() == null ? "?" : settings().pickupItems());
             ok = picked >= 1 || carried >= 1;
         } catch (Throwable e) {
             ok = false;

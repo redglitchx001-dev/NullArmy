@@ -129,6 +129,12 @@ public final class NullBrain implements Reloadable {
 
     private int salutes;
     private int patrolLaps;
+    /** L-07: how many hunts have turned into a march home. */
+    private int regroups;
+
+    /** L-07: how many hunts have turned into a march home. */
+    public int regroups() { return regroups; }
+
     private int blocksBridged;
     private int blocksDestroyed;
     private int lootPicked;
@@ -155,6 +161,7 @@ public final class NullBrain implements Reloadable {
         salutes = 0;
         patrolLaps = 0;
         blocksBridged = 0;
+        regroups = 0;
         blocksDestroyed = 0;
         lootPicked = 0;
         campBehaviours.clear();
@@ -362,6 +369,10 @@ public final class NullBrain implements Reloadable {
         }
         // L-03: the owner comes home - the guard salutes.
         homecomingSalute(body, mind, world, pos);
+        // L-08: a Null picks up what it walks over and carries it.
+        if (!busy) {
+            lootDiscipline(body, mind, handle, pos, intent);
+        }
 
         updateIdle(mind, pos, intent.moving() || busy);
         if (idle && !busy && v3 != null && v3.idleBehaviour()) {
@@ -718,12 +729,68 @@ public final class NullBrain implements Reloadable {
         mind.combatUntil = 0L;
         Mind.Order standing = order;
         UUID owner = order.issuer;
+        Vec3d where = standing.point == null ? null
+                : new Vec3d(standing.point.x(), standing.point.y(), standing.point.z());
         mind.order = new Mind.Order(Mind.Verb.REGROUP, null, owner, owner, now, 1);
-        if (mind.order.point == null && standing.point != null) {
-            mind.order.point = standing.point;
+        if (mind.order.point == null && where != null) {
+            mind.order.point = where;
         }
+        regroups++;
         combat.endFight(mind, handle);
         Guard.attempt(plugin.getLogger(), "acknowledging a finished hunt", handle::swingMainHand);
+    }
+
+    /**
+     * L-08: loot discipline.
+     *
+     * <p>A Null that walks over a dropped item picks it up and carries it. The
+     * pickup goes through {@code PlayerPickupItemEvent} first, exactly like a
+     * block placement goes through {@code BlockPlaceEvent}: a protection plugin
+     * can say no, and the item only leaves the ground when nothing objected.
+     * The walk to the item is a real walk.</p>
+     */
+    private void lootDiscipline(NullBody body, Mind mind, Player handle, Vec3d pos, Intent intent) {
+        if (handle == null || v3 == null || !v3.pickupItems() || now < mind.nextLootTick) {
+            return;
+        }
+        mind.nextLootTick = now + 4L;
+        org.bukkit.entity.Item best = null;
+        double bestDistance = 2.6D;
+        for (Entity near : handle.getNearbyEntities(2.6D, 1.6D, 2.6D)) {
+            if (!(near instanceof org.bukkit.entity.Item item) || item.isDead() || item.getPickupDelay() > 0) {
+                continue;
+            }
+            Location at = item.getLocation();
+            double d = Math.hypot(Math.hypot(at.getX() - pos.x(), at.getZ() - pos.z()),
+                    Math.max(0.0D, at.getY() - pos.y()));
+            if (d < bestDistance) {
+                bestDistance = d;
+                best = item;
+            }
+        }
+        if (best == null) {
+            return;
+        }
+        if (bestDistance > 1.0D) {
+            Location at = best.getLocation();
+            intent.dx = (at.getX() - pos.x()) * 0.4D;
+            intent.dz = (at.getZ() - pos.z()) * 0.4D;
+            intent.gait = NullBody.GAIT_WALK;
+            return;
+        }
+        ItemStack stack = best.getItemStack();
+        org.bukkit.event.player.PlayerPickupItemEvent event =
+                new org.bukkit.event.player.PlayerPickupItemEvent(handle, best, 0);
+        Bukkit.getPluginManager().callEvent(event);
+        if (event.isCancelled()) {
+            return;
+        }
+        java.util.Map<Integer, ItemStack> left = handle.getInventory().addItem(stack);
+        if (!left.isEmpty()) {
+            return; // nowhere to put it
+        }
+        best.remove();
+        notePickup(body);
     }
 
     /** L-01: every marcher walks at the same speed - no per-body variance. */
@@ -1056,7 +1123,7 @@ public final class NullBrain implements Reloadable {
             }
         }
         boolean onRing = false;
-        if (mates >= 2) {
+        if (mates >= 1) {
             // The ring: a slot on a circle round the middle of the squad (or the
             // camp fire standing there), claimed by where this body already is.
             cx /= mates;
@@ -1065,7 +1132,7 @@ public final class NullBrain implements Reloadable {
             double here = Math.atan2(pos.z() - cz, pos.x() - cx);
             double slotX = cx + Math.cos(here) * radius;
             double slotZ = cz + Math.sin(here) * radius;
-            onRing = Math.hypot(pos.x() - slotX, pos.z() - slotZ) <= 0.7D;
+            onRing = Math.hypot(pos.x() - slotX, pos.z() - slotZ) <= 1.0D;
             if (!onRing) {
                 mind.campBehaviour = "ring";
                 campBehaviours.add("ring");
@@ -1074,7 +1141,7 @@ public final class NullBrain implements Reloadable {
                 intent.gait = NullBody.GAIT_WALK;
             }
         }
-        if (mates < 2 || onRing) {
+        if (mates < 1 || onRing) {
             mind.campBehaviour = "watch";
             campBehaviours.add("watch");
         }

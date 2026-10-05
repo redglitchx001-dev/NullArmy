@@ -231,17 +231,28 @@ public final class CombatBrain {
         float gate = threshold();
         // A shield that is up stays up: a player cannot swing and block at the
         // same time, and a guard who drops his guard to take a free swing is
-        // not guarding. The brain lowers it (raiseShield, below) on the tick it
-        // decides to press the attack, and swings on the next one.
-        boolean blocking = mind.shieldUp || (handle.isHandRaised() && handle.getActiveItem() != null
-                && handle.getActiveItem().getType() == Material.SHIELD);
+        // not guarding.
+        boolean blocking = mind.shieldUp || holdingShield(handle);
+        boolean ready = SwingCadence.ready(cooldown);
+        if (ready && mind.shieldUp) {
+            // The brain's own guard comes down the moment it means to hit, as a
+            // player's does; the swing itself lands on the next tick.
+            brain.raiseShield(handle, mind, false);
+            mind.shieldUp = false;
+            blocking = false;
+            ready = false;
+        } else if (ready && holdingShield(handle)) {
+            // Hands full: a Null holding up a shield it did not raise is
+            // blocking, and a Null that is blocking does not swing.
+            ready = false;
+        }
         if (dist > reach - 0.3D) {
             // Close the gap; sprinting, so the first hit carries sprint knockback.
             intent.dx = dx / dist;
             intent.dz = dz / dist;
             intent.gait = dist > 4.0D ? NullBody.GAIT_SPRINT : NullBody.GAIT_RUN;
             // P-02: swing as soon as the meter is worth it, not only at full.
-            if (!blocking && SwingCadence.ready(cooldown) && strikeAllowed(handle, target)) {
+            if (ready && strikeAllowed(handle, target)) {
                 strike(handle, mind, target, now, fallingFor(body));
             }
             brain.raiseShield(handle, mind, v3.shields() && cooldown < gate && dist < 5.0D);
@@ -260,7 +271,7 @@ public final class CombatBrain {
         intent.dz = nx * mind.strafeDir * 0.6D + nz * radial;
         intent.gait = NullBody.GAIT_RUN;
 
-        if (!blocking && SwingCadence.ready(cooldown) && dist <= reach) {
+        if (ready && dist <= reach) {
             // P-01: the strike still has to be legal - inside reach AND with a
             // clear line of sight. A Null that cannot see its target does not
             // swing at it, and it certainly does not damage it.
@@ -290,6 +301,12 @@ public final class CombatBrain {
             brain.raiseShield(handle, mind, v3.shields() && cooldown < gate && !mind.critJumped);
         }
         return intent;
+    }
+
+    /** True when this body currently has a shield up, whoever raised it. */
+    private boolean holdingShield(Player handle) {
+        return handle.isHandRaised() && handle.getActiveItem() != null
+                && handle.getActiveItem().getType() == Material.SHIELD;
     }
 
     /** True when vanilla would call this a falling strike (the crit condition). */

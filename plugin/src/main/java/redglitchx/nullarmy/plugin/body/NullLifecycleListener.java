@@ -133,10 +133,12 @@ public final class NullLifecycleListener implements Listener {
             event.setShowDeathMessages(false);
             V3Settings s = settings();
             // v4 (P-10): a defeated Null leaves its kit on the ground, like a
-            // player. drops.enabled is the master switch; the pre-v4
-            // nulls.no-death-drops still wins when it is explicitly on, so a
-            // server that already answered "no" is not overridden by an update.
-            boolean drop = s == null || DeathDrops.enabled(s.dropsEnabled(), s.noDeathDrops());
+            // player. drops.enabled is the only switch - a server that already
+            // answered the pre-v4 nulls.no-death-drops keeps that answer because
+            // the migration folded it into drops.enabled, not because the old
+            // key is consulted here. Two switches for one question is how an
+            // update silently reverses an owner's answer.
+            boolean drop = s == null || s.dropsEnabled();
             if (!drop) {
                 event.getDrops().clear();
                 event.setDroppedExp(0);

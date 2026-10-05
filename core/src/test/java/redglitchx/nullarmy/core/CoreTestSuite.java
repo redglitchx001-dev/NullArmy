@@ -1418,6 +1418,28 @@ public final class CoreTestSuite {
         check(!redglitchx.nullarmy.core.config.ConfigMerge.isLeaf(
                         new java.util.LinkedHashMap<String, Object>()),
                 "a section is not a leaf");
+
+        // A pre-v4 answer has to travel into its v4 replacement (P-10).
+        java.util.Map<String, Object> legacy = new java.util.LinkedHashMap<>();
+        legacy.put("nulls.no-death-drops", Boolean.TRUE);
+        java.util.Map<String, Object> fresh = new java.util.LinkedHashMap<>();
+        fresh.put("drops.enabled", Boolean.TRUE);
+        fresh.put("drops.chance", 1.0D);
+        java.util.Map<String, Object> folded =
+                redglitchx.nullarmy.core.config.ConfigMerge.foldLegacy(legacy, fresh);
+        checkEquals(Boolean.FALSE, folded.get("drops.enabled"),
+                "a server that said no-death-drops gets drops.enabled: false, never the shipped true");
+        checkEquals(1.0D, folded.get("drops.chance"), "an unrelated new key keeps its shipped default");
+        java.util.Map<String, Object> kept = new java.util.LinkedHashMap<>(legacy);
+        kept.put("drops.enabled", Boolean.TRUE);
+        checkEquals(Boolean.TRUE,
+                redglitchx.nullarmy.core.config.ConfigMerge.foldLegacy(kept, fresh).get("drops.enabled"),
+                "an owner who already set drops.enabled himself keeps his own answer");
+        java.util.Map<String, Object> quiet = new java.util.LinkedHashMap<>();
+        quiet.put("nulls.no-death-drops", Boolean.FALSE);
+        checkEquals(Boolean.TRUE,
+                redglitchx.nullarmy.core.config.ConfigMerge.foldLegacy(quiet, fresh).get("drops.enabled"),
+                "a server that never said no gets the shipped drops.enabled: true");
     }
 
     // ===================================================================

@@ -137,6 +137,8 @@ public final class Mind {
 
     /** L-02/L-07: next tick this Null may place a bridge block. */
     long nextBridgeTick;
+    /** L-08: earliest tick this body looks for loot again. */
+    long nextLootTick;
 
     /** L-04: the idle behaviour this Null is performing right now. */
     String campBehaviour = "";
