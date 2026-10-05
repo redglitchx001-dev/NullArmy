@@ -439,7 +439,16 @@ final class SelfTestV4 {
             if (settings() != null) {
                 settings().setMeleeReachOverride(0.5D);
             }
-            if (victim != null) {
+            // Put the two back in reach: the wall check that ran before this
+            // one left them facing each other through stone, and a Null that
+            // cannot cross stone cannot be measured standing next to its target.
+            if (attacker != null && victim != null) {
+                Player victimHandle = handle(victim);
+                Player attackerHandle = handle(attacker);
+                if (victimHandle != null && attackerHandle != null) {
+                    Location at = attackerHandle.getLocation();
+                    victimHandle.teleport(new Location(world, at.getX() + 2.0D, at.getY(), at.getZ()));
+                }
                 victim.heal(1000.0D);
             }
             plugin.brain().combat().resetCounters();
@@ -465,9 +474,17 @@ final class SelfTestV4 {
         } catch (Throwable e) {
             notes.add("p01 far check threw " + Guard.describe(e));
         }
+        double apart = -1.0D;
+        if (attacker != null && victim != null) {
+            Vec3d a = attacker.bodyPosition();
+            Vec3d b = victim.bodyPosition();
+            apart = Math.hypot(a.x() - b.x(), a.z() - b.z());
+        }
         check("S-86", "P-01", untouched && close, "with the reach forced below the distance the Null stands at,"
                 + " zero damage lands while it stays in range (health "
-                + (victim == null ? "?" : String.format(Locale.ROOT, "%.1f", victim.health())) + ")");
+                + (victim == null ? "?" : String.format(Locale.ROOT, "%.1f", victim.health()))
+                + ", " + String.format(Locale.ROOT, "%.1f", apart) + " block(s) apart, last tick: "
+                + (plugin.brain() == null ? "?" : plugin.brain().combat().lastNote()) + ")");
         if (settings() != null) {
             settings().setMeleeReachOverride(null);
             settings().setBowsOverride(null);
