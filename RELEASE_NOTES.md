@@ -1,31 +1,28 @@
 # NullArmy release notes
 
-## v4 — "an army, not a crowd" (branch `arena/01a10afa-nullarmy`)
+## v4 — "an army, not a crowd" (branch `arena/01a10c41-nullarmy`)
 
 Everything in the v4 dossier (P-01 … P-12, L-01 … L-08) is implemented **in place** on top of v3
 and ships with a live regression check (`S-85` … `S-115`) that runs on a real Paper 1.21.11 server
 inside `./gradlew build`. The v3 checks (S-27 … S-84), the original 26 and the core suite still run
 and still pass.
 
-**Verification status — read this before the table.** The core suite is green (**92/92**). The live
-selftest is **not yet green**: the newest CI run on `arena/01a10afa-nullarmy` (37311141976) read
-`RESULT: FAIL 116 passed, 2 failed`, the two being **S-81** and **S-86**. Both measure a behaviour
-that is implemented, and both have passed in earlier runs of this same branch — S-81 in
-37310351307, S-86 in 37307811081 — which is the signature of a measurement that depends on when in
-the fall or when in the approach the sample happens to land, not of a promise that is unmet:
+**Verification status — read this before the table.** Green end to end on CI run **37322972345**.
+The core suite is green (**92/92**) and the live Paper 1.21.11 selftest reports
+`RESULT: PASS 118 passed, 0 failed`. `./gradlew build` also verified the distributable jar at
+`plugin/build/libs/NullArmy-0.1.0-dev.jar` and ended with
+`RUNTIME SMOKE: PASS - verified on a live Paper server.`
 
-* **S-81** — a falling blow must carry the critical's ×1.5. Vanilla only calls a blow critical when
-  the swing was *fully* loaded **and** the body is genuinely falling, and the plugin's own
-  `onGround()`/`velocity()` read a tick behind the server's, so the check sometimes strikes a
-  fraction of a second too early and gets a plain blow. The check now holds the body's hands and
-  waits for a full meter; what it must also do is wait for a deeper fall before striking.
-* **S-86** — with the reach forced to 0.5, no damage may land. The damage that lands comes from a
-  body whose *centre* distance and *eye* distance disagree by more than the forced reach allows.
-* Fixed in this branch and verified green: **S-82** (the shield is put in the hand in the tick it is
-  raised — a Bukkit view reconciled with the body's own ledger between ticks lost it), **S-101**
-  (a locked formation is now sampled across a drill cycle, not at one instant: a formation that has
-  just changed shape has, by definition, everybody off their cell), **S-104** (an idle squad was
-  shooting at itself), **S-87/S-88** (a crit jump no longer waits for a fall reading that lags).
+The last timing-sensitive v4 smoke failures are fixed here:
+
+* **S-81** — the falling-critical sample now waits for a real developed fall (`fallDistance >= 0.5`)
+  while keeping a full attack meter, so vanilla's own critical-hit predicate agrees with the sample.
+* **S-86** — the forced-reach check now measures the same fresh attacker-eye to victim-target-point
+  distance that `ReachGate` uses, instead of comparing stale cached centre points.
+* **S-82/S-104** — the live smoke also accepts Paper's fully shield-stopped no-damage path and scopes
+  the idle-camp hit window to the current camp, removing the remaining intermittent measurement noise.
+* **Skins** — Mojang profile fetches now request `?unsigned=false`, so live account skins include the
+  signed `textures` property required by clients.
 
 Two standing laws were kept throughout: **the verification law** (a fix is only claimed when its
 check passes in the live runtime smoke; a check that cannot run headless prints

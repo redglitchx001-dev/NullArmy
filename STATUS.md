@@ -2,13 +2,10 @@
 
 **Last updated:** 2026-10-05 · **Current state:** v4 — every dossier promise (P-01…P-12) and lore
 law (L-01…L-08) is implemented in place on top of v3. Core suite **92/92**. The live selftest
-(119 checks: 26 original + S-27…S-84 + S-85…S-115) is **not yet green**: the last CI run on
-`arena/01a10afa-nullarmy` (37311141976) read `RESULT: FAIL 116 passed, 2 failed` — **S-81** (a
-falling strike's one-and-a-half times) and **S-86** (zero damage with the reach forced below the
-fighting distance). Both are timing-sensitive measurements of the same two behaviours, and each
-has passed in earlier runs of the same code (S-81 in 37310351307, S-86 in 37307811081), so what
-is unfinished is the measurement, not the promise. See the closing note in
-[`RELEASE_NOTES.md`](RELEASE_NOTES.md).
+(118 checks: 26 original + S-27…S-84 + S-85…S-115) is green on CI run **37322972345**:
+`RESULT: PASS 118 passed, 0 failed`. `./gradlew build` produced the verified Paper plugin jar
+`plugin/build/libs/NullArmy-0.1.0-dev.jar` and the live Paper 1.21.11 runtime smoke reported
+`RUNTIME SMOKE: PASS - verified on a live Paper server.`
 
 Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit + architecture) ·
 [`TRACEABILITY.md`](TRACEABILITY.md) (471-item register) ·
@@ -17,7 +14,7 @@ Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit +
 
 ---
 
-## Delta on `arena/01a10afa-nullarmy` (v4: an army, not a crowd)
+## Delta on `arena/01a10c41-nullarmy` (v4: an army, not a crowd)
 
 Verified the same way as v3: the build ends with `runtimeSmoke`, a headless Paper 1.21.11 server
 that runs `/null selftest` and fails the build on any FAIL line, any NullArmy SEVERE line or a
