@@ -397,7 +397,10 @@ final class SelfTestV4 {
             notes.add("p01 hit threw " + Guard.describe(e));
         }
         check("S-85", "P-01", hurt, "a Null really damages a target it can reach (health "
-                + (victim == null ? "?" : String.format(Locale.ROOT, "%.1f", victim.health())) + ")");
+                + (victim == null ? "?" : String.format(Locale.ROOT, "%.1f", victim.health())) + ", "
+                + plugin.brain().combat().swings() + " swing(s), "
+                + plugin.brain().combat().reachRefusals() + " refused by the reach gate, last tick: "
+                + plugin.brain().combat().lastNote() + ")");
     }
 
     /**
@@ -521,8 +524,13 @@ final class SelfTestV4 {
     private void p02Check() {
         int swings = plugin.brain() == null ? 0 : plugin.brain().combat().swings();
         int crits = plugin.brain() == null ? 0 : plugin.brain().combat().crits();
+        if (swings == 0) {
+            notes.add("p02: the fight never swung - " + plugin.brain().combat().lastNote());
+        }
         check("S-87", "P-02", swings >= 5, "a Null in a fight swings at the cooldown, not once a second ("
-                + swings + " swings in ~3 s of fighting, at least 5 needed)");
+                + swings + " swings and " + plugin.brain().combat().reachRefusals()
+                + " reach refusal(s) in ~3 s of fighting, at least 5 needed; last tick: "
+                + plugin.brain().combat().lastNote() + ")");
         boolean critMaths = SwingCadence.damage(10.0D, true) == 15.0D
                 && SwingCadence.damage(10.0D, false) == 10.0D;
         int dueIn = 0;
@@ -580,6 +588,7 @@ final class SelfTestV4 {
         boolean staggered = false;
         int frames = 0;
         String refusal = "";
+        String note = "";
         try {
             // Ask the portal manager where it really put the doorways rather
             // than guessing around the bodies: a portal is a frame, not a body.
@@ -600,6 +609,7 @@ final class SelfTestV4 {
                     here.add(at(36 + attempt * 14 + (i % 3) * 2, 24 + (i / 3) * 2));
                 }
                 squad = plugin.squads().spawnSquadAt(owner("p03b"), worldName, here);
+                note = squad == null ? "" : squad.arrivalNote();
                 standing = plugin.portals() == null ? List.of() : plugin.portals().standing();
                 if (plugin.portals() != null && !standing.isEmpty()) {
                     refusal = plugin.portals().lastRefusal();
@@ -630,14 +640,39 @@ final class SelfTestV4 {
                     lived.add(p.getTicksLived());
                 }
             }
-            staggered = lived.size() > 1 && squad.members().size() >= 2;
+            staggered = lived.size() > 1 && squad.members().size() >= 2
+                    && note.toLowerCase(Locale.ROOT).contains("walked out");
+            if (frames == 0) {
+                // Nothing standing: ask for a frame outright, so the obsidian
+                // half of the promise is measured even when every site around
+                // the squad was refused.
+                List<redglitchx.nullarmy.plugin.portal.PortalBuilder.BuiltPortal> direct =
+                        plugin.portals().buildDoorways(worldName, at(36, 44), 1);
+                frames = direct.size();
+                for (redglitchx.nullarmy.plugin.portal.PortalBuilder.BuiltPortal portal : direct) {
+                    Vec3d c = portal.center();
+                    for (int dx = -3; dx <= 3 && !obsidian; dx++) {
+                        for (int dy = -1; dy <= 4 && !obsidian; dy++) {
+                            for (int dz = -3; dz <= 3 && !obsidian; dz++) {
+                                if (world.getBlockAt((int) Math.floor(c.x()) + dx,
+                                        (int) Math.floor(c.y()) + dy,
+                                        (int) Math.floor(c.z()) + dz).getType() == Material.OBSIDIAN) {
+                                    obsidian = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                Guard.attempt(plugin.getLogger(), "v4 portal cleanup", plugin.portals()::restoreAll);
+            }
         } catch (Throwable e) {
             notes.add("p03 portals threw " + Guard.describe(e));
         }
         check("S-90", "P-03", obsidian && staggered, "the arrival portal is built from real obsidian blocks"
                 + " and the squad emerges from it staggered, not in one tick (" + frames + " frame(s) standing,"
                 + " obsidian=" + obsidian + ", staggered=" + staggered
-                + (refusal == null || refusal.isEmpty() ? "" : ", last refusal: " + refusal) + ")");
+                + (refusal == null || refusal.isEmpty() ? "" : ", last refusal: " + refusal)
+                + ", arrival: " + note + ")");
         dismissAll();
         if (plugin.portals() != null) {
             Guard.attempt(plugin.getLogger(), "v4 portal cleanup", plugin.portals()::restoreAll);
@@ -768,6 +803,13 @@ final class SelfTestV4 {
                 && Math.abs(AimSkill.angleErrorDeg(AimSkill.DEFAULT, 0.75D)) > 0.0D
                 && Math.abs(AimSkill.angleErrorDeg(AimSkill.DEFAULT, 0.25D)) > 0.0D
                 && AimSkill.maxAngleErrorDeg(1.0D) == 0.0D;
+        if (!(band && wired && spread)) {
+            notes.add("p05 aim: band=" + band + " (" + rate + ", " + AimSkill.hitChance(15.0D, AimSkill.DEFAULT)
+                    + ") wired=" + wired + " spread=" + spread + " maxError=" + maxError
+                    + " at-0.75=" + AimSkill.angleErrorDeg(AimSkill.DEFAULT, 0.75D)
+                    + " at-0.25=" + AimSkill.angleErrorDeg(AimSkill.DEFAULT, 0.25D)
+                    + " perfect=" + AimSkill.maxAngleErrorDeg(1.0D));
+        }
         check("S-94", "P-05", band && wired && spread,
                 "at 15 blocks the aim model hits " + String.format(Locale.ROOT, "%.0f%%", rate * 100.0D)
                         + " of its shots (40-80 % required), live config=" + live + " (0.65 required),"
@@ -1777,8 +1819,21 @@ final class SelfTestV4 {
                     }
                 }
             }
-            detail = picked + " pickup(s) counted, " + carried + " diamonds in the pack, pickup-items="
-                    + (settings() == null ? "?" : settings().pickupItems());
+            int onGround = 0;
+            int delayed = 0;
+            if (handle != null) {
+                for (Entity e : handle.getNearbyEntities(3.0D, 2.0D, 3.0D)) {
+                    if (e instanceof org.bukkit.entity.Item item && !item.isDead()) {
+                        onGround++;
+                        if (item.getPickupDelay() > 0) {
+                            delayed++;
+                        }
+                    }
+                }
+            }
+            detail = picked + " pickup(s) counted, " + carried + " diamonds in the pack, " + onGround
+                    + " item(s) still on the ground (" + delayed + " of them still on pickup delay),"
+                    + " pickup-items=" + (settings() == null ? "?" : settings().pickupItems());
             ok = picked >= 1 || carried >= 1;
         } catch (Throwable e) {
             ok = false;
