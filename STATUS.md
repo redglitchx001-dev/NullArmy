@@ -1,8 +1,45 @@
 # NullArmy — Status
 
-**Last updated:** 2026-10-04 · **Current state:** Null spawning, tracking and client visibility fixed and verified on a live Paper 1.21.11 server · real temporary arrival portals · sequential Totem Of Null shutdown · default kits · AI squad coordination · missions (see the delta below)
+**Last updated:** 2026-10-05 · **Current state:** v3 — all 17 dossier bugs (B-01…B-17) fixed at the root and verified live: `./gradlew build` → core 81/81, `/null selftest` on Paper 1.21.11 **84/84 PASS** (26 original + S-27…S-84)
 
 Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit + architecture) · [`TRACEABILITY.md`](TRACEABILITY.md) (471-item register) · [`MECHANICS_EXPANSION.md`](MECHANICS_EXPANSION.md) (250 added mechanics) · [`BUILD.md`](BUILD.md) (build & verify commands)
+
+---
+
+## Delta on `arena/01a10811-nullarmy` (v3: bodies that behave like players)
+
+Verified the same way as before: the build ends with `runtimeSmoke`, a headless Paper 1.21.11
+server that runs `/null selftest` and fails the build on any FAIL line, any NullArmy SEVERE line or
+a tick-loop fault. Latest result: **`RESULT: PASS 84 passed, 0 failed`**; core suite **81/81**.
+Root causes and the in-game test walk-through are in [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
+
+| Bug | Live checks | Result |
+| --- | --- | --- |
+| B-01 spawn refusal retries neighbour cells, breaker never latched | S-27 S-28 S-29 | ✅ |
+| B-02 broken config.yml: line/column/snippet, last good kept, safe migration, `/null config` | S-30 … S-35 | ✅ |
+| B-03 skin chain (value+signature → proxy → Mojang → skin.png), signature in GameProfile, live re-apply | S-36 … S-39 | ✅ |
+| B-04 12 Nulls in 3x3 spread to ≥0.8, none floating, pile detector | S-40 … S-43 | ✅ |
+| B-05 hittable, death animation, no drops, zero chat | S-44 … S-48 | ✅ (S-44 BLOCKED: probe strikes instead of a player) |
+| B-06 head follows walking and glances at a nearby watcher | S-49 S-50 | ✅ (S-50 BLOCKED: watcher point instead of a player) |
+| B-07 rotated square matrix within 0.3, no shared cells, no jitter | S-51 S-52 S-53 | ✅ |
+| B-08 silent horn refresh, template scan, zero broadcasts for death + shutdown | S-54 S-55 S-84 | ✅ |
+| B-09 public Commander reply on wake word and on its name; silence otherwise | S-56 S-57 S-58 | ✅ |
+| B-10 loadout editor swap is worn and survives reload (nulls.yml) | S-62 S-63 | ✅ |
+| B-11 netherite Prot IV kit as real items, no duplication | S-59 S-60 S-61 | ✅ |
+| B-12 speed variance, eating restores health | S-64 S-65 | ✅ |
+| B-13 20 mixed valid frames, one-way, full restore, step-out ≤ 60 ticks | S-66 S-67 S-69 S-70 S-72 | ✅ (S-69 BLOCKED: pig instead of a thrown player) |
+| B-14 everything inside the zone; no site → explained, nothing built | S-68 S-71 | ✅ |
+| B-15 jump Δy ≥ 1.0 and lands, sprint > walk, never inside a wall, gesture ack | S-73 … S-76 | ✅ |
+| B-16 stub endpoint plan accepted, placed by hand, paced, from inventory | S-77 … S-80 | ✅ |
+| B-17 falling crit ×1.5, shield → 0, arrow leads a moving target | S-81 S-82 S-83 | ✅ |
+
+New core tests (15): kit serialisation (enchantments/potions/counts) and v3 kit contents, legacy
+kit upgrade, offline planner (bridge, hut, gather), plan parser, plan validator, zone bounds,
+formation matrix rotation, optimal cell assignment, message-placeholder scan, YAML error locator,
+skin payloads, bow ballistics, separation, portal frame geometry.
+
+Still for a human on a real client (cannot be proven headless): how skins, crit particles and
+the doorway look on screen, and a real player hitting / walking past / being thrown at a Null.
 
 ---
 

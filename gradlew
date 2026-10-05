@@ -307,7 +307,7 @@ if [ -f "$NULLARMY_LOG" ]; then
             if (n == 0 && head == "") {
                 emit("NullArmy runtime smoke test", "no smoke test output - it did not run")
             } else {
-                emit("NullArmy runtime smoke verdict (" npass " PASS - " nfail " FAIL)", head)
+                emit("NullArmy runtime smoke verdict (" npass+0 " PASS - " nfail+0 " FAIL)", head)
             }
             chunk = ""; part = 0
             for (i = 1; i <= n; i++) {
