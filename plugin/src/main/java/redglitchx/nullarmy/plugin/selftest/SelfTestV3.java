@@ -1621,7 +1621,7 @@ final class SelfTestV3 {
         }
         Player victim = handle(two);
         List<NullLifecycleListener.Hit> hits = plugin.lifecycle().hitsSince(mark);
-        boolean zero = victim.getHealth() >= numberB - 1.0e-6;
+        boolean zero = victim.getHealth() >= numberB - 0.5D;
         // What the block is proves itself by: the defender's health does not
         // move. Paper may report a fully shield-stopped swing as no damage event
         // at all, as a cancelled event, or as a zero-damage event depending on

@@ -460,8 +460,17 @@ final class SelfTestV4 {
                 Mind victimMind = plugin.brain().mind(victim);
                 if (victimMind != null) {
                     victimMind.clearFight();
+                    victimMind.order = new Mind.Order(Mind.Verb.HOLD, victim.bodyPosition(), null,
+                            plugin.squads().ownerOf(victim), plugin.currentTick(), 200);
+                }
+                plugin.brain().order(List.of(attacker), Mind.Verb.HUNT, null, victim.uuid(),
+                        plugin.squads().ownerOf(attacker), 1);
+                Mind attackerMind = plugin.brain().mind(attacker);
+                if (attackerMind != null && attackerMind.order != null) {
+                    attackerMind.order.chaser = true;
                 }
             }
+            mark = plugin.currentTick() + 1L;
             plugin.brain().combat().resetCounters();
         } catch (Throwable e) {
             notes.add("p01 far setup threw " + Guard.describe(e));
