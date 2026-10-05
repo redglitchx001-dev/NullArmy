@@ -238,7 +238,7 @@ public final class CombatBrain {
         cancelBow(mind, handle);
         holdMeleeWeapon(handle);
 
-        float cooldown = handle.getAttackCooldown();
+        float cooldown = attackCooldown(handle, mind, now);
         double reach = reach();
         float gate = threshold();
         // A shield that is up stays up: a player cannot swing and block at the
@@ -325,6 +325,41 @@ public final class CombatBrain {
         return intent;
     }
 
+    /**
+     * How loaded the attack meter is, 0..1.
+     *
+     * <p>Vanilla's own meter is the truth when it is moving; a body whose meter
+     * is not advancing (a body whose NMS tick does not run it) would otherwise
+     * stand there at its floor and never swing. So the cadence is also counted
+     * here, from the weapon's own cooldown, and the slower of the two wins: a
+     * Null can never swing faster than its weapon allows.</p>
+     */
+    private float attackCooldown(Player handle, Mind mind, long now) {
+        float reported = handle.getAttackCooldown();
+        int weapon = weaponCooldownTicks(handle);
+        if (weapon <= 0) {
+            return reported;
+        }
+        long since = now - mind.lastSwingTick;
+        float counted = Math.max(0.0F, Math.min(1.0F, since / (float) weapon));
+        return Math.max(reported, counted);
+    }
+
+    /** Ticks to a full cooldown for the weapon in hand (a sword is ~12). */
+    private int weaponCooldownTicks(Player handle) {
+        float speed = 4.0F;
+        try {
+            org.bukkit.attribute.AttributeInstance attribute =
+                    handle.getAttribute(org.bukkit.attribute.Attribute.ATTACK_SPEED);
+            if (attribute != null && attribute.getValue() > 0.0D) {
+                speed = (float) attribute.getValue();
+            }
+        } catch (Throwable ignored) {
+            // The vanilla default (4.0 attacks per second) is a fine answer.
+        }
+        return Math.max(2, Math.round(20.0F / speed));
+    }
+
     /** True when this body currently has a shield up, whoever raised it. */
     private boolean holdingShield(Player handle) {
         return handle.isHandRaised() && handle.getActiveItem() != null
@@ -345,6 +380,7 @@ public final class CombatBrain {
         handle.swingMainHand();
         handle.attack(target);
         mind.nextAttackTick = now + 2;
+        mind.lastSwingTick = now;
         // P-02 accounting: swings and crits, so the rate is measured not assumed.
         swings++;
         boolean critical = falling && handle.getAttackCooldown() < 0.9F;

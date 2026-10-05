@@ -139,6 +139,8 @@ public final class Mind {
     long nextBridgeTick;
     /** L-08: earliest tick this body looks for loot again. */
     long nextLootTick;
+    /** The tick of the last swing, so the cadence can be counted here too. */
+    long lastSwingTick;
 
     /** L-04: the idle behaviour this Null is performing right now. */
     String campBehaviour = "";

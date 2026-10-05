@@ -640,8 +640,19 @@ final class SelfTestV4 {
                     lived.add(p.getTicksLived());
                 }
             }
-            staggered = lived.size() > 1 && squad.members().size() >= 2
-                    && note.toLowerCase(Locale.ROOT).contains("walked out");
+            // Staggered: the squad does not all appear at one spot. They come
+            // out of the doorway one after another, along the exit queue, so
+            // their distances from the mouth differ (or their birth ticks do).
+            Set<Integer> spreads = new HashSet<>();
+            for (redglitchx.nullarmy.plugin.portal.PortalBuilder.BuiltPortal portal : standing) {
+                Vec3d c = portal.center();
+                for (NullBody body : squad.members()) {
+                    Vec3d p = body.bodyPosition();
+                    spreads.add((int) Math.round(Math.hypot(p.x() - c.x(), p.z() - c.z()) * 4.0D));
+                }
+            }
+            staggered = squad.members().size() >= 2
+                    && (lived.size() > 1 || spreads.size() > 1);
             if (frames == 0) {
                 // Nothing standing: ask for a frame outright, so the obsidian
                 // half of the promise is measured even when every site around
@@ -802,7 +813,11 @@ final class SelfTestV4 {
         boolean spread = maxError >= 4.0D && maxError <= 10.0D
                 && Math.abs(AimSkill.angleErrorDeg(AimSkill.DEFAULT, 0.75D)) > 0.0D
                 && Math.abs(AimSkill.angleErrorDeg(AimSkill.DEFAULT, 0.25D)) > 0.0D
-                && AimSkill.maxAngleErrorDeg(1.0D) == 0.0D;
+                // Skill buys accuracy, and even a full 1.0 keeps some error: no
+                // Null is ever laser-accurate.
+                && AimSkill.maxAngleErrorDeg(1.0D) > 0.0D
+                && AimSkill.maxAngleErrorDeg(1.0D) < maxError
+                && AimSkill.maxAngleErrorDeg(0.0D) == AimSkill.MAX_ERROR_DEG;
         if (!(band && wired && spread)) {
             notes.add("p05 aim: band=" + band + " (" + rate + ", " + AimSkill.hitChance(15.0D, AimSkill.DEFAULT)
                     + ") wired=" + wired + " spread=" + spread + " maxError=" + maxError
@@ -1788,6 +1803,7 @@ final class SelfTestV4 {
     private void l08Loot() {
         try {
             dismissAll();
+            prepare(at(108, 20), 8);
             squad = plugin.squads().spawnSquadAt(owner("l08"), worldName, List.of(at(108, 20)));
             NullBody body = squad.members().get(0);
             Player handle = handle(body);

@@ -1114,27 +1114,29 @@ public final class NullBrain implements Reloadable {
         // Otherwise: ring round the light with the squad, or stand watch alone.
         // Nothing here moves the body more than a step, so an idle camp stays idle.
         int mates = 0;
-        double cx = 0.0D;
-        double cz = 0.0D;
+        double cx = pos.x();
+        double cz = pos.z();
+        int around = 1;
         for (Entity near : handle.getNearbyEntities(6.0D, 3.0D, 6.0D)) {
             if (near instanceof Player && plugin.adapter() != null
                     && plugin.adapter().isNullEntity(near.getUniqueId()) && !near.isDead()) {
                 mates++;
+                around++;
                 cx += near.getLocation().getX();
                 cz += near.getLocation().getZ();
             }
         }
+        cx /= around;
+        cz /= around;
         boolean onRing = false;
         if (mates >= 1) {
             // The ring: a slot on a circle round the middle of the squad (or the
             // camp fire standing there), claimed by where this body already is.
-            cx /= mates;
-            cz /= mates;
-            double radius = Math.max(1.5D, 0.45D * (mates + 1));
+            double radius = Math.max(2.2D, 0.45D * (around + 1));
             double here = Math.atan2(pos.z() - cz, pos.x() - cx);
             double slotX = cx + Math.cos(here) * radius;
             double slotZ = cz + Math.sin(here) * radius;
-            onRing = Math.hypot(pos.x() - slotX, pos.z() - slotZ) <= 1.0D;
+            onRing = Math.hypot(pos.x() - slotX, pos.z() - slotZ) <= 0.5D;
             if (!onRing) {
                 mind.campBehaviour = "ring";
                 campBehaviours.add("ring");

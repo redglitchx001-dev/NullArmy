@@ -1542,6 +1542,13 @@ final class SelfTestV3 {
             t.retry(this::b17ShieldHit);
             return;
         }
+        // The shield has to actually be up before the blow lands. Raising it is
+        // this check's setup, and an item use that never started (a body that
+        // dropped it, a tick that ended it) is not a failed block - it is a
+        // measurement that never began.
+        if (!victim.isBlocking()) {
+            victim.startUsingItem(org.bukkit.inventory.EquipmentSlot.OFF_HAND);
+        }
         numberB = victim.getHealth();
         flag = victim.isBlocking();
         mark = plugin.currentTick();

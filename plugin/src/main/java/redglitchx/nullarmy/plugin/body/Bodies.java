@@ -190,8 +190,10 @@ public final class Bodies {
         if (against == null) {
             return false; // nothing to place it against: a player could not either
         }
-        hold(handle, slot);
-        ItemStack inHand = inv.getItemInMainHand();
+        // hold() may move the stack into the hotbar: the slot it ends up in is
+        // the one that has to be charged, not the one it was found in.
+        int held = hold(handle, slot);
+        ItemStack inHand = inv.getItem(held < 0 ? slot : held);
         BlockState replaced = block.getState();
         handle.swingMainHand();
         BlockPlaceEvent event = new BlockPlaceEvent(block, replaced, against, inHand, handle, true,
@@ -211,10 +213,10 @@ public final class Bodies {
         // Bukkit hands out a COPY of the stack, so the block has to be paid
         // for by writing it back - otherwise a Null places forever.
         if (inHand.getAmount() <= 1) {
-            inv.setItem(slot, null);
+            inv.setItem(held < 0 ? slot : held, null);
         } else {
             inHand.setAmount(inHand.getAmount() - 1);
-            inv.setItem(slot, inHand);
+            inv.setItem(held < 0 ? slot : held, inHand);
         }
         return true;
     }
