@@ -1733,7 +1733,7 @@ public final class CoreTestSuite {
                 redglitchx.nullarmy.core.construct.FallbackPlanner.plan("build a 6 block bridge", 0, 0, 0, 0, stock);
         check(bridge != null, "a bridge is planned");
         checkEquals(6, bridge.placements(), "the bridge is 6 blocks long");
-        int expectedZ = 1;
+        int expectedZ = redglitchx.nullarmy.core.construct.FallbackPlanner.BRIDGE_START_AHEAD;
         for (redglitchx.nullarmy.core.construct.BuildStep step : bridge.steps()) {
             if (step.action() == redglitchx.nullarmy.core.construct.BuildStep.Action.PLACE) {
                 checkEquals(-1, step.y(), "bridge blocks are at floor level");

@@ -163,7 +163,7 @@ public final class CombatBrain {
         return true;
     }
 
-    private void endFight(Mind mind, Player handle) {
+    void endFight(Mind mind, Player handle) {
         mind.combatTarget = null;
         mind.critJumped = false;
         if (mind.bowDrawStart >= 0 && handle != null) {

@@ -842,6 +842,16 @@ public final class SquadManager implements Reloadable {
      * duplicate shows up in the tab list as two identical entries and confuses
      * anything that looks players up by name.</p>
      */
+    /**
+     * Names handed out since the last prune.
+     *
+     * <p>{@code allMembers()} cannot be the only guard: a squad being spawned
+     * names its bodies one after another, and a body only joins the roster when
+     * it exists - so two members could be given the same word. This set is the
+     * memory of what has already been issued, pruned against the live army.</p>
+     */
+    private final java.util.Set<String> issuedNames = new java.util.HashSet<>();
+
     private String uniqueProfileName() {
         java.util.Set<String> taken = new java.util.HashSet<>();
         try {
@@ -862,12 +872,18 @@ public final class SquadManager implements Reloadable {
         } catch (Throwable t) {
             logger.fine("[NullArmy] name uniqueness check skipped: " + Guard.describe(t));
         }
+        if (issuedNames.size() > 2048) {
+            // Prune against reality rather than growing for ever.
+            issuedNames.retainAll(taken);
+        }
         // v4 (P-03): the generator now knows what is taken, so a readable word
         // list can guarantee uniqueness without falling back to a hex blob.
         java.util.Set<String> lowered = new java.util.HashSet<>(taken);
+        lowered.addAll(issuedNames);
         for (int attempt = 0; attempt < 24; attempt++) {
             String candidate = NameGenerator.next(lowered);
             if (candidate != null && !lowered.contains(candidate.toLowerCase(Locale.ROOT))) {
+                issuedNames.add(candidate.toLowerCase(Locale.ROOT));
                 return candidate;
             }
         }
@@ -879,7 +895,9 @@ public final class SquadManager implements Reloadable {
             base = "Null";
         }
         String stem = base.length() > 12 ? base.substring(0, 12) : base;
-        return stem + "_" + Long.toString(System.nanoTime() % 10000L);
+        String last = stem + "_" + Long.toString(System.nanoTime() % 10000L);
+        issuedNames.add(last.toLowerCase(Locale.ROOT));
+        return last;
     }
 
     /** Plays the summon portal effects. Cosmetic, throttled, never fatal. */

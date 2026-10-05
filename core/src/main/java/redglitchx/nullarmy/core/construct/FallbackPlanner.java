@@ -205,13 +205,24 @@ public final class FallbackPlanner {
     // ------------------------------------------------------------------ shapes
     // Local frame: x = right, z = forward (away from the builder), y = up.
 
+    /**
+     * A bridge in front of the speaker.
+     *
+     * <p>The deck starts <b>two</b> blocks ahead: one block in front of a player
+     * is where he is about to put his own feet, so a bridge laid from there is a
+     * bridge he immediately stands on and cannot see. Two blocks ahead is the
+     * first block he can actually walk out onto.</p>
+     */
     static List<int[]> bridge(int length) {
         List<int[]> out = new ArrayList<>();
-        for (int i = 1; i <= length; i++) {
-            out.add(new int[] {0, -1, i});
+        for (int i = 0; i < length; i++) {
+            out.add(new int[] {0, -1, BRIDGE_START_AHEAD + i});
         }
         return out;
     }
+
+    /** How far in front of the speaker a bridge deck starts, in blocks. */
+    public static final int BRIDGE_START_AHEAD = 2;
 
     static List<int[]> wall(int length, int height) {
         List<int[]> out = new ArrayList<>();

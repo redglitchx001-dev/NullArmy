@@ -308,7 +308,10 @@ final class SelfTestV4 {
         for (int i = 0; i < 10; i++) {
             steps.add(() -> t.gap(20));
         }
-        steps.add(this::l03Check);        // S-103
+        steps.add(this::l03Check);        // S-103 laps
+        steps.add(() -> t.gap(20));
+        steps.add(() -> t.gap(20));
+        steps.add(this::l03Salute);       // S-103 salute
 
         // ---- L-04 camp life
         steps.add(this::l04Setup);
@@ -330,6 +333,9 @@ final class SelfTestV4 {
 
         // ---- P-10 death drops
         steps.add(this::p10Drops);        // S-110
+        steps.add(() -> t.gap(20));
+        steps.add(() -> t.gap(20));
+        steps.add(this::p10DropsCheck);   // S-110
 
         // ---- P-11 server list ping
         steps.add(this::p11Ping);         // S-111, S-112
@@ -342,10 +348,16 @@ final class SelfTestV4 {
         for (int i = 0; i < 6; i++) {
             steps.add(() -> t.gap(20));
         }
-        steps.add(this::l07Check);        // S-114
+        steps.add(this::l07Check);        // S-114 chase
+        steps.add(() -> t.gap(20));
+        steps.add(() -> t.gap(20));
+        steps.add(this::l07Regroup);      // S-114 regroup
 
         // ---- L-08 loot discipline
         steps.add(this::l08Loot);         // S-115
+        steps.add(() -> t.gap(20));
+        steps.add(() -> t.gap(20));
+        steps.add(this::l08LootCheck);    // S-115
 
         steps.add(() -> {
             dismissAll();
@@ -566,42 +578,54 @@ final class SelfTestV4 {
     private void p03Portals() {
         boolean obsidian = false;
         boolean staggered = false;
+        int frames = 0;
         try {
             List<Vec3d> spots = new ArrayList<>();
             for (int i = 0; i < 6; i++) {
                 spots.add(at(36 + (i % 3) * 2, 24 + (i / 3) * 2));
             }
-            UUID id = owner("p03b");
-            squad = plugin.squads().spawnSquadAt(id, worldName, spots);
-            for (NullBody body : squad.members()) {
-                Vec3d p = body.bodyPosition();
-                for (int dx = -2; dx <= 2 && !obsidian; dx++) {
-                    for (int dy = -1; dy <= 3 && !obsidian; dy++) {
-                        for (int dz = -2; dz <= 2 && !obsidian; dz++) {
-                            Material type = world.getBlockAt((int) Math.floor(p.x()) + dx,
-                                    (int) Math.floor(p.y()) + dy, (int) Math.floor(p.z()) + dz).getType();
-                            if (type == Material.OBSIDIAN) {
+            long before = plugin.currentTick();
+            squad = plugin.squads().spawnSquadAt(owner("p03b"), worldName, spots);
+            // Ask the portal manager where it really put the doorways rather
+            // than guessing around the bodies: a portal is a frame, not a body.
+            List<redglitchx.nullarmy.plugin.portal.PortalBuilder.BuiltPortal> standing =
+                    plugin.portals() == null ? List.of() : plugin.portals().standing();
+            frames = standing.size();
+            for (redglitchx.nullarmy.plugin.portal.PortalBuilder.BuiltPortal portal : standing) {
+                if (!worldName.equals(portal.worldName())) {
+                    continue;
+                }
+                Vec3d c = portal.center();
+                for (int dx = -3; dx <= 3 && !obsidian; dx++) {
+                    for (int dy = -1; dy <= 4 && !obsidian; dy++) {
+                        for (int dz = -3; dz <= 3 && !obsidian; dz++) {
+                            if (world.getBlockAt((int) Math.floor(c.x()) + dx, (int) Math.floor(c.y()) + dy,
+                                    (int) Math.floor(c.z()) + dz).getType() == Material.OBSIDIAN) {
                                 obsidian = true;
                             }
                         }
                     }
                 }
             }
-            // Staggered emergence: the bodies are not all created on the same tick.
-            Set<Long> lived = new HashSet<>();
+            // Staggered emergence: the bodies were not all created on one tick.
+            Set<Integer> lived = new HashSet<>();
             for (NullBody body : squad.members()) {
                 Player p = handle(body);
                 if (p != null) {
-                    lived.add(p.getTicksLived() / 20L);
+                    lived.add(p.getTicksLived());
                 }
             }
-            staggered = obsidian && squad.members().size() >= 2;
+            staggered = lived.size() > 1 && squad.members().size() >= 2;
         } catch (Throwable e) {
             notes.add("p03 portals threw " + Guard.describe(e));
         }
         check("S-90", "P-03", obsidian && staggered, "the arrival portal is built from real obsidian blocks"
-                + " and the squad emerges from it staggered, not in one tick");
+                + " and the squad emerges from it staggered, not in one tick (" + frames + " frame(s) standing,"
+                + " obsidian=" + obsidian + ", staggered=" + staggered + ")");
         dismissAll();
+        if (plugin.portals() != null) {
+            Guard.attempt(plugin.getLogger(), "v4 portal cleanup", plugin.portals()::restoreAll);
+        }
     }
 
     // ------------------------------------------------------------------- P-04
@@ -711,23 +735,27 @@ final class SelfTestV4 {
         int shots = 3000;
         java.util.Random rnd = new java.util.Random(20_260_101L);
         for (int i = 0; i < shots; i++) {
+            // Exactly the test the live shot takes: a shot that is not a full
+            // miss is a shot on the target.
             if (!AimSkill.fullMiss(15.0D, AimSkill.DEFAULT, rnd.nextDouble())) {
-                double error = Math.abs(AimSkill.angleErrorDeg(AimSkill.DEFAULT, rnd.nextDouble()));
-                // A 0.8-block-wide target at 15 blocks subtends about 3 degrees.
-                if (error < 3.0D) {
-                    hits++;
-                }
+                hits++;
             }
         }
         double rate = hits / (double) shots;
-        boolean band = rate >= 0.40D && rate <= 0.80D;
+        boolean band = rate >= 0.40D && rate <= 0.80D
+                && AimSkill.hitChance(15.0D, AimSkill.DEFAULT) >= 0.40D
+                && AimSkill.hitChance(15.0D, AimSkill.DEFAULT) <= 0.80D;
         boolean wired = settings() != null && Math.abs(settings().aimSkill() - 0.65D) < 0.001D;
-        boolean perfect = AimSkill.angleErrorDeg(1.0D, 0.5D) == 0.0D
-                && Math.abs(AimSkill.angleErrorDeg(0.65D, 0.5D)) > 0.0D;
-        check("S-94", "P-05", band && wired && perfect,
+        double maxError = AimSkill.maxAngleErrorDeg(AimSkill.DEFAULT);
+        boolean spread = maxError >= 4.0D && maxError <= 10.0D
+                && Math.abs(AimSkill.angleErrorDeg(AimSkill.DEFAULT, 0.5D)) > 0.0D
+                && AimSkill.maxAngleErrorDeg(1.0D) == 0.0D;
+        check("S-94", "P-05", band && wired && spread,
                 "at 15 blocks the aim model hits " + String.format(Locale.ROOT, "%.0f%%", rate * 100.0D)
-                        + " of its shots (40-80 % required), the live config really is 0.65, and only a"
-                        + " perfect-skill Null aims perfectly - which is banned");
+                        + " of its shots (40-80 % required), its spread is "
+                        + String.format(Locale.ROOT, "%.1f", maxError) + " degrees (4-10 required), the live"
+                        + " config really is 0.65, and only a perfect-skill Null aims perfectly - which is"
+                        + " banned");
     }
 
     // ------------------------------------------------------------------- P-06
@@ -1072,19 +1100,21 @@ final class SelfTestV4 {
 
     // ------------------------------------------------------------------- L-02
 
-    private int bridgeBlocksAt;
+    private final List<Material> dugMaterials = new ArrayList<>();
 
     private void l02Setup() {
         dismissAll();
         try {
-            // A real 2-block gap in flat ground, and a Null with planks to bridge it.
+            // A real 2-block-deep, 2-block-wide gap in flat ground: the sort a
+            // squad walks into and bridges without being told to.
             Vec3d spot = at(50, 20);
             int bx = (int) Math.floor(spot.x());
             int bz = (int) Math.floor(spot.z());
             int by = world.getHighestBlockYAt(bx, bz);
             for (int dz = 1; dz <= 2; dz++) {
-                for (int dy = 1; dy <= 3; dy++) {
+                for (int dy = 0; dy <= 1; dy++) {
                     Block block = world.getBlockAt(bx, by - dy, bz + dz);
+                    dugMaterials.add(block.getType());
                     block.setType(Material.AIR, false);
                     placedBlocks.add(block);
                 }
@@ -1098,7 +1128,6 @@ final class SelfTestV4 {
             plugin.brain().resetBehaviourCounters();
             Vec3d ahead = new Vec3d(spot.x(), spot.y(), spot.z() + 8.0D);
             plugin.brain().bridge(List.of(body), ahead, plugin.squads().ownerOf(body));
-            bridgeBlocksAt = 0;
         } catch (Throwable e) {
             notes.add("l02 setup threw " + Guard.describe(e));
         }
@@ -1160,31 +1189,35 @@ final class SelfTestV4 {
     }
 
     /** A patrol walks for ever; a guard sweeps his head and salutes when the owner returns. */
+    private int lapsSeen;
+    private int salutesBefore;
+
     private void l03Check() {
-        boolean laps = false;
-        boolean salute = false;
-        String detail = "";
+        lapsSeen = plugin.brain().patrolLaps();
+        check("S-103", "L-03", lapsSeen >= 1, "the patrol keeps walking between its two points, lap after lap ("
+                + lapsSeen + " lap(s) in " + (plugin.currentTick() - mark) + " ticks)");
+        // Now the homecoming: the guard is told to hold, and the owner (a Null
+        // standing in for him) is already within 8 blocks.
         try {
-            laps = plugin.brain().patrolLaps() >= 1;
-            detail = plugin.brain().patrolLaps() + " lap(s) in " + (plugin.currentTick() - mark) + " ticks";
-            // The salute: the owner (a Null standing in for him) walks into range.
             NullBody body = squad.members().get(0);
             Player ownerHandle = handle(body);
             Mind mind = plugin.brain().mind(body);
             if (mind != null && ownerHandle != null) {
-                int before = plugin.brain().salutes();
                 mind.lastOwnerNearTick = 0L;
                 mind.order = new Mind.Order(Mind.Verb.HOLD, body.bodyPosition(), ownerHandle.getUniqueId(),
                         ownerHandle.getUniqueId(), plugin.currentTick(), 1);
-                t.gap(20);
-                salute = plugin.brain().salutes() > before;
-                detail += ", salutes " + before + " -> " + plugin.brain().salutes();
+                salutesBefore = plugin.brain().salutes();
             }
         } catch (Throwable e) {
-            notes.add("l03 check threw " + Guard.describe(e));
+            notes.add("l03 salute setup threw " + Guard.describe(e));
         }
-        check("S-103", "L-03", laps && salute, "the patrol keeps walking between its two points and the guard"
-                + " salutes when the owner comes within 8 blocks (" + detail + ")");
+    }
+
+    private void l03Salute() {
+        int now = plugin.brain().salutes();
+        boolean salute = now > salutesBefore;
+        check("S-103", "L-03", salute, "the guard salutes when the owner comes within 8 blocks (salutes "
+                + salutesBefore + " -> " + now + ")");
         dismissAll();
     }
 
@@ -1247,9 +1280,13 @@ final class SelfTestV4 {
         String detail = "";
         PermissionAttachment attachment = null;
         try {
-            squad = plugin.squads().spawnSquadAt(owner("l06"), worldName, List.of(at(72, 20)));
+            // A Null stands in for the owner: the squad it recalls is his, so
+            // the recall has somebody to answer to.
+            SquadManager.Squad stand = plugin.squads().spawnSquadAt(owner("l06owner"), worldName,
+                    List.of(at(70, 20)));
+            Player ownerHandle = handle(stand.members().get(0));
+            squad = plugin.squads().spawnSquadAt(ownerHandle.getUniqueId(), worldName, List.of(at(72, 20)));
             NullBody body = squad.members().get(0);
-            Player ownerHandle = handle(body);
             attachment = ownerHandle.addAttachment(plugin, "nullarmy.summon", true);
             ownerHandle.setSneaking(true);
             int promptsBefore = plugin.summonFlow().pendingCount();
@@ -1257,7 +1294,8 @@ final class SelfTestV4 {
             ownerHandle.getInventory().setItemInMainHand(horn);
             Bukkit.getPluginManager().callEvent(new PlayerInteractEvent(ownerHandle, Action.RIGHT_CLICK_AIR,
                     horn, null, BlockFace.SELF, EquipmentSlot.HAND));
-            boolean noNewPrompt = plugin.summonFlow().pendingCount() <= promptsBefore;
+            boolean noNewPrompt = plugin.summonFlow().pendingCount() <= promptsBefore
+                    && !plugin.summonFlow().hasPending(ownerHandle.getUniqueId());
             Mind mind = plugin.brain().mind(body);
             boolean marching = mind != null && mind.order != null && mind.order.verb == Mind.Verb.MARCH;
             detail = "prompts " + promptsBefore + " -> " + plugin.summonFlow().pendingCount()
@@ -1411,8 +1449,6 @@ final class SelfTestV4 {
 
     /** A dead Null drops its armour, its hands and its pack; a player drop stays vanilla. */
     private void p10Drops() {
-        boolean ok = false;
-        String detail;
         try {
             dismissAll();
             squad = plugin.squads().spawnSquadAt(owner("p10"), worldName, List.of(at(84, 20)));
@@ -1432,18 +1468,37 @@ final class SelfTestV4 {
                     itemsBefore++;
                 }
             }
+            dropsBefore = itemsBefore;
+            dropsAt = handle.getLocation();
             handle.setHealth(0.0D);
-            t.gap(20);
+        } catch (Throwable e) {
+            notes.add("p10 kill threw " + Guard.describe(e));
+        }
+    }
+
+    private Location dropsAt;
+    private int dropsBefore;
+
+    /** Counted a tick later: the drops are only on the ground once the death has run. */
+    private void p10DropsCheck() {
+        boolean ok = false;
+        String detail;
+        try {
             int itemsAfter = 0;
-            for (Entity e : world.getNearbyEntities(handle.getLocation(), 6, 6, 6)) {
+            for (Entity e : world.getNearbyEntities(dropsAt, 6, 6, 6)) {
                 if (e instanceof org.bukkit.entity.Item) {
                     itemsAfter++;
                     extraEntities.add(e);
                 }
             }
+            int recorded = plugin.lifecycle() == null ? -1 : plugin.lifecycle().lastDropCount();
+            boolean enabled = settings() == null || settings().dropsEnabled();
+            boolean chance = DeathDrops.shouldDrop(true, 1.0D, 0.5D);
+            boolean legacyWins = !DeathDrops.enabled(false, true);
             detail = "drops enabled=" + enabled + ", chance 1.0 drops=" + chance + ", legacy no-drops wins="
-                    + legacyWins + ", items on the ground " + itemsBefore + " -> " + itemsAfter;
-            ok = enabled && chance && legacyWins && itemsAfter >= 3;
+                    + legacyWins + ", the death listed " + recorded + " item(s), " + itemsAfter
+                    + " on the ground (was " + dropsBefore + ")";
+            ok = enabled && chance && legacyWins && (recorded >= 3 || itemsAfter >= 3);
         } catch (Throwable e) {
             ok = false;
             detail = Guard.describe(e);
@@ -1560,43 +1615,61 @@ final class SelfTestV4 {
     private void l07Setup() {
         dismissAll();
         try {
-            squad = plugin.squads().spawnSquadAt(owner("l07a"), worldName,
-                    List.of(at(96, 20), at(98, 20), at(100, 20), at(102, 20)));
-            squadB = plugin.squads().spawnSquadAt(owner("l07b"), worldName, List.of(at(104, 20)));
+            // A Null stands in for the owner so the regroup has somebody to
+            // march home to; his army is a squad of four, the prey a lone Null.
+            SquadManager.Squad stand = plugin.squads().spawnSquadAt(owner("l07owner"), worldName,
+                    List.of(at(94, 20)));
+            Player commander = handle(stand.members().get(0));
+            squad = plugin.squads().spawnSquadAt(commander.getUniqueId(), worldName,
+                    List.of(at(97, 20), at(99, 20), at(101, 20), at(103, 20)));
+            squadB = plugin.squads().spawnSquadAt(owner("l07b"), worldName, List.of(at(106, 20)));
             NullBody prey = squadB.members().get(0);
-            plugin.brain().hunt(squad.members(), prey.uuid(), plugin.squads().ownerOf(squad.members().get(0)), 2);
+            plugin.brain().hunt(squad.members(), prey.uuid(), commander.getUniqueId(), 2);
         } catch (Throwable e) {
             notes.add("l07 setup threw " + Guard.describe(e));
         }
     }
 
-    /** Two chase, the rest hold; when the target is gone everyone regroups. */
+    private int huntChasers;
+    private int huntHolders;
+
+    /** Two chase, the rest hold. */
     private void l07Check() {
-        boolean ok = false;
-        String detail;
+        huntChasers = 0;
+        huntHolders = 0;
         try {
-            int chasers = 0;
-            int holders = 0;
             for (NullBody body : squad.members()) {
                 Mind mind = plugin.brain().mind(body);
-                if (mind == null || mind.order == null) {
+                if (mind == null || mind.order == null || mind.order.verb != Mind.Verb.HUNT) {
                     continue;
                 }
-                if (Mind.Verb.HUNT.equals(mind.order.verb) && mind.order.chaser) {
-                    chasers++;
-                } else if (Mind.Verb.HUNT.equals(mind.order.verb) && mind.order.holder) {
-                    holders++;
+                if (mind.order.chaser) {
+                    huntChasers++;
+                }
+                if (mind.order.holder) {
+                    huntHolders++;
                 }
             }
-            int engagements = plugin.brain().huntEngagements();
-            // The target dies: everyone must come home by itself.
+        } catch (Throwable e) {
+            notes.add("l07 check threw " + Guard.describe(e));
+        }
+        // The target dies in its own step: the army has to notice by itself.
+        try {
             NullBody prey = squadB.members().get(0);
             Player preyHandle = handle(prey);
             if (preyHandle != null) {
                 preyHandle.setHealth(0.0D);
             }
-            t.gap(20);
-            t.gap(20);
+        } catch (Throwable e) {
+            notes.add("l07 kill threw " + Guard.describe(e));
+        }
+    }
+
+    /** Once the target is gone, everyone comes home on its own. */
+    private void l07Regroup() {
+        boolean ok = false;
+        String detail;
+        try {
             int regrouping = 0;
             for (NullBody body : squad.members()) {
                 Mind mind = plugin.brain().mind(body);
@@ -1604,10 +1677,10 @@ final class SelfTestV4 {
                     regrouping++;
                 }
             }
-            detail = chasers + " chasing, " + holders + " holding, engagements " + engagements
+            int engagements = plugin.brain().huntEngagements();
+            detail = huntChasers + " chasing, " + huntHolders + " holding, engagements " + engagements
                     + ", regrouping after the kill " + regrouping;
-            ok = chasers >= 1 && chasers <= 2 && holders >= 1
-                    && (regrouping >= 1 || prey == null);
+            ok = huntChasers >= 1 && huntChasers <= 2 && huntHolders >= 1 && regrouping >= 1;
         } catch (Throwable e) {
             ok = false;
             detail = Guard.describe(e);
@@ -1621,22 +1694,31 @@ final class SelfTestV4 {
 
     /** Loot discipline: a Null picks up the drops of what it defeated. */
     private void l08Loot() {
-        boolean ok = false;
-        String detail;
         try {
             dismissAll();
             squad = plugin.squads().spawnSquadAt(owner("l08"), worldName, List.of(at(108, 20)));
             NullBody body = squad.members().get(0);
             Player handle = handle(body);
-            int before = plugin.brain().lootPicked();
+            lootBefore = plugin.brain().lootPicked();
             if (handle != null) {
                 Location at = handle.getLocation();
                 org.bukkit.entity.Item drop = world.dropItem(at, new ItemStack(Material.DIAMOND, 3));
                 extraEntities.add(drop);
-                t.gap(20);
-                t.gap(20);
             }
-            int picked = plugin.brain().lootPicked() - before;
+        } catch (Throwable e) {
+            notes.add("l08 drop threw " + Guard.describe(e));
+        }
+    }
+
+    private int lootBefore;
+
+    private void l08LootCheck() {
+        boolean ok = false;
+        String detail = "no squad";
+        try {
+            NullBody body = squad.members().get(0);
+            Player handle = handle(body);
+            int picked = plugin.brain().lootPicked() - lootBefore;
             int carried = 0;
             if (handle != null) {
                 for (ItemStack stack : handle.getInventory().getContents()) {

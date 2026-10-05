@@ -296,6 +296,12 @@ public final class NullBrain implements Reloadable {
             intent = combat.tick(body, mind, handle, world, pos);
             busy = true;
         }
+        if (mind.order != null && mind.order.verb == Mind.Verb.HUNT) {
+            // L-07: the hunt ends when the target does - checked every tick,
+            // even while the chasers are mid-fight, so nobody is left swinging
+            // at a corpse or at a player who has logged out.
+            refreshHunt(body, mind, handle);
+        }
         if (!busy && mind.order != null && mind.order.verb == Mind.Verb.DRILL) {
             // L-01: the drill cycles line -> wedge -> phalanx on one clock shared
             // by the whole squad, so every body changes shape on the same tick.
@@ -639,7 +645,13 @@ public final class NullBrain implements Reloadable {
             }
             case REGROUP: {
                 // L-07: come back to the owner and reform.
-                Vec3d owner = order.entity == null ? order.point : targetPosition(order.entity, world);
+                Vec3d owner = order.entity == null ? null : targetPosition(order.entity, world);
+                if (owner == null) {
+                    owner = order.point;
+                }
+                if (owner == null && mind.holdCell != null) {
+                    owner = mind.holdCell; // the spot the order was given from
+                }
                 if (owner == null) {
                     mind.order = null;
                     return null;
@@ -688,6 +700,30 @@ public final class NullBrain implements Reloadable {
                 mind.order = null;
                 return null;
         }
+    }
+
+    /** L-07: turns a finished hunt into the march home. */
+    private void refreshHunt(NullBody body, Mind mind, Player handle) {
+        Mind.Order order = mind.order;
+        if (order == null || order.entity == null) {
+            return;
+        }
+        Entity hunted = Bukkit.getEntity(order.entity);
+        boolean finished = hunted == null || hunted.isDead()
+                || (hunted instanceof Player && !((Player) hunted).isOnline());
+        if (!finished) {
+            return;
+        }
+        mind.combatTarget = null;
+        mind.combatUntil = 0L;
+        Mind.Order standing = order;
+        UUID owner = order.issuer;
+        mind.order = new Mind.Order(Mind.Verb.REGROUP, null, owner, owner, now, 1);
+        if (mind.order.point == null && standing.point != null) {
+            mind.order.point = standing.point;
+        }
+        combat.endFight(mind, handle);
+        Guard.attempt(plugin.getLogger(), "acknowledging a finished hunt", handle::swingMainHand);
     }
 
     /** L-01: every marcher walks at the same speed - no per-body variance. */
@@ -950,6 +986,12 @@ public final class NullBrain implements Reloadable {
         if (handle == null || !idle) {
             return;
         }
+        // A Null holding its shield up - or eating, or drawing a bow - is busy
+        // with its hands. Camp life must never interrupt that: a swing cancels
+        // the item use, and a guard who stops blocking is not guarding.
+        if (handle.isHandRaised() || mind.eating() || mind.shieldUp) {
+            return;
+        }
         if (body.health() < NullBrain.maxHealth(handle) * (v3 == null ? 0.6D : v3.eatBelowHealth())) {
             if (maybeEat(body, mind, handle)) {
                 mind.campBehaviour = "eat";
@@ -991,16 +1033,36 @@ public final class NullBrain implements Reloadable {
         // Otherwise: ring round the light with the squad, or stand watch alone.
         // Nothing here moves the body more than a step, so an idle camp stays idle.
         int mates = 0;
+        double cx = 0.0D;
+        double cz = 0.0D;
         for (Entity near : handle.getNearbyEntities(6.0D, 3.0D, 6.0D)) {
             if (near instanceof Player && plugin.adapter() != null
                     && plugin.adapter().isNullEntity(near.getUniqueId()) && !near.isDead()) {
                 mates++;
+                cx += near.getLocation().getX();
+                cz += near.getLocation().getZ();
             }
         }
+        boolean onRing = false;
         if (mates >= 2) {
-            mind.campBehaviour = "ring";
-            campBehaviours.add("ring");
-        } else {
+            // The ring: a slot on a circle round the middle of the squad (or the
+            // camp fire standing there), claimed by where this body already is.
+            cx /= mates;
+            cz /= mates;
+            double radius = Math.max(1.5D, 0.45D * (mates + 1));
+            double here = Math.atan2(pos.z() - cz, pos.x() - cx);
+            double slotX = cx + Math.cos(here) * radius;
+            double slotZ = cz + Math.sin(here) * radius;
+            onRing = Math.hypot(pos.x() - slotX, pos.z() - slotZ) <= 0.7D;
+            if (!onRing) {
+                mind.campBehaviour = "ring";
+                campBehaviours.add("ring");
+                intent.dx = (slotX - pos.x()) * 0.35D;
+                intent.dz = (slotZ - pos.z()) * 0.35D;
+                intent.gait = NullBody.GAIT_WALK;
+            }
+        }
+        if (mates < 2 || onRing) {
             mind.campBehaviour = "watch";
             campBehaviours.add("watch");
         }
@@ -1031,6 +1093,15 @@ public final class NullBrain implements Reloadable {
             Mind mind = mind(body);
             if (mind == null) {
                 continue;
+            }
+            // P-04: the totem holder is the only commander. An order from anyone
+            // else is not "partly obeyed" - it is refused here, at the source, so
+            // no later code path can move a Null for a stranger.
+            if (issuer != null && body.uuid() != null) {
+                UUID owner = plugin.squads() == null ? null : plugin.squads().ownerOf(body);
+                if (owner != null && !owner.equals(issuer)) {
+                    continue;
+                }
             }
             Mind.Order created = new Mind.Order(verb, point, entity, issuer, now, Math.max(1, count));
             mind.order = created;
