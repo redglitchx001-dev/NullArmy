@@ -1442,6 +1442,13 @@ final class SelfTestV3 {
         }
     }
 
+    private void clearFight(NullBody body) {
+        Mind mind = plugin.brain().mind(body);
+        if (mind != null) {
+            mind.clearFight();
+        }
+    }
+
     private void b17Standing() {
         if (one == null) {
             return;
@@ -1560,6 +1567,11 @@ final class SelfTestV3 {
         victim.setHealth(Math.min(victim.getHealth() + 10.0D, 20.0D));
         plugin.brain().forceLook(one, eye(two), 200, false);
         plugin.brain().forceLook(two, eye(one), 200, false);
+        if (settings() != null) {
+            settings().setRetaliateOverride(false);
+        }
+        clearFight(one);
+        clearFight(two);
         victim.startUsingItem(EquipmentSlot.OFF_HAND);
         counter = 0;
         shieldWait = 0;
@@ -1574,6 +1586,8 @@ final class SelfTestV3 {
             return;
         }
         Player victim = handle(two);
+        clearFight(one);
+        clearFight(two);
         plugin.brain().forceLook(two, eye(one), 200, false);
         Vec3d v = two.bodyPosition();
         Vec3d a = one.bodyPosition();
@@ -1611,10 +1625,12 @@ final class SelfTestV3 {
         }
         Player attacker = handle(one);
         armSword(attacker);
-        if ((!victim.isBlocking() || attacker.getAttackCooldown() < 0.9F) && shieldWait < 8) {
+        boolean shieldReady = victim.isBlocking() || (victim.isHandRaised() && victim.getActiveItem() != null
+                && victim.getActiveItem().getType() == Material.SHIELD && shieldWait >= 2);
+        if ((!shieldReady || attacker.getAttackCooldown() < 0.9F) && shieldWait < 12) {
             // startUsingItem() and the server's attack meter both settle on tick
             // boundaries.  Do not sample a shield block until the hand is really
-            // raised and the incoming blow can actually be delivered.
+            // raised for several ticks and the incoming blow can be delivered.
             shieldWait++;
             t.gap(3);
             t.retry(this::b17ShieldHit);
@@ -1627,7 +1643,9 @@ final class SelfTestV3 {
         mark = plugin.currentTick();
         attacker.swingMainHand();
         attacker.attack(victim);
-        t.gap(2);
+        clearFight(one);
+        clearFight(two);
+        t.gap(1);
     }
 
     private void b17ShieldCheck() {
@@ -1636,21 +1654,25 @@ final class SelfTestV3 {
         }
         Player victim = handle(two);
         List<NullLifecycleListener.Hit> hits = plugin.lifecycle().hitsSince(mark);
+        NullLifecycleListener.Hit hit = hitBy(one, two, mark);
         boolean zero = victim.getHealth() >= numberB - 1.0e-6;
         // The blow has to have been struck for the block to mean anything, and
         // what the block is proves itself by: the defender's health does not
         // move. Whether the server bookkeeps it as a blocked modifier, a
         // cancelled event or a blow of no consequence is a detail of the
         // pipeline - the shield is up and the man is unhurt.
-        boolean struck = !hits.isEmpty();
+        boolean struck = hit != null;
         boolean blockedHit = zero;
         check("S-82", "B-17", struck && zero && blockedHit, "a raised shield takes the hit to zero (blocking="
                 + flag + ", offhand " + offhandNote + ", hand raised " + victim.isHandRaised()
-                + ", " + hits.size() + " blow(s) struck, facing the attacker within "
+                + ", " + (hit == null ? 0 : 1) + " measured blow(s), " + hits.size() + " total recent blow(s), facing the attacker within "
                 + String.format(Locale.ROOT, "%.0f", numberA)
                 + " degrees, health " + String.format(Locale.ROOT, "%.1f", numberB) + " -> "
                 + String.format(Locale.ROOT, "%.1f", victim.getHealth()) + ")");
         victim.clearActiveItem();
+        if (settings() != null) {
+            settings().setRetaliateOverride(null);
+        }
     }
 
     private void b17BowSetup() {
