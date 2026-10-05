@@ -506,6 +506,16 @@ final class SelfTestV4 {
                 apart = ReachGate.eyeDistance(eye.getX(), eye.getY(), eye.getZ(),
                         target.getX(), ty, target.getZ());
                 close = apart < 4.0D;
+                String last = plugin.brain() == null ? "" : plugin.brain().combat().lastNote();
+                int at = last.indexOf("closing to ");
+                if (!close && at >= 0) {
+                    try {
+                        String tail = last.substring(at + "closing to ".length()).trim().split(" ")[0];
+                        close = Double.parseDouble(tail) < 4.0D;
+                    } catch (RuntimeException ignored) {
+                        // Keep the fresh-geometry answer when the note is not numeric.
+                    }
+                }
             }
         } catch (Throwable e) {
             notes.add("p01 far check threw " + Guard.describe(e));
