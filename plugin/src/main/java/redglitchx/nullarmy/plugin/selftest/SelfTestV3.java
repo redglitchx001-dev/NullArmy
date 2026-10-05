@@ -1567,8 +1567,8 @@ final class SelfTestV3 {
         victim.setHealth(Math.min(victim.getHealth() + 10.0D, 20.0D));
         plugin.brain().forceLook(one, eye(two), 200, false);
         plugin.brain().forceLook(two, eye(one), 200, false);
-        if (settings() != null) {
-            settings().setRetaliateOverride(false);
+        if (plugin.pluginConfig() != null && plugin.pluginConfig().v3() != null) {
+            plugin.pluginConfig().v3().setRetaliateOverride(false);
         }
         clearFight(one);
         clearFight(two);
@@ -1670,8 +1670,8 @@ final class SelfTestV3 {
                 + " degrees, health " + String.format(Locale.ROOT, "%.1f", numberB) + " -> "
                 + String.format(Locale.ROOT, "%.1f", victim.getHealth()) + ")");
         victim.clearActiveItem();
-        if (settings() != null) {
-            settings().setRetaliateOverride(null);
+        if (plugin.pluginConfig() != null && plugin.pluginConfig().v3() != null) {
+            plugin.pluginConfig().v3().setRetaliateOverride(null);
         }
     }
 
