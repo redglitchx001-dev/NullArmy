@@ -174,6 +174,30 @@ public final class CoreTestSuite {
         run("formation cells are assigned with the least total walking, no crossing",
                 CoreTestSuite::testFormationAssignment);
 
+        // ------------------------------------------------------------- v4 (P-01..P-12, L-01..L-08)
+        run("melee reach: 2.9 lands, 3.6 does not, a wall blocks (P-01)",
+                CoreTestSuite::testReachGate);
+        run("swing cadence: >=5 swings in 3s and a crit every 1-2 swings (P-02)",
+                CoreTestSuite::testSwingCadence);
+        run("names are readable, unique and never hex gibberish (P-03)",
+                CoreTestSuite::testNullNames);
+        run("aim is imperfect: angle, lead, reaction and a miss rate in 40-80% (P-05)",
+                CoreTestSuite::testAimSkill);
+        run("the throne plan is a real chair with a back (P-07)",
+                CoreTestSuite::testThronePlan);
+        run("'in front of me' anchors along the speaker's facing (P-07)",
+                CoreTestSuite::testAnchorAhead);
+        run("barrage dispersion lands on the locked target (P-08)",
+                CoreTestSuite::testBarrage);
+        run("natural language orders parse to the right verb (P-09)",
+                CoreTestSuite::testOrderParser);
+        run("a defeated Null drops its kit when drops are enabled (P-10)",
+                CoreTestSuite::testDeathDrops);
+        run("ping numbers show the army: 2 real + 3 nulls = 5/2026 (P-11)",
+                CoreTestSuite::testPingNumbers);
+        run("march cadence is one shared clock and the drill cycles (L-01)",
+                CoreTestSuite::testMarchCadence);
+
         System.out.println();
         System.out.println("passed: " + passed + "  failed: " + failed);
         if (failed > 0) {
@@ -2013,6 +2037,464 @@ public final class CoreTestSuite {
         check(ground.containsBody(inside[0], inside[1], inside[2]), "the start spot is inside the frame");
         int[] fp = ground.footprint();
         check(fp[0] == 0 && fp[2] == 3 && fp[3] == 2, "footprint covers the face and the apron");
+    }
+
+    // ============================================================== v4 tests
+
+    private static void testReachGate() {
+        redglitchx.nullarmy.core.combat.ReachGate.Occlusion wall = (x, y, z) ->
+                Math.abs(x - 3.0D) < 0.5D && y > -1.0D && y < 3.0D && Math.abs(z) < 3.0D;
+        double reach = redglitchx.nullarmy.core.combat.ReachGate.VANILLA_REACH;
+        checkEquals(3.0D, reach, "vanilla survival melee reach is exactly 3.0 blocks");
+
+        // 2.9 blocks, clear air: the strike happens.
+        boolean near = redglitchx.nullarmy.core.combat.ReachGate.strikeAllowed(
+                0.0D, 1.62D, 0.0D, 2.9D, 1.62D, 0.0D, reach, (x, y, z) -> false);
+        check(near, "a strike at 2.9 blocks lands (S-85)");
+
+        // 3.6 blocks: too far, no hit and no swing.
+        boolean far = redglitchx.nullarmy.core.combat.ReachGate.strikeAllowed(
+                0.0D, 1.62D, 0.0D, 3.6D, 1.62D, 0.0D, reach, (x, y, z) -> false);
+        check(!far, "a strike at 3.6 blocks does not happen (S-86)");
+
+        // 2.0 blocks away but a solid block in between: no hit through a wall.
+        boolean throughWall = redglitchx.nullarmy.core.combat.ReachGate.strikeAllowed(
+                1.0D, 1.62D, 0.0D, 4.0D, 1.62D, 0.0D, reach, wall);
+        check(!throughWall, "a strike through a one-block wall does not happen (S-86)");
+
+        // The same pair with the wall gone is allowed, so the wall is the cause.
+        boolean noWall = redglitchx.nullarmy.core.combat.ReachGate.strikeAllowed(
+                1.0D, 1.62D, 0.0D, 4.0D, 1.62D, 0.0D, reach, (x, y, z) -> false);
+        check(noWall, "the same strike is allowed once the wall is gone");
+
+        check(redglitchx.nullarmy.core.combat.ReachGate.inReach(0, 0, 0, 2.99, 0, 0, reach),
+                "2.99 is inside reach");
+        check(!redglitchx.nullarmy.core.combat.ReachGate.inReach(0, 0, 0, 3.01, 0, 0, reach),
+                "3.01 is outside reach");
+        checkEquals(3.0D, redglitchx.nullarmy.core.combat.ReachGate.clampReach(9.0D),
+                "a configured reach above vanilla is clamped down to vanilla");
+        checkEquals(3.0D, redglitchx.nullarmy.core.combat.ReachGate.eyeDistance(0, 0, 0, 3, 0, 0),
+                "eye distance is the straight-line distance");
+    }
+
+    private static void testSwingCadence() {
+        float gate = redglitchx.nullarmy.core.combat.SwingCadence.MIN_COOLDOWN;
+        check(gate >= 0.5F && gate <= 0.6F, "a Null swings at ~0.55 cooldown, not at full");
+        check(!redglitchx.nullarmy.core.combat.SwingCadence.ready(0.54F), "0.54 is not enough");
+        check(redglitchx.nullarmy.core.combat.SwingCadence.ready(0.55F), "0.55 is enough");
+
+        // A netherite sword: 1.6 attacks/second -> 12.5 ticks to a full meter.
+        int swings = redglitchx.nullarmy.core.combat.SwingCadence.swingsIn(60, 13, gate);
+        check(swings >= 5, "in 3 seconds a Null lands " + swings + " swings, at least 5 (S-87)");
+        int fullOnly = redglitchx.nullarmy.core.combat.SwingCadence.swingsIn(60, 13, 1.0F);
+        check(swings > fullOnly, "swinging at 0.55 really is more swings than at full ("
+                + swings + " vs " + fullOnly + ")");
+
+        // Crits: on every second swing while falling.
+        int crits = 0;
+        int since = 0;
+        for (int i = 0; i < swings; i++) {
+            if (redglitchx.nullarmy.core.combat.SwingCadence.critDue(since + 1, true)) {
+                crits++;
+                since = 0;
+            } else {
+                since++;
+            }
+        }
+        check(crits >= 2, "at least 2 of those " + swings + " swings are criticals (S-88)");
+        check(!redglitchx.nullarmy.core.combat.SwingCadence.critDue(1, false),
+                "no critical while standing on the ground");
+        checkEquals(15.0D, redglitchx.nullarmy.core.combat.SwingCadence.damage(10.0D, true),
+                "a critical hit deals x1.5 damage");
+        checkEquals(10.0D, redglitchx.nullarmy.core.combat.SwingCadence.damage(10.0D, false),
+                "a normal hit deals base damage");
+    }
+
+    private static void testNullNames() {
+        Set<String> taken = new HashSet<>();
+        for (long seed = 0; seed < 200; seed++) {
+            String name = redglitchx.nullarmy.core.naming.NullNames.next(seed, taken);
+            check(redglitchx.nullarmy.core.naming.NullNames.isReadable(name),
+                    "generated name is readable: " + name);
+            check(name.length() <= 16, "generated name fits the username limit: " + name);
+            check(!taken.contains(name), "generated name is unique: " + name);
+            taken.add(name);
+        }
+        checkEquals(200, taken.size(), "200 Nulls all got distinct names (S-89)");
+
+        check(!redglitchx.nullarmy.core.naming.NullNames.isReadable("c1b12d32d3dc74c4"),
+                "the old hex gibberish is rejected");
+        check(!redglitchx.nullarmy.core.naming.NullNames.isReadable("deadbeef"),
+                "a bare hex word is rejected");
+        check(!redglitchx.nullarmy.core.naming.NullNames.isReadable("1name"),
+                "a name starting with a digit is rejected");
+        check(!redglitchx.nullarmy.core.naming.NullNames.isReadable("a name"),
+                "a name with a space is rejected");
+        check(redglitchx.nullarmy.core.naming.NullNames.isReadable("Voidwalker"), "Voidwalker is readable");
+        check(redglitchx.nullarmy.core.naming.NullNames.isReadable("Null_07"), "Null_07 is readable");
+        check(redglitchx.nullarmy.core.naming.NullNames.isReadable("Grimjaw_12"), "Grimjaw_12 is readable");
+        check(redglitchx.nullarmy.core.naming.NullNames.wordCount() >= 16,
+                "there are plenty of themed words to draw from");
+
+        // Determinism: the same seed gives the same handle.
+        checkEquals(redglitchx.nullarmy.core.naming.NullNames.next(7, null),
+                redglitchx.nullarmy.core.naming.NullNames.next(7, null),
+                "the name generator is deterministic for a seed");
+    }
+
+    private static void testAimSkill() {
+        double skill = redglitchx.nullarmy.core.combat.AimSkill.DEFAULT;
+        checkEquals(0.65D, skill, "aim-skill defaults to 0.65");
+
+        double maxError = redglitchx.nullarmy.core.combat.AimSkill.maxAngleErrorDeg(skill);
+        check(maxError >= 4.0D && maxError <= 10.0D,
+                "at the default skill the angular error is within +-4..10 degrees (was "
+                        + String.format(java.util.Locale.ROOT, "%.2f", maxError) + ")");
+        check(redglitchx.nullarmy.core.combat.AimSkill.maxAngleErrorDeg(1.0D) > 3.9D,
+                "even a perfect-skill Null is never laser accurate");
+        checkEquals(10.0D, redglitchx.nullarmy.core.combat.AimSkill.maxAngleErrorDeg(0.0D),
+                "a hopeless Null is off by up to 10 degrees");
+
+        check(Math.abs(redglitchx.nullarmy.core.combat.AimSkill.angleErrorDeg(skill, 1.0D) - maxError) < 1e-9,
+                "a full roll gives the full error");
+        check(Math.abs(redglitchx.nullarmy.core.combat.AimSkill.angleErrorDeg(skill, -1.0D) + maxError) < 1e-9,
+                "the error is symmetric");
+        checkEquals(0.0D, redglitchx.nullarmy.core.combat.AimSkill.angleErrorDeg(skill, 0.0D),
+                "a centred roll is a centred shot");
+
+        long reaction = redglitchx.nullarmy.core.combat.AimSkill.reactionTicks(skill, 0.5D);
+        check(reaction >= 6 && reaction <= 16,
+                "the reaction delay is 0.3..0.8 s, i.e. 6..16 ticks (was " + reaction + ")");
+
+        // The owner's acceptance band: 30 shots at a standing target 15 blocks
+        // away must land 40-80 % of the time - never 100 %.
+        double chance15 = redglitchx.nullarmy.core.combat.AimSkill.hitChance(15.0D, skill);
+        check(chance15 >= 0.40D && chance15 <= 0.80D,
+                "at 15 blocks the hit chance is " + String.format(java.util.Locale.ROOT, "%.2f", chance15)
+                        + ", inside 40-80 %");
+        check(redglitchx.nullarmy.core.combat.AimSkill.hitChance(15.0D, 1.0D) < 1.0D,
+                "even a perfect-skill Null misses sometimes");
+
+        java.util.Random random = new java.util.Random(20261005L);
+        int hits = 0;
+        for (int i = 0; i < 30; i++) {
+            if (!redglitchx.nullarmy.core.combat.AimSkill.fullMiss(15.0D, skill, random.nextDouble())) {
+                hits++;
+            }
+        }
+        double rate = hits / 30.0D;
+        check(rate >= 0.40D && rate <= 0.80D,
+                "30 shots at 15 blocks hit " + hits + "/30 = "
+                        + String.format(java.util.Locale.ROOT, "%.0f%%", rate * 100.0D)
+                        + ", inside 40-80 % (S-94)");
+
+        check(!redglitchx.nullarmy.core.combat.AimSkill.fullMiss(4.0D, skill, 0.999D),
+                "up close a Null never misses outright");
+        check(redglitchx.nullarmy.core.combat.AimSkill.fullMiss(80.0D, skill, 0.999D),
+                "at extreme range a Null misses outright");
+
+        double[] aimed = redglitchx.nullarmy.core.combat.AimSkill.applyErrorDeg(180.0D, 0.0D, skill, 1.0D, -1.0D);
+        check(Math.abs(aimed[0]) <= 180.0D, "the errored yaw stays wrapped");
+        check(aimed[1] >= -90.0D && aimed[1] <= 90.0D, "the errored pitch stays legal");
+    }
+
+    private static void testThronePlan() {
+        Map<String, Integer> stock = new LinkedHashMap<>();
+        stock.put("NETHERRACK", 64);
+        stock.put("GOLD_BLOCK", 8);
+        stock.put("RED_WOOL", 8);
+        redglitchx.nullarmy.core.construct.FallbackPlanner.Plan plan =
+                redglitchx.nullarmy.core.construct.FallbackPlanner.plan("a throne", 0, 0, 0, 0, stock);
+        check(plan != null, "\"a throne\" is a shape the offline planner knows (S-96)");
+        if (plan == null) {
+            return;
+        }
+        check(plan.kind() == redglitchx.nullarmy.core.construct.FallbackPlanner.Kind.THRONE,
+                "the planner chose the throne shape");
+        check(plan.placements() >= 8, "the throne is at least 8 placements (was "
+                + plan.placements() + ")");
+
+        int seat = 0;
+        int back = 0;
+        int gold = 0;
+        int wool = 0;
+        for (redglitchx.nullarmy.core.construct.BuildStep step : plan.steps()) {
+            if (step.action() != redglitchx.nullarmy.core.construct.BuildStep.Action.PLACE) {
+                continue;
+            }
+            if (step.y() == 0) {
+                seat++;
+            }
+            if (step.y() >= 1) {
+                back++;
+            }
+            if ("GOLD_BLOCK".equals(step.block())) {
+                gold++;
+            }
+            if ("RED_WOOL".equals(step.block())) {
+                wool++;
+            }
+        }
+        check(seat == 4, "the seat is a 2x2 platform (was " + seat + ")");
+        check(back >= 2, "the throne has a back above the seat (was " + back + ")");
+        check(gold >= 1, "the throne has gold accents (was " + gold + ")");
+        check(wool >= 1, "the throne has wool accents (was " + wool + ")");
+
+        // Every placement has to be reachable: no step may place a block more
+        // than a player's reach from where the builder was told to stand.
+        int[] stand = {0, 0, 0};
+        boolean reachable = true;
+        for (redglitchx.nullarmy.core.construct.BuildStep step : plan.steps()) {
+            if (step.action() == redglitchx.nullarmy.core.construct.BuildStep.Action.MOVE) {
+                stand = new int[] {step.x(), step.y(), step.z()};
+                continue;
+            }
+            if (step.action() != redglitchx.nullarmy.core.construct.BuildStep.Action.PLACE) {
+                continue;
+            }
+            double d = Math.hypot(step.x() - stand[0], Math.hypot(step.y() - stand[1], step.z() - stand[2]));
+            if (d > 5.0D) {
+                reachable = false;
+            }
+        }
+        check(reachable, "every throne block is placed from within a player's reach");
+
+        check(redglitchx.nullarmy.core.construct.FallbackPlanner.kindOf("build me a throne")
+                        == redglitchx.nullarmy.core.construct.FallbackPlanner.Kind.THRONE,
+                "\"build me a throne\" plans a throne");
+        check(redglitchx.nullarmy.core.construct.FallbackPlanner.kindOf("a chair")
+                        == redglitchx.nullarmy.core.construct.FallbackPlanner.Kind.THRONE,
+                "\"a chair\" plans a throne");
+        check(redglitchx.nullarmy.core.construct.FallbackPlanner.kindOf("a small hut")
+                        == redglitchx.nullarmy.core.construct.FallbackPlanner.Kind.HUT,
+                "the older shapes still resolve");
+    }
+
+    private static void testAnchorAhead() {
+        // facing 0 = +z (south): 2 blocks ahead is z + 2.
+        int[] south = redglitchx.nullarmy.core.construct.FallbackPlanner.anchorAhead(10, 64, 10, 0, 2);
+        check(south[0] == 10 && south[2] == 12, "facing south, '2 ahead' is +2 z");
+        int[] north = redglitchx.nullarmy.core.construct.FallbackPlanner.anchorAhead(10, 64, 10, 2, 2);
+        check(north[0] == 10 && north[2] == 8, "facing north, '2 ahead' is -2 z");
+        int[] west = redglitchx.nullarmy.core.construct.FallbackPlanner.anchorAhead(10, 64, 10, 1, 2);
+        check(west[0] == 8 && west[2] == 10, "facing west, '2 ahead' is -2 x");
+        int[] east = redglitchx.nullarmy.core.construct.FallbackPlanner.anchorAhead(10, 64, 10, 3, 2);
+        check(east[0] == 12 && east[2] == 10, "facing east, '2 ahead' is +2 x");
+
+        // A bridge built from that anchor really does run along the facing.
+        Map<String, Integer> stock = new LinkedHashMap<>();
+        stock.put("NETHERRACK", 64);
+        int[] anchor = redglitchx.nullarmy.core.construct.FallbackPlanner.anchorAhead(0, 0, 0, 0, 2);
+        redglitchx.nullarmy.core.construct.FallbackPlanner.Plan plan =
+                redglitchx.nullarmy.core.construct.FallbackPlanner.plan(
+                        "bridge in front of me", anchor[0], anchor[1], anchor[2], 0, stock);
+        check(plan != null, "the offline planner can bridge from the anchor ahead (S-97)");
+        if (plan != null) {
+            boolean forward = true;
+            for (redglitchx.nullarmy.core.construct.BuildStep step : plan.steps()) {
+                if (step.action() == redglitchx.nullarmy.core.construct.BuildStep.Action.PLACE
+                        && step.z() <= anchor[2]) {
+                    forward = false;
+                }
+            }
+            check(forward, "every bridge block lies in front of the speaker, never behind him");
+            check(plan.placements() >= 5, "the bridge places at least 5 blocks ("
+                    + plan.placements() + ")");
+        }
+    }
+
+    private static void testBarrage() {
+        int count = 24;
+        double radius = 8.0D;
+        double height = 40.0D;
+        for (String shape : new String[] {"sphere", "rain", "line"}) {
+            redglitchx.nullarmy.core.spectacle.Barrage.Pattern pattern =
+                    redglitchx.nullarmy.core.spectacle.Barrage.Pattern.parse(shape);
+            List<double[]> offsets =
+                    redglitchx.nullarmy.core.spectacle.Barrage.offsets(pattern, count, radius, height, 99L);
+            checkEquals(count, offsets.size(), shape + ": one offset per projectile ("
+                    + count + ")");
+            for (double[] off : offsets) {
+                check(off[1] > 0.0D, shape + ": every projectile starts above the target");
+            }
+            List<double[]> landings = redglitchx.nullarmy.core.spectacle.Barrage.landings(
+                    pattern, count, radius, height, 99L, 100.0D, 64.0D, -50.0D);
+            double spread = redglitchx.nullarmy.core.spectacle.Barrage.dispersion(
+                    landings, 100.0D, 64.0D, -50.0D);
+            check(spread <= 3.0D, shape + ": the mean landing point is within 3 blocks of the"
+                    + " locked target (was " + String.format(java.util.Locale.ROOT, "%.3f", spread) + ") (S-99)");
+        }
+        check(redglitchx.nullarmy.core.spectacle.Barrage.Pattern.parse("nonsense")
+                        == redglitchx.nullarmy.core.spectacle.Barrage.Pattern.SPHERE,
+                "an unknown pattern falls back to sphere, it does not fail");
+        check(redglitchx.nullarmy.core.spectacle.Barrage.offsets(
+                        redglitchx.nullarmy.core.spectacle.Barrage.Pattern.SPHERE, 0, 8, 40, 1L).isEmpty(),
+                "zero projectiles is an empty barrage");
+        // Determinism: the same seed reproduces the same barrage.
+        checkEquals(redglitchx.nullarmy.core.spectacle.Barrage.offsets(
+                        redglitchx.nullarmy.core.spectacle.Barrage.Pattern.SPHERE, 24, 8, 40, 5L).get(0)[0],
+                redglitchx.nullarmy.core.spectacle.Barrage.offsets(
+                        redglitchx.nullarmy.core.spectacle.Barrage.Pattern.SPHERE, 24, 8, 40, 5L).get(0)[0],
+                "the barrage is deterministic for a seed");
+    }
+
+    private static void testOrderParser() {
+        String name = "Vex";
+        redglitchx.nullarmy.core.orders.OrderParser.Order built =
+                redglitchx.nullarmy.core.orders.OrderParser.parse("Commander build me a throne", name, "@");
+        check(built != null && built.addressed(), "\"Commander build me a throne\" is addressed to us");
+        check(built != null && built.verb() == redglitchx.nullarmy.core.orders.OrderParser.Verb.BUILD,
+                "\"Commander build me a throne\" parses to BUILD (S-106)");
+        check(built != null && "throne".equals(built.argument()),
+                "the argument is the thing to build (was '" + (built == null ? "?" : built.argument()) + "')");
+
+        redglitchx.nullarmy.core.orders.OrderParser.Order bridge =
+                redglitchx.nullarmy.core.orders.OrderParser.parse("null bridge in front of me", name, "@");
+        check(bridge != null && bridge.verb() == redglitchx.nullarmy.core.orders.OrderParser.Verb.BRIDGE,
+                "\"null bridge in front of me\" parses to BRIDGE (S-107)");
+        check(bridge != null && bridge.argument().contains("front"),
+                "the bridge keeps 'in front of me' so the caller knows it is relative");
+
+        redglitchx.nullarmy.core.orders.OrderParser.Order attack =
+                redglitchx.nullarmy.core.orders.OrderParser.parse("null attack them", name, "@");
+        check(attack != null && attack.verb() == redglitchx.nullarmy.core.orders.OrderParser.Verb.ATTACK,
+                "\"null attack them\" parses to ATTACK (S-108)");
+        check(attack != null && "them".equals(attack.argument()),
+                "\"attack them\" targets the hostile players nearby");
+
+        redglitchx.nullarmy.core.orders.OrderParser.Order named =
+                redglitchx.nullarmy.core.orders.OrderParser.parse("null attack Steve", name, "@");
+        check(named != null && "Steve".equals(named.argument()),
+                "\"null attack Steve\" targets Steve by name");
+
+        redglitchx.nullarmy.core.orders.OrderParser.Order destroy =
+                redglitchx.nullarmy.core.orders.OrderParser.parse("null destroy", name, "@");
+        check(destroy != null && destroy.verb() == redglitchx.nullarmy.core.orders.OrderParser.Verb.DESTROY,
+                "\"null destroy\" parses to DESTROY (S-109)");
+
+        redglitchx.nullarmy.core.orders.OrderParser.Order mention =
+                redglitchx.nullarmy.core.orders.OrderParser.parse("@Vex build me a throne", name, "@");
+        check(mention != null && mention.address() == redglitchx.nullarmy.core.orders.OrderParser.Address.MENTION,
+                "@Vex is recognised as a mention (S-113)");
+        check(mention != null && mention.verb() == redglitchx.nullarmy.core.orders.OrderParser.Verb.BUILD,
+                "@Vex build me a throne is a build order");
+
+        redglitchx.nullarmy.core.orders.OrderParser.Order hello =
+                redglitchx.nullarmy.core.orders.OrderParser.parse("@Vex hello", name, "@");
+        check(hello != null && hello.addressed()
+                        && hello.verb() == redglitchx.nullarmy.core.orders.OrderParser.Verb.CHAT,
+                "@Vex hello is conversation, not an order (S-113)");
+        check(hello != null && !hello.isOrder(), "conversation is not an order");
+
+        for (String verb : new String[] {"follow me", "come here", "stop", "guard here", "march here",
+                "drill", "patrol", "defend me", "salute", "regroup"}) {
+            redglitchx.nullarmy.core.orders.OrderParser.Order order =
+                    redglitchx.nullarmy.core.orders.OrderParser.parse("null " + verb, name, "@");
+            check(order != null && order.isOrder(), "the existing verb still works: \"" + verb + "\"");
+        }
+
+        check(redglitchx.nullarmy.core.orders.OrderParser.parse("just chatting with a friend", name, "@") == null,
+                "a line that is not aimed at us is ignored entirely");
+        check(redglitchx.nullarmy.core.orders.OrderParser.parse(null, name, "@") == null, "null input is safe");
+        check(redglitchx.nullarmy.core.orders.OrderParser.parse("   ", name, "@") == null, "blank input is safe");
+    }
+
+    private static void testDeathDrops() {
+        check(redglitchx.nullarmy.core.drops.DeathDrops.shouldDrop(true, 1.0D, 0.999D),
+                "with drops enabled and chance 1.0 everything drops (S-110)");
+        check(!redglitchx.nullarmy.core.drops.DeathDrops.shouldDrop(false, 1.0D, 0.0D),
+                "with drops disabled nothing drops");
+        check(!redglitchx.nullarmy.core.drops.DeathDrops.shouldDrop(true, 0.0D, 0.0D),
+                "with chance 0.0 nothing drops");
+        check(redglitchx.nullarmy.core.drops.DeathDrops.shouldDrop(true, 0.5D, 0.25D)
+                        && !redglitchx.nullarmy.core.drops.DeathDrops.shouldDrop(true, 0.5D, 0.75D),
+                "with chance 0.5 the roll decides");
+        checkEquals(1.0D, redglitchx.nullarmy.core.drops.DeathDrops.clampChance(5.0D),
+                "a chance above 1 is clamped to 1");
+        checkEquals(0.0D, redglitchx.nullarmy.core.drops.DeathDrops.clampChance(-2.0D),
+                "a chance below 0 is clamped to 0");
+        check(!redglitchx.nullarmy.core.drops.DeathDrops.enabled(true, true),
+                "a server whose owner already said no-death-drops keeps it that way");
+        check(redglitchx.nullarmy.core.drops.DeathDrops.enabled(true, false),
+                "a fresh install drops its loot");
+    }
+
+    private static void testPingNumbers() {
+        checkEquals("5/2026", redglitchx.nullarmy.core.ping.PingNumbers.num(2, 3, 2026),
+                "2 real players + 3 Nulls read as 5/2026 (S-111)");
+        checkEquals("202/2026", redglitchx.nullarmy.core.ping.PingNumbers.num(2, 200, 2026),
+                "2 real players + 200 Nulls read as 202/2026 (S-111)");
+        checkEquals("200/2026", redglitchx.nullarmy.core.ping.PingNumbers.num(0, 200, 2026),
+                "200 Nulls and nobody online still read as 200/2026");
+        checkEquals("0/2026", redglitchx.nullarmy.core.ping.PingNumbers.num(0, 0, 2026),
+                "an empty server reads as 0/2026");
+        checkEquals("3/20", redglitchx.nullarmy.core.ping.PingNumbers.num(3, 0, 20),
+                "an unmodified max-players is respected");
+        checkEquals("7/2026", redglitchx.nullarmy.core.ping.PingNumbers.num(7, 0, 0),
+                "a nonsense max falls back to the shipped 2026");
+
+        List<String> nulls = List.of("Voidwalker", "Grimjaw_12", "Null_07");
+        List<String> players = List.of("RedGlitchX");
+        String joined = redglitchx.nullarmy.core.ping.PingNumbers.sampleJoined(nulls, players, 0);
+        check(joined.contains("Voidwalker") && joined.contains("Grimjaw_12") && joined.contains("Null_07"),
+                "the hover sample lists the Null names (S-112)");
+        check(joined.contains("RedGlitchX"), "the hover sample also lists the real players (S-112)");
+        check(redglitchx.nullarmy.core.ping.PingNumbers.sample(nulls, players, 0).size() == 4,
+                "the sample holds every name when there is room");
+
+        List<String> many = new ArrayList<>();
+        for (int i = 0; i < 200; i++) {
+            many.add("Null_" + i);
+        }
+        checkEquals(20, redglitchx.nullarmy.core.ping.PingNumbers.sample(many, players, 0).size(),
+                "the sample is capped at what the vanilla client shows");
+
+        checkEquals("NULL ARMY - 200 strong", redglitchx.nullarmy.core.ping.PingNumbers.defaultMotd(200),
+                "the MOTD line substitutes the Null count");
+        checkEquals("", redglitchx.nullarmy.core.ping.PingNumbers.motd(null, 3, 0),
+                "an empty format means no MOTD line");
+        checkEquals("12/2026", redglitchx.nullarmy.core.ping.PingNumbers.motd("{total}/2026", 5, 7),
+                "the {total} placeholder counts real players and Nulls");
+        check(redglitchx.nullarmy.core.ping.PingNumbers.clampMax(20, 200) >= 200,
+                "the max never reads lower than the army standing on the field");
+    }
+
+    private static void testMarchCadence() {
+        int period = redglitchx.nullarmy.core.march.MarchCadence.DEFAULT_PERIOD_TICKS;
+        check(period >= 4 && period <= 20, "the step period is a march, not a sprint (was " + period + ")");
+        check(redglitchx.nullarmy.core.march.MarchCadence.stepTick(0, period), "tick 0 is a step");
+        check(!redglitchx.nullarmy.core.march.MarchCadence.stepTick(1, period), "tick 1 is not");
+        check(redglitchx.nullarmy.core.march.MarchCadence.stepTick(period, period),
+                "the step repeats exactly one period later");
+
+        // Every body shares the clock, so a formation cannot shear.
+        boolean shared = true;
+        for (int body = 0; body < 9; body++) {
+            if (redglitchx.nullarmy.core.march.MarchCadence.advanceFraction(37, period)
+                    != redglitchx.nullarmy.core.march.MarchCadence.advanceFraction(37, period)) {
+                shared = false;
+            }
+        }
+        check(shared, "every marching Null reads the same cadence on the same tick (S-101)");
+
+        int steps = 0;
+        for (long tick = 0; tick < 100; tick++) {
+            if (redglitchx.nullarmy.core.march.MarchCadence.stepTick(tick, period)) {
+                steps++;
+            }
+        }
+        check(steps >= 10, "over 100 ticks the squad takes " + steps + " locked steps");
+
+        checkEquals("line", redglitchx.nullarmy.core.march.MarchCadence.drillFormation(0, 80),
+                "the drill opens in a line");
+        checkEquals("wedge", redglitchx.nullarmy.core.march.MarchCadence.drillFormation(80, 80),
+                "the drill cycles to a wedge");
+        checkEquals("phalanx", redglitchx.nullarmy.core.march.MarchCadence.drillFormation(160, 80),
+                "the drill cycles to a phalanx");
+        checkEquals("line", redglitchx.nullarmy.core.march.MarchCadence.drillFormation(240, 80),
+                "and back to a line (S-101)");
+        checkEquals(3, redglitchx.nullarmy.core.march.MarchCadence.drillLength(),
+                "there are three drill formations");
     }
 
     private static void testFormationAssignment() {
