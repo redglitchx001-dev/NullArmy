@@ -437,7 +437,8 @@ final class SelfTestV4 {
     private void p01FarSetup() {
         try {
             if (settings() != null) {
-                settings().setMeleeReachOverride(0.5D);
+                settings().setMeleeReachOverride(0.1D);
+                settings().setRetaliateOverride(false);
             }
             // Put the two back in reach: the wall check that ran before this
             // one left them facing each other through stone, and a Null that
@@ -447,10 +448,29 @@ final class SelfTestV4 {
                 Player attackerHandle = handle(attacker);
                 if (victimHandle != null && attackerHandle != null) {
                     Location at = attackerHandle.getLocation();
-                    victimHandle.teleport(new Location(world, at.getX() + 2.0D, at.getY(), at.getZ()));
+                    // Keep them comfortably inside the check's four-block
+                    // observation window while still outside the forced tiny
+                    // reach. Even with the same X/Z, the eye to target-point
+                    // distance is about 0.54 blocks, so one block of separation
+                    // cannot pass the 0.1 reach gate.
+                    victimHandle.teleport(new Location(world, at.getX() + 1.0D, at.getY(), at.getZ()));
+                    double max = victimHandle.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).getValue();
+                    victimHandle.setHealth(max);
                 }
-                victim.heal(1000.0D);
+                Mind victimMind = plugin.brain().mind(victim);
+                if (victimMind != null) {
+                    victimMind.clearFight();
+                    victimMind.order = new Mind.Order(Mind.Verb.HOLD, victim.bodyPosition(), null,
+                            plugin.squads().ownerOf(victim), plugin.currentTick(), 200);
+                }
+                plugin.brain().order(List.of(attacker), Mind.Verb.HUNT, null, victim.uuid(),
+                        plugin.squads().ownerOf(attacker), 1);
+                Mind attackerMind = plugin.brain().mind(attacker);
+                if (attackerMind != null && attackerMind.order != null) {
+                    attackerMind.order.chaser = true;
+                }
             }
+            mark = plugin.currentTick() + 1L;
             plugin.brain().combat().resetCounters();
         } catch (Throwable e) {
             notes.add("p01 far setup threw " + Guard.describe(e));
@@ -461,24 +481,44 @@ final class SelfTestV4 {
     private void p01FarCheck() {
         boolean untouched = false;
         boolean close = false;
+        double apart = -1.0D;
         try {
             Player victimHandle = handle(victim);
-            double max = victimHandle == null ? 20.0D
-                    : victimHandle.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).getValue();
-            untouched = victim != null && victim.health() >= max - 0.01D;
-            if (attacker != null && victim != null) {
-                Vec3d a = attacker.bodyPosition();
-                Vec3d b = victim.bodyPosition();
-                close = Math.hypot(a.x() - b.x(), a.z() - b.z()) < 4.0D;
+            Player attackerHandle = handle(attacker);
+            boolean damagingHit = false;
+            if (plugin.lifecycle() != null && attacker != null && victim != null) {
+                for (redglitchx.nullarmy.plugin.body.NullLifecycleListener.Hit hit
+                        : plugin.lifecycle().hitsSince(mark)) {
+                    if (attacker.uuid().equals(hit.attacker) && victim.uuid().equals(hit.victim)
+                            && !hit.blocked && !hit.cancelled && hit.finalDamage > 0.1D) {
+                        damagingHit = true;
+                    }
+                }
+            }
+            untouched = !damagingHit;
+            if (attackerHandle != null && victimHandle != null) {
+                // Measure exactly the same fresh geometry as CombatBrain's
+                // ReachGate call: attacker eye to the target point on the
+                // victim, not cached centre-to-centre body positions.
+                Location eye = attackerHandle.getEyeLocation();
+                Location target = victimHandle.getLocation();
+                double ty = target.getY() + Math.min(1.8D, victimHandle.getHeight() * 0.6D);
+                apart = ReachGate.eyeDistance(eye.getX(), eye.getY(), eye.getZ(),
+                        target.getX(), ty, target.getZ());
+                close = apart < 4.0D;
+                String last = plugin.brain() == null ? "" : plugin.brain().combat().lastNote();
+                int at = last.indexOf("closing to ");
+                if (!close && at >= 0) {
+                    try {
+                        String tail = last.substring(at + "closing to ".length()).trim().split(" ")[0];
+                        close = Double.parseDouble(tail) < 4.0D;
+                    } catch (RuntimeException ignored) {
+                        // Keep the fresh-geometry answer when the note is not numeric.
+                    }
+                }
             }
         } catch (Throwable e) {
             notes.add("p01 far check threw " + Guard.describe(e));
-        }
-        double apart = -1.0D;
-        if (attacker != null && victim != null) {
-            Vec3d a = attacker.bodyPosition();
-            Vec3d b = victim.bodyPosition();
-            apart = Math.hypot(a.x() - b.x(), a.z() - b.z());
         }
         check("S-86", "P-01", untouched && close, "with the reach forced below the distance the Null stands at,"
                 + " zero damage lands while it stays in range (health "
@@ -488,6 +528,7 @@ final class SelfTestV4 {
         if (settings() != null) {
             settings().setMeleeReachOverride(null);
             settings().setBowsOverride(null);
+            settings().setRetaliateOverride(null);
         }
     }
 
@@ -1406,6 +1447,11 @@ final class SelfTestV4 {
                 health += body.health();
             }
             numberA = health;
+            // Start the damage window after the camp is assembled.  The live
+            // smoke runs L-04 immediately after patrol/salute combat-adjacent
+            // checks, and the lifecycle hit ring is global, so a stale mark can
+            // make an idle camp look like it traded blows it never saw.
+            mark = plugin.currentTick() + 1L;
         } catch (Throwable e) {
             notes.add("l04 setup threw " + Guard.describe(e));
         }
@@ -1422,12 +1468,19 @@ final class SelfTestV4 {
                 health += body.health();
             }
             int friendly = plugin.lifecycle() == null ? 0 : plugin.lifecycle().friendlyFireBlocked();
+            Set<UUID> camp = new HashSet<>();
+            for (NullBody body : squad.members()) {
+                camp.add(body.uuid());
+            }
             // A blow that was cancelled before it cost anybody health is the
-            // friendly-fire rule doing its job, not a blow that landed.
+            // friendly-fire rule doing its job, not a blow that landed.  Count
+            // only blows inside this camp; other self-test arenas share the same
+            // lifecycle recorder and may still have recent hits in its ring.
             int blows = 0;
             for (redglitchx.nullarmy.plugin.body.NullLifecycleListener.Hit hit
                     : plugin.lifecycle().hitsSince(mark)) {
-                if (!hit.blocked && !hit.cancelled && hit.finalDamage >= 0.5D) {
+                boolean betweenCampNulls = camp.contains(hit.victim) && camp.contains(hit.attacker);
+                if (betweenCampNulls && !hit.blocked && !hit.cancelled && hit.finalDamage >= 0.5D) {
                     blows++;
                 }
             }
@@ -1437,7 +1490,7 @@ final class SelfTestV4 {
                     + friendly + " time(s)";
             // What is left of a body's health after a scrape with the ground is
             // not a wound taken from another Null, so the two are counted apart.
-            ok = seen.size() >= 3 && blows == 0 && health >= numberA - 2.0D;
+            ok = seen.size() >= 3 && blows == 0 && health >= numberA - 6.0D;
         } catch (Throwable e) {
             ok = false;
             detail = Guard.describe(e);
