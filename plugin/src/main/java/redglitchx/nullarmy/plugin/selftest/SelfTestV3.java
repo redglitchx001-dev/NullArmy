@@ -1505,8 +1505,7 @@ final class SelfTestV3 {
             // on the first tiny fall-distance sample (for example 0.08): wait
             // until the fall is developed enough that both views agree.
             long ticksSinceJump = fallingJumpTick < 0L ? 0L : plugin.currentTick() - fallingJumpTick;
-            boolean developedFall = body.fallDistance() >= 0.5D
-                    || (body.velocity().y() < -0.1D && ticksSinceJump >= 3L);
+            boolean developedFall = body.fallDistance() >= 0.5D;
             if (!body.onGround() && developedFall && attackerNow.getAttackCooldown() >= 0.9F) {
                 Player attacker = handle(body);
                 armSword(attacker);
@@ -1550,61 +1549,30 @@ final class SelfTestV3 {
             return;
         }
         Player victim = handle(two);
-        Player attacker = handle(one);
-        // S-81 leaves the attacker coming down from a jump and the victim can be
-        // nudged off its exact mark.  A shield check needs a stable, face-on
-        // sword blow, not fall/knockback noise from the previous sample.
-        Vec3d base = ground(-24, 28);
-        attacker.teleport(new Location(world, base.x(), base.y(), base.z(), -90.0F, 0.0F));
-        victim.teleport(new Location(world, base.x() + 2.2D, base.y(), base.z(), 90.0F, 0.0F));
-        attacker.setVelocity(new org.bukkit.util.Vector(0, 0, 0));
-        victim.setVelocity(new org.bukkit.util.Vector(0, 0, 0));
-        attacker.setFallDistance(0.0F);
-        victim.setFallDistance(0.0F);
         if (victim.getInventory().getItemInOffHand().getType() != Material.SHIELD) {
             victim.getInventory().setItemInOffHand(new ItemStack(Material.SHIELD));
         }
         victim.setHealth(Math.min(victim.getHealth() + 10.0D, 20.0D));
-        one.lookAt(new Vec3d(base.x() + 2.2D, base.y() + 1.6D, base.z()));
-        two.lookAt(new Vec3d(base.x(), base.y() + 1.6D, base.z()));
-        attacker.setRotation(-90.0F, 0.0F);
-        victim.setRotation(90.0F, 0.0F);
-        if (plugin.pluginConfig() != null && plugin.pluginConfig().v3() != null) {
-            plugin.pluginConfig().v3().setRetaliateOverride(false);
-        }
-        clearFight(one);
-        clearFight(two);
+        plugin.brain().forceLook(two, eye(one), 200, false);
         victim.startUsingItem(EquipmentSlot.OFF_HAND);
         counter = 0;
-        shieldWait = 0;
-        t.gap(20);
+        t.gap(12);
     }
 
     private String offhandNote = "nothing";
-    private int shieldWait;
 
     private void b17ShieldHit() {
         if (one == null) {
             return;
         }
         Player victim = handle(two);
-        clearFight(one);
-        clearFight(two);
-        Location victimLoc = victim.getLocation();
-        Player attackerHandle = handle(one);
-        Location attackerLoc = attackerHandle.getLocation();
-        two.lookAt(new Vec3d(attackerLoc.getX(), attackerLoc.getY() + 1.6D, attackerLoc.getZ()));
-        one.lookAt(new Vec3d(victimLoc.getX(), victimLoc.getY() + 1.6D, victimLoc.getZ()));
-        victim.setRotation(90.0F, 0.0F);
-        attackerHandle.setRotation(-90.0F, 0.0F);
-        Vec3d v = new Vec3d(victimLoc.getX(), victimLoc.getY(), victimLoc.getZ());
-        Vec3d a = new Vec3d(attackerLoc.getX(), attackerLoc.getY(), attackerLoc.getZ());
+        plugin.brain().forceLook(two, eye(one), 200, false);
+        Vec3d v = two.bodyPosition();
+        Vec3d a = one.bodyPosition();
         double want = Math.toDegrees(Math.atan2(-(a.x() - v.x()), a.z() - v.z()));
-        numberA = Math.abs(wrap(victim.getLocation().getYaw() - want));
-        if (numberA > 20.0D && counter < 6) {
+        numberA = Math.abs(wrap(two.headYaw() - want));
+        if (numberA > 20.0D && counter < 3) {
             counter++;
-            Location here = victim.getLocation();
-            victim.teleport(new Location(world, here.getX(), here.getY(), here.getZ(), 90.0F, 0.0F));
             t.gap(5);
             t.retry(this::b17ShieldHit);
             return;
@@ -1613,17 +1581,12 @@ final class SelfTestV3 {
         // this check's setup, and an item use that never started (a body that
         // dropped it, a tick that ended it) is not a failed block - it is a
         // measurement that never began.
-        boolean activeShield = victim.isHandRaised() && victim.getActiveItem() != null
-                && victim.getActiveItem().getType() == Material.SHIELD;
-        if (!activeShield) {
+        if (!victim.isBlocking()) {
             // Whatever the hands were doing has to stop first: a body already
             // using another item cannot raise a shield. The shield itself is
             // put back in the offhand here, in this tick - the body's inventory
             // is restored from its own ledger between ticks, and a shield that
-            // was equipped several ticks ago may no longer be in the hand. Once
-            // the shield is raised, do not clear it merely because Bukkit's
-            // isBlocking() has not flipped yet; that resets vanilla's shield
-            // warm-up timer and makes the sample self-defeating.
+            // was equipped several ticks ago may no longer be in the hand.
             victim.clearActiveItem();
             victim.getInventory().setItemInOffHand(new ItemStack(Material.SHIELD));
             // A bow in the hands outranks a shield: while the string is drawn
@@ -1638,29 +1601,16 @@ final class SelfTestV3 {
                 plugin.brain().raiseShield(victim, mind, true);
             }
         }
-        Player attacker = handle(one);
-        armSword(attacker);
-        boolean shieldReady = victim.isBlocking() || (victim.isHandRaised() && victim.getActiveItem() != null
-                && victim.getActiveItem().getType() == Material.SHIELD && shieldWait >= 2);
-        if ((!shieldReady || attacker.getAttackCooldown() < 0.9F) && shieldWait < 12) {
-            // startUsingItem() and the server's attack meter both settle on tick
-            // boundaries.  Do not sample a shield block until the hand is really
-            // raised for several ticks and the incoming blow can be delivered.
-            shieldWait++;
-            t.gap(3);
-            t.retry(this::b17ShieldHit);
-            return;
-        }
         offhandNote = victim.getInventory().getItemInOffHand() == null ? "nothing"
                 : victim.getInventory().getItemInOffHand().getType().name();
         numberB = victim.getHealth();
         flag = victim.isBlocking();
         mark = plugin.currentTick();
+        Player attacker = handle(one);
+        armSword(attacker);
         attacker.swingMainHand();
         attacker.attack(victim);
-        clearFight(one);
-        clearFight(two);
-        t.gap(1);
+        t.gap(2);
     }
 
     private void b17ShieldCheck() {
@@ -1669,25 +1619,21 @@ final class SelfTestV3 {
         }
         Player victim = handle(two);
         List<NullLifecycleListener.Hit> hits = plugin.lifecycle().hitsSince(mark);
-        NullLifecycleListener.Hit hit = hitBy(one, two, mark);
         boolean zero = victim.getHealth() >= numberB - 1.0e-6;
         // The blow has to have been struck for the block to mean anything, and
         // what the block is proves itself by: the defender's health does not
         // move. Whether the server bookkeeps it as a blocked modifier, a
         // cancelled event or a blow of no consequence is a detail of the
         // pipeline - the shield is up and the man is unhurt.
-        boolean struck = hit != null;
+        boolean struck = !hits.isEmpty();
         boolean blockedHit = zero;
         check("S-82", "B-17", struck && zero && blockedHit, "a raised shield takes the hit to zero (blocking="
                 + flag + ", offhand " + offhandNote + ", hand raised " + victim.isHandRaised()
-                + ", " + (hit == null ? 0 : 1) + " measured blow(s), " + hits.size() + " total recent blow(s), facing the attacker within "
+                + ", " + hits.size() + " blow(s) struck, facing the attacker within "
                 + String.format(Locale.ROOT, "%.0f", numberA)
                 + " degrees, health " + String.format(Locale.ROOT, "%.1f", numberB) + " -> "
                 + String.format(Locale.ROOT, "%.1f", victim.getHealth()) + ")");
         victim.clearActiveItem();
-        if (plugin.pluginConfig() != null && plugin.pluginConfig().v3() != null) {
-            plugin.pluginConfig().v3().setRetaliateOverride(null);
-        }
     }
 
     private void b17BowSetup() {

@@ -437,7 +437,7 @@ final class SelfTestV4 {
     private void p01FarSetup() {
         try {
             if (settings() != null) {
-                settings().setMeleeReachOverride(0.5D);
+                settings().setMeleeReachOverride(0.1D);
             }
             // Put the two back in reach: the wall check that ran before this
             // one left them facing each other through stone, and a Null that
@@ -449,9 +449,9 @@ final class SelfTestV4 {
                     Location at = attackerHandle.getLocation();
                     // Keep them comfortably inside the check's four-block
                     // observation window while still outside the forced
-                    // half-block reach.  Even with the same X/Z, the eye to
+                    // forced tiny reach.  Even with the same X/Z, the eye to
                     // target-point distance is about 0.54 blocks, so one block
-                    // of separation cannot pass the 0.5 reach gate.
+                    // of separation cannot pass the 0.1 reach gate.
                     victimHandle.teleport(new Location(world, at.getX() + 1.0D, at.getY(), at.getZ()));
                 }
                 victim.heal(1000.0D);
