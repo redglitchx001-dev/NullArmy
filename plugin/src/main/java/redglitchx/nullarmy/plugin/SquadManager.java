@@ -732,6 +732,7 @@ public final class SquadManager implements Reloadable {
             // the right slots, here - the one place an NPC is born. Applying it
             // later (or only from the squad path) is how a Null ends up naked.
             postSpawn(body);
+            joinTeam(owner, body);
             if (plugin.kits() != null && config != null && config.kitAppliesToNulls()) {
                 plugin.kits().applyTo(body);
             }
@@ -757,6 +758,71 @@ public final class SquadManager implements Reloadable {
         this.crowdTest = allowed;
     }
 
+    // ------------------------------------------------------- squad team (P-05/L-05)
+
+    /** Every Null of one owner shares one scoreboard team, friendly fire off. */
+    private static final String TEAM_PREFIX = "NullArmy-";
+
+    /**
+     * P-05 / L-05: squad discipline.
+     *
+     * <p>"they hit them self with bows bruh" - an arrow loosed at an enemy that
+     * clips a squad mate still hurt the mate, because nothing told the server
+     * these bodies are on the same side. Every Null of one owner is now put on a
+     * scoreboard team with friendly fire switched off, which is the vanilla rule
+     * for both melee and projectiles, and the damage listener cancels anything
+     * that still slips through on top of that.</p>
+     *
+     * <p>Teams are per owner, not global: two players' armies are different
+     * armies and may fight each other.</p>
+     */
+    private String teamName(UUID owner) {
+        return owner == null ? TEAM_PREFIX + "none" : TEAM_PREFIX + owner.toString().substring(0, 8);
+    }
+
+    private void joinTeam(UUID owner, NullBody body) {
+        Guard.attempt(logger, "putting a Null on its squad's scoreboard team", () -> {
+            Player handle = redglitchx.nullarmy.plugin.body.Bodies.player(body);
+            if (handle == null) {
+                return;
+            }
+            org.bukkit.scoreboard.Scoreboard board = Bukkit.getScoreboardManager().getMainScoreboard();
+            String name = teamName(owner);
+            org.bukkit.scoreboard.Team team = board.getTeam(name);
+            if (team == null) {
+                team = board.registerNewTeam(name);
+            }
+            team.setAllowFriendlyFire(false);
+            team.addEntry(handle.getName());
+        });
+    }
+
+    /** Takes a Null off its team when it goes, so the team never grows forever. */
+    private void leaveTeam(NullBody body) {
+        Guard.attempt(logger, "taking a Null off its scoreboard team", () -> {
+            String name = body == null ? null : body.profileName();
+            if (name == null || name.isEmpty()) {
+                return;
+            }
+            org.bukkit.scoreboard.Scoreboard board = Bukkit.getScoreboardManager().getMainScoreboard();
+            for (org.bukkit.scoreboard.Team team : new ArrayList<>(board.getTeams())) {
+                if (team.getName().startsWith(TEAM_PREFIX) && team.hasEntry(name)) {
+                    team.removeEntry(name);
+                }
+            }
+        });
+    }
+
+    /** The team one owner's army belongs to (for /null status). */
+    public String teamOf(UUID owner) {
+        if (owner == null) {
+            return null;
+        }
+        org.bukkit.scoreboard.Team team =
+                Bukkit.getScoreboardManager().getMainScoreboard().getTeam(teamName(owner));
+        return team == null ? null : team.getName();
+    }
+
     /** A Null is a survival body whatever the server's default game mode is. */
     private void postSpawn(NullBody body) {
         Guard.attempt(logger, "setting a Null to survival", () -> {
@@ -776,6 +842,16 @@ public final class SquadManager implements Reloadable {
      * duplicate shows up in the tab list as two identical entries and confuses
      * anything that looks players up by name.</p>
      */
+    /**
+     * Names handed out since the last prune.
+     *
+     * <p>{@code allMembers()} cannot be the only guard: a squad being spawned
+     * names its bodies one after another, and a body only joins the roster when
+     * it exists - so two members could be given the same word. This set is the
+     * memory of what has already been issued, pruned against the live army.</p>
+     */
+    private final java.util.Set<String> issuedNames = new java.util.HashSet<>();
+
     private String uniqueProfileName() {
         java.util.Set<String> taken = new java.util.HashSet<>();
         try {
@@ -796,17 +872,32 @@ public final class SquadManager implements Reloadable {
         } catch (Throwable t) {
             logger.fine("[NullArmy] name uniqueness check skipped: " + Guard.describe(t));
         }
+        if (issuedNames.size() > 2048) {
+            // Prune against reality rather than growing for ever.
+            issuedNames.retainAll(taken);
+        }
+        // v4 (P-03): the generator now knows what is taken, so a readable word
+        // list can guarantee uniqueness without falling back to a hex blob.
+        java.util.Set<String> lowered = new java.util.HashSet<>(taken);
+        lowered.addAll(issuedNames);
         for (int attempt = 0; attempt < 24; attempt++) {
-            String candidate = NameGenerator.next();
-            if (!taken.contains(candidate.toLowerCase(Locale.ROOT))) {
+            String candidate = NameGenerator.next(lowered);
+            if (candidate != null && !lowered.contains(candidate.toLowerCase(Locale.ROOT))) {
+                issuedNames.add(candidate.toLowerCase(Locale.ROOT));
                 return candidate;
             }
         }
-        // Astronomically unlikely with a 62^16 space; suffixing keeps it legal and
-        // unique rather than handing out a name that is already taken.
-        String fallback = NameGenerator.next();
-        return fallback.substring(0, Math.min(12, fallback.length()))
-                + Long.toString(System.nanoTime() % 10000L);
+        // The whole word list is exhausted: suffixing keeps the name legal and
+        // unique rather than handing out one that is already taken, and it is
+        // still readable rather than a UUID fragment.
+        String base = NameGenerator.next(lowered);
+        if (base == null) {
+            base = "Null";
+        }
+        String stem = base.length() > 12 ? base.substring(0, 12) : base;
+        String last = stem + "_" + Long.toString(System.nanoTime() % 10000L);
+        issuedNames.add(last.toLowerCase(Locale.ROOT));
+        return last;
     }
 
     /** Plays the summon portal effects. Cosmetic, throttled, never fatal. */
@@ -1251,6 +1342,7 @@ public final class SquadManager implements Reloadable {
                     continue;
                 }
                 it.remove();
+                leaveTeam(body);
                 Guard.attempt(logger, "forgetting a dead Null", () -> body.destroy());
             }
         }
@@ -1675,6 +1767,7 @@ public final class SquadManager implements Reloadable {
     public void dismissAll() {
         forEachSquad(squad -> {
             for (NullBody body : squad.members) {
+                leaveTeam(body);
                 Guard.attempt(logger, "dismissing a Null", () -> body.destroy());
             }
             squad.members.clear();
@@ -1692,6 +1785,7 @@ public final class SquadManager implements Reloadable {
         int removed = 0;
         for (Squad squad : squads) {
             for (NullBody body : squad.members) {
+                leaveTeam(body);
                 if (Guard.attempt(logger, "dismissing a Null", () -> body.destroy())) {
                     removed++;
                 }

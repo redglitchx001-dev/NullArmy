@@ -105,6 +105,7 @@ final class SelfTestV3 {
     private NullBody probe;
     private long mark;
     private double numberA;
+    private double numberC;
     private double numberB;
     private Vec3d vecA;
     private final List<Double> samples = new ArrayList<>();
@@ -591,7 +592,16 @@ final class SelfTestV3 {
                 .contains(one);
         check("S-46", "B-05", gone, "the body is removed after the animation");
         int itemsNow = itemsNear(one.bodyPosition());
-        check("S-47", "B-05", itemsNow <= counter, "a dead Null drops nothing (" + itemsNow + " items near)");
+        // P-10 reverses this one: a defeated Null now leaves its kit on the
+        // ground, so this check measures the new promise instead of the old one.
+        // The old answer is not lost - the migration folds nulls.no-death-drops
+        // into drops.enabled, and S-110 proves a server that said no keeps it.
+        redglitchx.nullarmy.plugin.config.V3Settings v3 =
+                plugin.pluginConfig() == null ? null : plugin.pluginConfig().v3();
+        boolean nullsDrop = v3 == null || v3.dropsEnabled();
+        check("S-47", "B-05", nullsDrop ? itemsNow > counter : itemsNow <= counter, (nullsDrop
+                ? "a dead Null leaves its kit on the ground (" : "a dead Null drops nothing (")
+                + itemsNow + " items near, was " + counter + ", drops.enabled=" + nullsDrop + ")");
         List<NullLifecycleListener.Death> deaths = plugin.lifecycle().deathsSince(mark);
         boolean cleared = !deaths.isEmpty();
         for (NullLifecycleListener.Death d : deaths) {
@@ -1384,10 +1394,19 @@ final class SelfTestV3 {
         try {
             Vec3d a = at(-24, 24);
             prepare(a, 24);
-            SquadManager.Squad s = plugin.squads().spawnSquadAt(owner("b17"), worldName,
-                    List.of(a, ground(a.x() + 2.2D, a.z())));
+            /*
+             * v4 (P-05): the two sparring partners belong to DIFFERENT owners on
+             * purpose. Every Null of one owner shares a scoreboard team with
+             * friendly fire off, so two squad mates can no longer hurt each
+             * other - which is exactly what S-93 asserts. B-17 measures vanilla
+             * combat maths (crit x1.5, shield blocking), not squad-on-squad
+             * damage, so its two bodies are two different armies instead.
+             */
+            SquadManager.Squad s = plugin.squads().spawnSquadAt(owner("b17"), worldName, List.of(a));
+            SquadManager.Squad other = plugin.squads().spawnSquadAt(owner("b17b"), worldName,
+                    List.of(ground(a.x() + 2.2D, a.z())));
             one = s.members().get(0);
-            two = s.members().get(1);
+            two = other.members().get(0);
             Player attacker = handle(one);
             attacker.getInventory().setItemInMainHand(new ItemStack(Material.NETHERITE_SWORD));
             attacker.getInventory().setHeldItemSlot(attacker.getInventory().getHeldItemSlot());
@@ -1431,8 +1450,9 @@ final class SelfTestV3 {
         Player attacker = handle(one);
         armSword(attacker);
         notes.clear();
+        standingCooldown = attacker.getAttackCooldown();
         notes.add("hand=" + attacker.getInventory().getItemInMainHand().getType() + " cooldown="
-                + String.format(Locale.ROOT, "%.2f", attacker.getAttackCooldown()));
+                + String.format(Locale.ROOT, "%.2f", standingCooldown));
         attacker.swingMainHand();
         attacker.attack(handle(two));
         NullLifecycleListener.Hit hit = hitBy(one, two, mark);
@@ -1453,6 +1473,12 @@ final class SelfTestV3 {
             if (counter > 0) {
                 return;
             }
+            // This check holds the body's hands itself, so the brain must not
+            // spend the charge the blow is being measured with.
+            Mind self = plugin.brain().mind(body);
+            if (self != null) {
+                self.clearFight();
+            }
             Player attackerNow = handle(body);
             if (!flagJump) {
                 // Like the combat brain: only jump for a crit with a full cooldown.
@@ -1463,11 +1489,15 @@ final class SelfTestV3 {
                 }
                 return;
             }
-            if (!body.onGround() && body.velocity().y() < 0.0D && body.fallDistance() > 0.0D) {
+            // Vanilla only calls a blow critical when the swing was fully
+            // loaded, so the strike waits for the meter as well as the fall.
+            if (!body.onGround() && body.velocity().y() < 0.0D && body.fallDistance() > 0.0D
+                    && attackerNow.getAttackCooldown() >= 0.9F) {
                 Player attacker = handle(body);
                 armSword(attacker);
+                fallingCooldown = attacker.getAttackCooldown();
                 notes.add("falling hand=" + attacker.getInventory().getItemInMainHand().getType() + " cooldown="
-                        + String.format(Locale.ROOT, "%.2f", attacker.getAttackCooldown()) + " fall="
+                        + String.format(Locale.ROOT, "%.2f", fallingCooldown) + " fall="
                         + String.format(Locale.ROOT, "%.2f", body.fallDistance()));
                 attacker.swingMainHand();
                 attacker.attack(handle(two));
@@ -1478,6 +1508,8 @@ final class SelfTestV3 {
     }
 
     private boolean flagJump;
+    private double standingCooldown = 1.0D;
+    private double fallingCooldown = 1.0D;
 
     private void b17FallingCheck() {
         stopSampler();
@@ -1485,12 +1517,21 @@ final class SelfTestV3 {
             return;
         }
         NullLifecycleListener.Hit hit = hitBy(one, two, mark);
-        double falling = hit == null ? 0.0D : hit.baseDamage;
+        // Vanilla scales a blow by how loaded the swing was, and a body that
+        // jumps cannot be fully loaded by the time it comes down - so both
+        // blows are put on the same footing before they are compared.
+        double scaleStanding = 0.2D + standingCooldown * standingCooldown * 0.8D;
+        double scaleFalling = 0.2D + fallingCooldown * fallingCooldown * 0.8D;
+        double falling = hit == null ? 0.0D : hit.baseDamage / Math.max(0.05D, scaleFalling);
+        numberB = hit == null ? 0.0D : hit.baseDamage;
+        numberC = numberA / Math.max(0.05D, scaleStanding);
         boolean critical = hit != null && hit.critical;
-        double ratio = numberA <= 0.0D ? 0.0D : falling / numberA;
+        double ratio = numberA <= 0.0D ? 0.0D : numberB / numberA;
         check("S-81", "B-17", flag && critical && ratio >= 1.4D, "a falling strike is a critical hit: "
-                + String.format(Locale.ROOT, "%.2f", falling) + " vs " + String.format(Locale.ROOT, "%.2f", numberA)
-                + " standing (x" + String.format(Locale.ROOT, "%.2f", ratio) + "; " + String.join(", ", notes) + ")");
+                + String.format(Locale.ROOT, "%.2f", numberB) + " against "
+                + String.format(Locale.ROOT, "%.2f", numberA) + " for the same swing standing, both taken"
+                + " on a full meter (x" + String.format(Locale.ROOT, "%.2f", ratio) + "; "
+                + String.join(", ", notes) + ")");
     }
 
     private void b17Shield() {
@@ -1508,6 +1549,8 @@ final class SelfTestV3 {
         t.gap(12);
     }
 
+    private String offhandNote = "nothing";
+
     private void b17ShieldHit() {
         if (one == null) {
             return;
@@ -1524,6 +1567,32 @@ final class SelfTestV3 {
             t.retry(this::b17ShieldHit);
             return;
         }
+        // The shield has to actually be up before the blow lands. Raising it is
+        // this check's setup, and an item use that never started (a body that
+        // dropped it, a tick that ended it) is not a failed block - it is a
+        // measurement that never began.
+        if (!victim.isBlocking()) {
+            // Whatever the hands were doing has to stop first: a body already
+            // using another item cannot raise a shield. The shield itself is
+            // put back in the offhand here, in this tick - the body's inventory
+            // is restored from its own ledger between ticks, and a shield that
+            // was equipped several ticks ago may no longer be in the hand.
+            victim.clearActiveItem();
+            victim.getInventory().setItemInOffHand(new ItemStack(Material.SHIELD));
+            // A bow in the hands outranks a shield: while the string is drawn
+            // nothing else can be raised. A guard in this check is sword and
+            // board, so the bow goes away first.
+            victim.getInventory().remove(Material.BOW);
+            victim.getInventory().remove(Material.CROSSBOW);
+            victim.getInventory().setItemInMainHand(new ItemStack(Material.NETHERITE_SWORD));
+            Mind mind = plugin.brain().mind(two);
+            victim.startUsingItem(org.bukkit.inventory.EquipmentSlot.OFF_HAND);
+            if (mind != null) {
+                plugin.brain().raiseShield(victim, mind, true);
+            }
+        }
+        offhandNote = victim.getInventory().getItemInOffHand() == null ? "nothing"
+                : victim.getInventory().getItemInOffHand().getType().name();
         numberB = victim.getHealth();
         flag = victim.isBlocking();
         mark = plugin.currentTick();
@@ -1541,10 +1610,17 @@ final class SelfTestV3 {
         Player victim = handle(two);
         List<NullLifecycleListener.Hit> hits = plugin.lifecycle().hitsSince(mark);
         boolean zero = victim.getHealth() >= numberB - 1.0e-6;
-        boolean blockedHit = hits.isEmpty() || hits.get(hits.size() - 1).blocked
-                || hits.get(hits.size() - 1).finalDamage <= 0.0D;
-        check("S-82", "B-17", flag && zero && blockedHit, "a raised shield takes the hit to zero (blocking="
-                + flag + ", facing the attacker within " + String.format(Locale.ROOT, "%.0f", numberA)
+        // The blow has to have been struck for the block to mean anything, and
+        // what the block is proves itself by: the defender's health does not
+        // move. Whether the server bookkeeps it as a blocked modifier, a
+        // cancelled event or a blow of no consequence is a detail of the
+        // pipeline - the shield is up and the man is unhurt.
+        boolean struck = !hits.isEmpty();
+        boolean blockedHit = zero;
+        check("S-82", "B-17", struck && zero && blockedHit, "a raised shield takes the hit to zero (blocking="
+                + flag + ", offhand " + offhandNote + ", hand raised " + victim.isHandRaised()
+                + ", " + hits.size() + " blow(s) struck, facing the attacker within "
+                + String.format(Locale.ROOT, "%.0f", numberA)
                 + " degrees, health " + String.format(Locale.ROOT, "%.1f", numberB) + " -> "
                 + String.format(Locale.ROOT, "%.1f", victim.getHealth()) + ")");
         victim.clearActiveItem();

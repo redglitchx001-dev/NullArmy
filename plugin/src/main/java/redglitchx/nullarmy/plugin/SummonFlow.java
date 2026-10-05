@@ -140,6 +140,26 @@ public final class SummonFlow implements Listener, Reloadable {
             player.sendMessage(PREFIX + "You do not have permission to summon Nulls (nullarmy.summon).");
             return;
         }
+        // L-06: horn + sneak is the recall, never a new summon prompt. The Nulls
+        // already in the field march back to the owner in formation, on the
+        // shared cadence, instead of being asked how many should come.
+        if (player.isSneaking()) {
+            Player finalPlayer = player;
+            String answer = plugin.brain() == null ? "no brain" : plugin.brain().recall(finalPlayer);
+            boolean recalled = answer != null && !answer.startsWith("no");
+            plugin.getLogger().info("[NullArmy] " + player.getName() + " sounded the recall with the horn: "
+                    + answer);
+            if (plugin.chatGate() != null) {
+                plugin.chatGate().event("horn.recall", "player", player.getName(), "result", answer);
+            }
+            player.sendMessage(PREFIX + (recalled
+                    ? "Your Nulls are marching back to you in formation."
+                    : "You have no Nulls in the field to recall."));
+            if (!recalled) {
+                return; // nothing out there: no reason to open a prompt either
+            }
+            return;
+        }
         if (plugin.spawnBreaker().isOpen()) {
             player.sendMessage(PREFIX + "Null creation is disabled this session: "
                     + plugin.spawnBreaker().reason());

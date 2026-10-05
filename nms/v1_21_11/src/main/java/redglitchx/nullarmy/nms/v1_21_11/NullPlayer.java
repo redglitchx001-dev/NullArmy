@@ -636,6 +636,12 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         optional(this::tickItemUse);
         optional(this::updateSwingTime);
         optional(this::applyLook);
+        // A player's attack meter advances in Player#tick, which a Null never
+        // runs: its own tick is here. Left alone, the meter sits at its floor
+        // for the whole life of the body - so every blow was struck at minimum
+        // strength and a brain that waits for a loaded weapon never swung at
+        // all. Advance it, as vanilla does, and a Null hits like a player.
+        this.attackStrengthTicker++;
         applyMovement();
         BodySettings settings = adapter == null ? BodySettings.DEFAULTS : adapter.bodySettings();
         if (settings.collisions()) {

@@ -26,7 +26,7 @@ import java.util.regex.Pattern;
 public final class FallbackPlanner {
 
     /** The shapes this planner can build. */
-    public enum Kind { HUT, BRIDGE, WALL, TOWER, PLATFORM, GATHER }
+    public enum Kind { HUT, BRIDGE, WALL, TOWER, PLATFORM, THRONE, GATHER }
 
     /** A finished plan. */
     public static final class Plan {
@@ -81,6 +81,12 @@ public final class FallbackPlanner {
             return null;
         }
         String g = goal.toLowerCase(Locale.ROOT);
+        // P-07: a throne is a chair, not a hut, so it has to be matched first -
+        // "throne" shares no keyword with the others, but "build me a throne
+        // room" would otherwise fall through to the hut branch.
+        if (g.contains("throne") || g.contains("chair") || g.contains("seat")) {
+            return Kind.THRONE;
+        }
         if (g.contains("bridge")) {
             return Kind.BRIDGE;
         }
@@ -139,6 +145,9 @@ public final class FallbackPlanner {
             case BRIDGE:
                 blocks = bridge(sizeOf(goal, 8, 2, 32));
                 break;
+            case THRONE:
+                blocks = throne();
+                break;
             case WALL:
                 blocks = wall(sizeOf(goal, 7, 2, 24), 3);
                 break;
@@ -156,7 +165,8 @@ public final class FallbackPlanner {
         List<int[]> world = new ArrayList<>();
         for (int[] local : blocks) {
             int[] rotated = rotate(local[0], local[2], facing);
-            world.add(new int[] {ax + rotated[0], ay + local[1], az + rotated[1]});
+            world.add(new int[] {ax + rotated[0], ay + local[1], az + rotated[1],
+                    local.length > 3 ? local[3] : PREF_STOCK});
         }
         return assemble(kind, world, available, ax, ay, az, facing);
     }
@@ -195,13 +205,24 @@ public final class FallbackPlanner {
     // ------------------------------------------------------------------ shapes
     // Local frame: x = right, z = forward (away from the builder), y = up.
 
+    /**
+     * A bridge in front of the speaker.
+     *
+     * <p>The deck starts <b>two</b> blocks ahead: one block in front of a player
+     * is where he is about to put his own feet, so a bridge laid from there is a
+     * bridge he immediately stands on and cannot see. Two blocks ahead is the
+     * first block he can actually walk out onto.</p>
+     */
     static List<int[]> bridge(int length) {
         List<int[]> out = new ArrayList<>();
-        for (int i = 1; i <= length; i++) {
-            out.add(new int[] {0, -1, i});
+        for (int i = 0; i < length; i++) {
+            out.add(new int[] {0, -1, BRIDGE_START_AHEAD + i});
         }
         return out;
     }
+
+    /** How far in front of the speaker a bridge deck starts, in blocks. */
+    public static final int BRIDGE_START_AHEAD = 2;
 
     static List<int[]> wall(int length, int height) {
         List<int[]> out = new ArrayList<>();
@@ -264,6 +285,58 @@ public final class FallbackPlanner {
         return out;
     }
 
+    /** Material preference slots a shape can ask for (see {@link #assemble}). */
+    static final int PREF_STOCK = 0;
+    static final int PREF_GOLD = 1;
+    static final int PREF_WOOL = 2;
+
+    static final String GOLD = "GOLD_BLOCK";
+    static final String WOOL = "RED_WOOL";
+
+    /**
+     * A real chair: a 2x2 seat, a one-block-high back, armrests, and gold /
+     * wool accents on the back corners.
+     *
+     * <p>It is built facing back towards whoever asked for it, so the owner -
+     * who stands behind the anchor - looks at the seat, not at the back.</p>
+     *
+     * <p>Every block is placed by hand and bottom-up, so each one has a
+     * neighbour to be placed against.</p>
+     */
+    static List<int[]> throne() {
+        List<int[]> out = new ArrayList<>();
+        // Seat: 2x2 on the builder's level, two blocks ahead.
+        for (int x = 0; x <= 1; x++) {
+            for (int z = 2; z <= 3; z++) {
+                out.add(new int[] {x, 0, z, PREF_WOOL});
+            }
+        }
+        // Back: one block high, on the far side of the seat.
+        for (int x = 0; x <= 1; x++) {
+            out.add(new int[] {x, 1, 3, PREF_STOCK});
+        }
+        // Armrests: one block up, either side of the near end of the seat.
+        out.add(new int[] {-1, 1, 2, PREF_STOCK});
+        out.add(new int[] {2, 1, 2, PREF_STOCK});
+        // Gold accents crowning the back corners.
+        out.add(new int[] {-1, 1, 3, PREF_GOLD});
+        out.add(new int[] {2, 1, 3, PREF_GOLD});
+        return out;
+    }
+
+    /**
+     * Where a "build it in front of me" goal should start: {@code blocks} ahead
+     * of the speaker, along his facing.
+     *
+     * @param ax     speaker x relative to the zone origin
+     * @param az     speaker z relative to the zone origin
+     * @param facing 0 = +z (south), 1 = -x (west), 2 = -z (north), 3 = +x (east)
+     */
+    public static int[] anchorAhead(int ax, int ay, int az, int facing, int blocks) {
+        int[] forward = rotate(0, Math.max(0, blocks), facing);
+        return new int[] {ax + forward[0], ay, az + forward[1]};
+    }
+
     private static int[][] ring3x3() {
         return new int[][] {{-1, -1}, {0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}};
     }
@@ -313,9 +386,10 @@ public final class FallbackPlanner {
                 stand = spot;
                 steps.add(BuildStep.move(spot[0], spot[1], spot[2]));
             }
-            String material = take(stock);
+            int pref = block.length > 3 ? block[3] : PREF_STOCK;
+            String material = pref == PREF_STOCK ? take(stock) : takePreferred(stock, pref);
             if (material == null) {
-                material = "OAK_PLANKS";
+                material = pref == PREF_GOLD ? GOLD : pref == PREF_WOOL ? WOOL : "OAK_PLANKS";
                 shortfall++;
             }
             used.merge(material, 1, Integer::sum);
@@ -334,6 +408,20 @@ public final class FallbackPlanner {
             return new int[] {block[0] + back[0], block[1] + 1, block[2] + back[1]};
         }
         return new int[] {block[0] + back[0] * 2, ay, block[2] + back[1] * 2};
+    }
+
+    /**
+     * The accent material, if the squad carries any; otherwise the normal stock
+     * block, so a throne is still a chair when nobody packed gold.
+     */
+    private static String takePreferred(Map<String, Integer> stock, int pref) {
+        String wanted = pref == PREF_GOLD ? GOLD : WOOL;
+        Integer have = stock.get(wanted);
+        if (have != null && have > 0) {
+            stock.put(wanted, have - 1);
+            return wanted;
+        }
+        return take(stock);
     }
 
     private static String take(Map<String, Integer> stock) {

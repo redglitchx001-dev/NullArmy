@@ -61,6 +61,14 @@ public final class PluginConfig {
     private final int witherCannonTntPerShot;
     private final int witherCannonCooldownSeconds;
     private final boolean witherCannonBlocksDamage;
+    private final int witherCannonShots;
+    private final int witherCannonPerShot;
+    private final String witherCannonPattern;
+    private final int witherCannonFuseTicks;
+    private final int witherCannonShotDelayTicks;
+    private final int witherCannonRange;
+    private final double witherCannonRadius;
+    private final double witherCannonHeight;
 
     private final boolean airdropEnabled;
     private final String airdropPermission;
@@ -202,6 +210,24 @@ public final class PluginConfig {
         this.witherCannonCooldownSeconds = clamp(config.getInt("wither-cannon.cooldown-seconds", 20),
                 0, 3600, "wither-cannon.cooldown-seconds", logger);
         this.witherCannonBlocksDamage = config.getBoolean("wither-cannon.blocks-damage", false);
+        // v4 (P-08): the orbital barrage. skulls-per-shot is the new name;
+        // minecarts-per-shot is accepted so an older config still works.
+        this.witherCannonShots = clamp(config.getInt("wither-cannon.shots", 3),
+                1, 64, "wither-cannon.shots", logger);
+        int perShot = config.isSet("wither-cannon.skulls-per-shot")
+                ? config.getInt("wither-cannon.skulls-per-shot", 24)
+                : config.getInt("wither-cannon.minecarts-per-shot", 24);
+        this.witherCannonPerShot = clamp(perShot, 1, 100, "wither-cannon.skulls-per-shot", logger);
+        this.witherCannonPattern = nonEmpty(config.getString("wither-cannon.pattern", "sphere"),
+                "sphere").trim();
+        this.witherCannonFuseTicks = clamp(config.getInt("wither-cannon.fuse-ticks", 60),
+                1, 1200, "wither-cannon.fuse-ticks", logger);
+        this.witherCannonShotDelayTicks = clamp(config.getInt("wither-cannon.shot-delay-ticks", 10),
+                0, 1200, "wither-cannon.shot-delay-ticks", logger);
+        this.witherCannonRange = clamp(config.getInt("wither-cannon.range", 120),
+                8, 256, "wither-cannon.range", logger);
+        this.witherCannonRadius = Math.max(0.5D, config.getDouble("wither-cannon.radius", 8.0D));
+        this.witherCannonHeight = Math.max(4.0D, config.getDouble("wither-cannon.height", 40.0D));
 
         this.airdropEnabled = config.getBoolean("airdrop.enabled", false);
         this.airdropPermission = nonEmpty(
@@ -556,6 +582,15 @@ public final class PluginConfig {
      * griefing all have to be on as well; spec 8 makes that an explicit,
      * triple opt-in rather than a side effect of one flag.
      */
+    public int witherCannonShots() { return witherCannonShots; }
+    public int witherCannonPerShot() { return witherCannonPerShot; }
+    public String witherCannonPattern() { return witherCannonPattern; }
+    public int witherCannonFuseTicks() { return witherCannonFuseTicks; }
+    public int witherCannonShotDelayTicks() { return witherCannonShotDelayTicks; }
+    public int witherCannonRange() { return witherCannonRange; }
+    public double witherCannonRadius() { return witherCannonRadius; }
+    public double witherCannonHeight() { return witherCannonHeight; }
+
     public boolean witherCannonBlocksDamage() {
         return witherCannonBlocksDamage && witherEnabled && explosivesEnabled && griefingEnabled;
     }

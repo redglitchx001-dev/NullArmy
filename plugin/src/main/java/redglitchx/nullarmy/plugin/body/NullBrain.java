@@ -6,6 +6,7 @@ import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeInstance;
+import org.bukkit.block.Block;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Monster;
@@ -16,6 +17,8 @@ import org.bukkit.inventory.PlayerInventory;
 
 import redglitchx.nullarmy.core.flock.Separation;
 import redglitchx.nullarmy.core.formation.FormationMatrix;
+import redglitchx.nullarmy.core.formation.FormationMatrix;
+import redglitchx.nullarmy.core.march.MarchCadence;
 import redglitchx.nullarmy.core.math.Vec3d;
 import redglitchx.nullarmy.core.nav.BlockView;
 import redglitchx.nullarmy.nms.NullBody;
@@ -30,9 +33,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -114,11 +119,65 @@ public final class NullBrain implements Reloadable {
         }
     }
 
-    V3Settings settings() { return v3; }
+    public V3Settings settings() { return v3; }
 
     long now() { return now; }
 
     public CombatBrain combat() { return combat; }
+
+    // ------------------------------------------------- L-01..L-08 accounting
+
+    private int salutes;
+    private int patrolLaps;
+    /** L-07: how many hunts have turned into a march home. */
+    private int regroups;
+
+    /** L-07: how many hunts have turned into a march home. */
+    public int regroups() { return regroups; }
+
+    private int blocksBridged;
+    private int blocksDestroyed;
+    private int lootPicked;
+    private int huntEngagements;
+    private final Set<String> campBehaviours = new LinkedHashSet<>();
+
+    /** L-03: how many times a Null saluted its owner. */
+    public int salutes() { return salutes; }
+    /** L-03: how many patrol laps were completed. */
+    public int patrolLaps() { return patrolLaps; }
+    /** L-02: how many blocks were placed by hand to bridge a gap. */
+    public int blocksBridged() { return blocksBridged; }
+    /** P-09: how many blocks a destroy order really broke. */
+    public int blocksDestroyed() { return blocksDestroyed; }
+    /** L-08: how many dropped items a Null picked up. */
+    public int lootPicked() { return lootPicked; }
+    /** L-07: how many hunt engagements are running. */
+    public int huntEngagements() { return huntEngagements; }
+    /** L-04: the distinct idle behaviours seen (rest, eat, spar, haul). */
+    public List<String> campBehaviours() { return new ArrayList<>(campBehaviours); }
+
+    /** Self test: clears the behaviour counters before a measured window. */
+    public void resetBehaviourCounters() {
+        salutes = 0;
+        patrolLaps = 0;
+        blocksBridged = 0;
+        regroups = 0;
+        blocksDestroyed = 0;
+        lootPicked = 0;
+        campBehaviours.clear();
+    }
+
+    /** L-08: a Null picked something up. */
+    public void notePickup(NullBody body) {
+        if (body == null || plugin.adapter() == null || !plugin.adapter().isNullEntity(body.uuid())) {
+            return;
+        }
+        lootPicked++;
+        Mind mind = mind(body);
+        if (mind != null) {
+            mind.lastPickupTick = now;
+        }
+    }
 
     /** The mind of a body, created on first sight. */
     public Mind mind(NullBody body) {
@@ -244,6 +303,17 @@ public final class NullBrain implements Reloadable {
             intent = combat.tick(body, mind, handle, world, pos);
             busy = true;
         }
+        if (mind.order != null && mind.order.verb == Mind.Verb.HUNT) {
+            // L-07: the hunt ends when the target does - checked every tick,
+            // even while the chasers are mid-fight, so nobody is left swinging
+            // at a corpse or at a player who has logged out.
+            refreshHunt(body, mind, handle);
+        }
+        if (!busy && mind.order != null && mind.order.verb == Mind.Verb.DRILL) {
+            // L-01: the drill cycles line -> wedge -> phalanx on one clock shared
+            // by the whole squad, so every body changes shape on the same tick.
+            updateDrillCell(body, mind, squad, world, index);
+        }
         if (!busy && mind.order != null) {
             intent = orderIntent(body, mind, handle, world, pos);
         }
@@ -293,10 +363,26 @@ public final class NullBrain implements Reloadable {
         if (intent.moving() && !intent.sneak && !intent.allowDrop && body.onGround()) {
             intent.sneak = ledgeAhead(world, pos, intent.dx, intent.dz);
         }
+        // L-02: walking towards a gap, the Null bridges it out of its own pack.
+        if (intent.moving() && !busy) {
+            autoBridge(body, mind, handle, world, pos, intent);
+        }
+        // L-03: the owner comes home - the guard salutes.
+        homecomingSalute(body, mind, world, pos);
+        // L-08: a Null picks up what it walks over and carries it - when it is
+        // not under orders. A marcher breaking formation for a dropped apple is
+        // not loot discipline, it is indiscipline.
+        if (!busy && mind.order == null && squad != null
+                && squad.objective() == SquadManager.Objective.NONE) {
+            lootDiscipline(body, mind, handle, pos, intent);
+        }
 
         updateIdle(mind, pos, intent.moving() || busy);
         if (idle && !busy && v3 != null && v3.idleBehaviour()) {
             idleLife(body, mind, handle, world, pos, intent);
+            if (v3.campLife()) {
+                campLife(body, mind, handle, world, pos, intent, idle);
+            }
         }
         if (!busy || intent.look == null) {
             chooseLook(body, mind, handle, world, pos, intent);
@@ -465,11 +551,20 @@ public final class NullBrain implements Reloadable {
                     return Intent.stop();
                 }
                 Intent intent = steerTo(body, mind, world, pos, cell, 0.15D, NullBody.GAIT_WALK);
-                if (intent == null) {
-                    return Intent.stop();
+                if (intent != null) {
+                    intent.precise = true;
+                    return intent;
                 }
-                intent.precise = true;
-                return intent;
+                // L-03: a guard sweeps his head instead of staring at the floor.
+                Intent stop = Intent.stop();
+                Vec3d ahead = forward(body, 6.0D);
+                double base = Math.atan2(ahead.z(), ahead.x());
+                double phase = (now % 100L) / 100.0D * Math.PI * 2.0D;
+                double yaw = base + Math.sin(phase) * 0.7D;
+                stop.look = new Vec3d(pos.x() + Math.cos(yaw) * 6.0D, pos.y() + 1.6D,
+                        pos.z() + Math.sin(yaw) * 6.0D);
+                stop.lookHeadOnly = true;
+                return stop;
             }
             case ATTACK:
                 if (order.entity != null) {
@@ -478,12 +573,596 @@ public final class NullBrain implements Reloadable {
                 }
                 mind.order = null;
                 return null;
+            case MARCH: {
+                // L-01: one clock for the whole squad. Every marcher walks at
+                // exactly the same speed and swings on the same tick, so the
+                // line stays a line instead of stringing out and jittering.
+                int period = v3 == null ? MarchCadence.DEFAULT_PERIOD_TICKS : v3.marchPeriodTicks();
+                Vec3d cell = mind.holdCell != null ? mind.holdCell : order.point;
+                Intent intent = steerTo(body, mind, world, pos, cell, 0.35D, NullBody.GAIT_WALK);
+                if (intent == null) {
+                    return Intent.stop();
+                }
+                if (v3 != null && v3.marchCadence()) {
+                    lockStep(body, mind, handle, period);
+                    if (MarchCadence.stepTick(now, period) && now >= mind.nextStepTick
+                            && body.onGround()) {
+                        Guard.attempt(plugin.getLogger(), "march step", handle::swingMainHand);
+                        mind.nextStepTick = now + period;
+                    }
+                }
+                return intent;
+            }
+            case DRILL: {
+                Vec3d cell = mind.holdCell != null ? mind.holdCell : order.point;
+                if (cell == null) {
+                    return Intent.stop();
+                }
+                Intent intent = steerTo(body, mind, world, pos, cell, 0.15D, NullBody.GAIT_WALK);
+                if (intent == null) {
+                    return Intent.stop();
+                }
+                intent.precise = true;
+                return intent;
+            }
+            case PATROL: {
+                // L-03: walk between two points for ever, counting the laps.
+                Vec3d a = order.point;
+                Vec3d b = order.pointB;
+                if (a == null || b == null) {
+                    mind.order = null;
+                    return null;
+                }
+                Vec3d goal = mind.patrolToB ? b : a;
+                Intent intent = steerTo(body, mind, world, pos, goal, 0.8D, NullBody.GAIT_WALK);
+                if (intent == null) {
+                    mind.patrolToB = !mind.patrolToB;
+                    if (!mind.patrolToB) {
+                        patrolLaps++;
+                    }
+                    return Intent.stop();
+                }
+                return intent;
+            }
+            case BRIDGE: {
+                // L-02 / P-07: walk along the ordered line and bridge the gaps.
+                Intent intent = steerTo(body, mind, world, pos, order.point, 0.8D, NullBody.GAIT_WALK);
+                if (intent == null) {
+                    mind.order = null;
+                    return Intent.stop();
+                }
+                if (body.onGround() && ledgeAhead(world, pos, intent.dx, intent.dz)) {
+                    intent.sneak = true; // a player bridging sneaks at the edge
+                }
+                return intent;
+            }
+            case SALUTE: {
+                // L-03: stop, face the owner, swing once. One salute per order.
+                Intent intent = Intent.stop();
+                if (order.entity != null) {
+                    intent.look = targetPosition(order.entity, world);
+                    intent.lookHeadOnly = false;
+                }
+                if (now - order.issuedTick < 4L) {
+                    return intent;
+                }
+                if (!mind.saluted) {
+                    mind.saluted = true;
+                    salutes++;
+                    Guard.attempt(plugin.getLogger(), "salute", handle::swingMainHand);
+                }
+                if (now - order.issuedTick > 24L) {
+                    mind.order = mind.orderAfterSalute;
+                    mind.orderAfterSalute = null;
+                }
+                return intent;
+            }
+            case REGROUP: {
+                // L-07: come back to the owner and reform.
+                Vec3d owner = order.entity == null ? null : targetPosition(order.entity, world);
+                if (owner == null) {
+                    owner = order.point;
+                }
+                if (owner == null && mind.holdCell != null) {
+                    owner = mind.holdCell; // the spot the order was given from
+                }
+                if (owner == null) {
+                    mind.order = null;
+                    return null;
+                }
+                Intent intent = steerTo(body, mind, world, pos, owner, 2.2D, NullBody.GAIT_RUN);
+                if (intent == null) {
+                    mind.order = null;
+                    return Intent.stop();
+                }
+                return intent;
+            }
+            case DESTROY: {
+                // P-09: teardown. Only ever issued after policy + confirm.
+                Intent intent = destroyStep(body, mind, handle, world, pos, order);
+                return intent == null ? Intent.stop() : intent;
+            }
+            case HUNT: {
+                // L-07: hunt the ordered target to the end. The chasers fight;
+                // the rest hold the line. When the target is gone, regroup.
+                Entity hunted = order.entity == null ? null : Bukkit.getEntity(order.entity);
+                boolean finished = hunted == null || hunted.isDead()
+                        || (hunted instanceof Player && !((Player) hunted).isOnline());
+                if (finished) {
+                    UUID owner = order.issuer;
+                    mind.order = new Mind.Order(Mind.Verb.REGROUP, order.point, owner, owner, now, 1);
+                    return Intent.stop();
+                }
+                if (!order.chaser) {
+                    Vec3d hold = mind.holdCell != null ? mind.holdCell : body.bodyPosition();
+                    Intent intent = steerTo(body, mind, world, pos, hold, 0.3D, NullBody.GAIT_WALK);
+                    if (intent == null) {
+                        return Intent.stop();
+                    }
+                    Location at = hunted.getLocation();
+                    intent.look = new Vec3d(at.getX(), at.getY() + 1.6D, at.getZ());
+                    intent.lookHeadOnly = false;
+                    return intent;
+                }
+                mind.combatTarget = order.entity;
+                mind.combatUntil = now + 20L * 60L;
+                return null;
+            }
             case GATHER:
             case BUILD:
             default:
                 mind.order = null;
                 return null;
         }
+    }
+
+    /** L-07: turns a finished hunt into the march home. */
+    private void refreshHunt(NullBody body, Mind mind, Player handle) {
+        Mind.Order order = mind.order;
+        if (order == null || order.entity == null) {
+            return;
+        }
+        Entity hunted = Bukkit.getEntity(order.entity);
+        boolean finished = hunted == null || hunted.isDead()
+                || (hunted instanceof Player && !((Player) hunted).isOnline());
+        if (!finished) {
+            return;
+        }
+        mind.combatTarget = null;
+        mind.combatUntil = 0L;
+        Mind.Order standing = order;
+        UUID owner = order.issuer;
+        Vec3d where = standing.point == null ? null
+                : new Vec3d(standing.point.x(), standing.point.y(), standing.point.z());
+        mind.order = new Mind.Order(Mind.Verb.REGROUP, null, owner, owner, now, 1);
+        if (mind.order.point == null && where != null) {
+            mind.order.point = where;
+        }
+        regroups++;
+        combat.endFight(mind, handle);
+        Guard.attempt(plugin.getLogger(), "acknowledging a finished hunt", handle::swingMainHand);
+    }
+
+    /**
+     * L-08: loot discipline.
+     *
+     * <p>A Null that walks over a dropped item picks it up and carries it. The
+     * pickup goes through {@code PlayerPickupItemEvent} first, exactly like a
+     * block placement goes through {@code BlockPlaceEvent}: a protection plugin
+     * can say no, and the item only leaves the ground when nothing objected.
+     * The walk to the item is a real walk.</p>
+     */
+    private void lootDiscipline(NullBody body, Mind mind, Player handle, Vec3d pos, Intent intent) {
+        if (handle == null || v3 == null || !v3.pickupItems() || now < mind.nextLootTick) {
+            return;
+        }
+        mind.nextLootTick = now + 4L;
+        org.bukkit.entity.Item best = null;
+        double bestDistance = 2.6D;
+        for (Entity near : handle.getNearbyEntities(2.6D, 1.6D, 2.6D)) {
+            if (!(near instanceof org.bukkit.entity.Item item) || item.isDead() || item.getPickupDelay() > 0) {
+                continue;
+            }
+            Location at = item.getLocation();
+            double d = Math.hypot(Math.hypot(at.getX() - pos.x(), at.getZ() - pos.z()),
+                    Math.max(0.0D, at.getY() - pos.y()));
+            if (d < bestDistance) {
+                bestDistance = d;
+                best = item;
+            }
+        }
+        if (best == null) {
+            return;
+        }
+        if (bestDistance > 1.0D) {
+            Location at = best.getLocation();
+            intent.dx = (at.getX() - pos.x()) * 0.4D;
+            intent.dz = (at.getZ() - pos.z()) * 0.4D;
+            intent.gait = NullBody.GAIT_WALK;
+            return;
+        }
+        ItemStack stack = best.getItemStack();
+        org.bukkit.event.player.PlayerPickupItemEvent event =
+                new org.bukkit.event.player.PlayerPickupItemEvent(handle, best, 0);
+        Bukkit.getPluginManager().callEvent(event);
+        if (event.isCancelled()) {
+            return;
+        }
+        java.util.Map<Integer, ItemStack> left = handle.getInventory().addItem(stack);
+        if (!left.isEmpty()) {
+            return; // nowhere to put it
+        }
+        best.remove();
+        notePickup(body);
+    }
+
+    /** L-01: every marcher walks at the same speed - no per-body variance. */
+    private void lockStep(NullBody body, Mind mind, Player handle, int period) {
+        if (handle == null || mind.speedFactor == 1.0D) {
+            return;
+        }
+        try {
+            AttributeInstance speed = handle.getAttribute(Attribute.MOVEMENT_SPEED);
+            if (speed != null) {
+                speed.setBaseValue(0.1D);
+            }
+        } catch (Throwable ignored) {
+            // A body without the attribute still marches at its own pace.
+        }
+        mind.speedFactor = 1.0D;
+    }
+
+    /** L-01: which cell of the current drill formation this body holds. */
+    private void updateDrillCell(NullBody body, Mind mind, SquadManager.Squad squad, String world, int index) {
+        if (mind.order == null) {
+            return;
+        }
+        int hold = v3 == null ? MarchCadence.DEFAULT_DRILL_TICKS : v3.drillHoldTicks();
+        String form = MarchCadence.drillFormation(now - mind.order.issuedTick, hold);
+        if (form.equals(mind.drillForm) && mind.holdCell != null) {
+            return;
+        }
+        mind.drillForm = form;
+        Vec3d anchor = mind.order.point;
+        if (anchor == null) {
+            anchor = body.bodyPosition();
+        }
+        int count = squad == null ? 1 : Math.max(1, squad.members().size());
+        double spacing = v3 == null ? 1.5D : v3.formationSpacing();
+        List<double[]> cells = FormationMatrix.worldCells(form, count, spacing, anchor.x(), anchor.z(), 0.0F);
+        if (cells.isEmpty()) {
+            return;
+        }
+        double[] cell = cells.get(Math.min(index, cells.size() - 1));
+        mind.holdCell = new Vec3d(cell[0], anchor.y(), cell[1]);
+        acknowledge(body, mind);
+    }
+
+    /**
+     * L-02: bridge a gap on the route out of the body's own inventory.
+     *
+     * <p>The Unstable NULL army bridges the void with netherrack in huge
+     * numbers. One block per place rate, held in the hand and placed through
+     * {@code BlockPlaceEvent}, sneaking at the edge exactly like a player.</p>
+     */
+    private void autoBridge(NullBody body, Mind mind, Player handle, String world, Vec3d pos, Intent intent) {
+        if (v3 == null || !v3.autoBridge() || handle == null) {
+            return;
+        }
+        if (now < mind.nextBridgeTick) {
+            return;
+        }
+        World w = Bukkit.getWorld(world);
+        if (w == null) {
+            return;
+        }
+        double len = Math.hypot(intent.dx, intent.dz);
+        if (len < 0.05D) {
+            return;
+        }
+        int fx = (int) Math.floor(pos.x() + intent.dx / len * 1.3D);
+        int fz = (int) Math.floor(pos.z() + intent.dz / len * 1.3D);
+        int fy = (int) Math.floor(pos.y());
+        Block floor = w.getBlockAt(fx, fy - 1, fz);
+        if (!floor.getType().isAir()) {
+            return;
+        }
+        // Only a shallow gap: a ravine is not a puddle.
+        int depth = 1;
+        while (depth < 4 && w.getBlockAt(fx, fy - 1 - depth, fz).getType().isAir()) {
+            depth++;
+        }
+        if (depth >= 4) {
+            return;
+        }
+        Material material = bridgeMaterial(handle);
+        if (material == null) {
+            return;
+        }
+        intent.sneak = true;
+        if (Bodies.placeOne(handle, floor, material)) {
+            blocksBridged++;
+            mind.nextBridgeTick = now + 6L;
+        } else {
+            mind.nextBridgeTick = now + 20L;
+        }
+    }
+
+    /** The most plentiful placeable block a body carries, for bridging. */
+    private Material bridgeMaterial(Player handle) {
+        PlayerInventory inv = handle.getInventory();
+        Material best = null;
+        int bestCount = 0;
+        for (int slot = 0; slot < 36; slot++) {
+            ItemStack stack = inv.getItem(slot);
+            if (stack == null || !stack.getType().isBlock() || stack.getType().isAir()) {
+                continue;
+            }
+            if (stack.getType() == Material.TNT || stack.getType().name().contains("BUCKET")) {
+                continue;
+            }
+            if (stack.getAmount() > bestCount) {
+                bestCount = stack.getAmount();
+                best = stack.getType();
+            }
+        }
+        return best;
+    }
+
+    /**
+     * P-09: one block of a teardown, broken by hand.
+     *
+     * <p>Only ever reached after {@code policy.griefing-enabled} and the owner's
+     * confirm - {@code OrderService} refuses everything else. One block per
+     * swing, inside the marked area only, and the drops are left on the ground
+     * for the looters.</p>
+     */
+    private Intent destroyStep(NullBody body, Mind mind, Player handle, String world, Vec3d pos, Mind.Order order) {
+        if (handle == null || order.point == null) {
+            mind.order = null;
+            return null;
+        }
+        World w = Bukkit.getWorld(world);
+        if (w == null) {
+            mind.order = null;
+            return null;
+        }
+        if (now < mind.nextBridgeTick) {
+            return Intent.stop();
+        }
+        int radius = Math.max(1, Math.min(8, order.radius));
+        int cx = (int) Math.floor(order.point.x());
+        int cy = (int) Math.floor(order.point.y());
+        int cz = (int) Math.floor(order.point.z());
+        if (cy <= w.getMinHeight()) {
+            mind.order = null;
+            return null;
+        }
+        int reach = 2;
+        Block chosen = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (int dx = -reach; dx <= reach; dx++) {
+            for (int dz = -reach; dz <= reach; dz++) {
+                Block block = w.getBlockAt(cx + dx, cy + 1, cz + dz);
+                if (block.getType().isAir() || !block.getType().isSolid()) {
+                    continue;
+                }
+                if (Math.abs(dx) > radius || Math.abs(dz) > radius) {
+                    continue;
+                }
+                double d = Math.hypot(block.getX() + 0.5D - pos.x(), block.getZ() + 0.5D - pos.z());
+                if (d < bestDistance) {
+                    bestDistance = d;
+                    chosen = block;
+                }
+            }
+        }
+        if (chosen == null) {
+            // This level is gone: drop to the next one down and carry on.
+            order.point = new Vec3d(order.point.x(), order.point.y() - 1.0D, order.point.z());
+            mind.nextBridgeTick = now + 4L;
+            return Intent.stop();
+        }
+        if (bestDistance > 4.2D) {
+            return steerTo(body, mind, world, pos,
+                    new Vec3d(chosen.getX() + 0.5D, pos.y(), chosen.getZ() + 0.5D), 1.2D, NullBody.GAIT_WALK);
+        }
+        Intent intent = Intent.stop();
+        intent.look = new Vec3d(chosen.getX() + 0.5D, chosen.getY() + 0.5D, chosen.getZ() + 0.5D);
+        intent.lookHeadOnly = false;
+        if (Bodies.breakOne(handle, chosen)) {
+            blocksDestroyed++;
+        }
+        mind.nextBridgeTick = now + 10L;
+        return intent;
+    }
+
+    /**
+     * L-03: the owner comes back within 8 blocks - the guard salutes once.
+     *
+     * <p>No chat, no sound, no broadcast: a hand raised and then back to work.
+     * The order is restored by finishing the salute, so the guard keeps
+     * guarding after greeting his commander.</p>
+     */
+    private void homecomingSalute(NullBody body, Mind mind, String world, Vec3d pos) {
+        if (v3 == null || !v3.campLife()) {
+            return;
+        }
+        // L-03: a guard salutes when the owner comes within 8 blocks - whether
+        // he was told to hold, to defend, to patrol, or nothing at all.
+        if (mind.order != null && mind.order.verb != Mind.Verb.HOLD && mind.order.verb != Mind.Verb.DEFEND
+                && mind.order.verb != Mind.Verb.PATROL) {
+            return;
+        }
+        UUID ownerUuid = mind.order == null ? null : mind.order.issuer;
+        if (ownerUuid == null && plugin.squads() != null) {
+            ownerUuid = plugin.squads().ownerOf(body);
+        }
+        if (ownerUuid == null) {
+            return;
+        }
+        // Bukkit.getPlayer only knows real, listed players: an owner stand-in
+        // in the self test is a Null, and a Null is an entity first.
+        Entity ownerEntity = Bukkit.getEntity(ownerUuid);
+        if (!(ownerEntity instanceof Player owner) || owner.isDead() || owner.getWorld() == null
+                || !world.equals(owner.getWorld().getName())) {
+            return;
+        }
+        Location at = owner.getLocation();
+        double near = Math.hypot(Math.hypot(at.getX() - pos.x(), at.getZ() - pos.z()),
+                Math.max(0.0D, at.getY() - pos.y()));
+        if (near > 8.0D) {
+            return;
+        }
+        if (now - mind.lastOwnerNearTick < 200L) {
+            return;
+        }
+        mind.lastOwnerNearTick = now;
+        Mind.Order standing = mind.order;
+        if (standing != null) {
+            mind.orderAfterSalute = standing;
+            mind.order = new Mind.Order(Mind.Verb.SALUTE, null, ownerUuid, ownerUuid, now, 1);
+            mind.saluted = false;
+            return;
+        }
+        // Idle: salute in place and go back to whatever it was doing (nothing).
+        mind.order = new Mind.Order(Mind.Verb.SALUTE, null, ownerUuid, ownerUuid, now, 1);
+        mind.saluted = false;
+        mind.orderAfterSalute = standing;
+    }
+
+    /** L-06: sneak + horn = recall to the owner, in formation, on the march cadence. */
+    public String recall(Player owner) {
+        if (owner == null) {
+            return "no owner";
+        }
+        SquadManager.Squad squad = plugin.squads().find(owner.getUniqueId());
+        if (squad == null) {
+            return "no Nulls";
+        }
+        List<NullBody> list = squad.members();
+        if (list == null || list.isEmpty()) {
+            return "no Nulls";
+        }
+        Location loc = owner.getLocation();
+        if (loc == null || loc.getWorld() == null) {
+            return "no position";
+        }
+        Vec3d point = new Vec3d(loc.getX(), Math.floor(loc.getY()), loc.getZ());
+        String answer = order(list, Mind.Verb.MARCH, point, null, owner.getUniqueId(), 1);
+        if (plugin.chatGate() != null) {
+            plugin.chatGate().event("horn.recall", "player", owner.getName(), "count", String.valueOf(list.size()));
+        }
+        return answer;
+    }
+
+    /**
+     * L-04: silent camp life.
+     *
+     * <p>Squads that stand around doing nothing look like statues. Around a light
+     * source they rest in a ring, spar in pairs - swinging at each other with
+     * ZERO damage, because squad mates cannot hurt each other - eat when hurt,
+     * and haul spare blocks to a builder that needs them. Nothing here speaks,
+     * nothing here damages anything.</p>
+     */
+    private void campLife(NullBody body, Mind mind, Player handle, String world, Vec3d pos, Intent intent,
+                          boolean idle) {
+        if (handle == null || !idle) {
+            return;
+        }
+        // A Null holding its shield up - or eating, or drawing a bow - is busy
+        // with its hands. Camp life must never interrupt that: a swing cancels
+        // the item use, and a guard who stops blocking is not guarding.
+        if (handle.isHandRaised() || mind.eating() || mind.shieldUp) {
+            return;
+        }
+        if (body.health() < NullBrain.maxHealth(handle) * (v3 == null ? 0.6D : v3.eatBelowHealth())) {
+            if (maybeEat(body, mind, handle)) {
+                mind.campBehaviour = "eat";
+                campBehaviours.add("eat");
+            }
+            return;
+        }
+        if (now - mind.idleSince > (v3 == null ? 1200 : v3.restAfterIdleTicks())) {
+            mind.campBehaviour = "rest";
+            campBehaviours.add("rest");
+            intent.sneak = true;
+            return;
+        }
+        // Spar with a nearby squad mate: swing at him, deal nothing.
+        if (now % 40L == (Math.abs(mind.id.hashCode()) % 40L)) {
+            for (Entity near : handle.getNearbyEntities(2.5D, 2.0D, 2.5D)) {
+                if (!(near instanceof Player) || near.isDead()) {
+                    continue;
+                }
+                if (plugin.adapter() != null && !plugin.adapter().isNullEntity(near.getUniqueId())
+                        && !mayTarget(body, near)) {
+                    continue; // a real player who must not be touched
+                }
+                Guard.attempt(plugin.getLogger(), "camp sparring", handle::swingMainHand);
+                mind.campBehaviour = "spar";
+                campBehaviours.add("spar");
+                return;
+            }
+        }
+        // Haul: a builder in the squad that is short of blocks gets a top-up.
+        if (plugin.builder() != null && now % 60L == 0) {
+            redglitchx.nullarmy.plugin.ai.builder.BuilderService.Job job = plugin.builder().jobOf(ownerOf(body));
+            if (job != null && job.active()) {
+                mind.campBehaviour = "haul";
+                campBehaviours.add("haul");
+                return;
+            }
+        }
+        // Otherwise: ring round the light with the squad, or stand watch alone.
+        // Nothing here moves the body more than a step, so an idle camp stays idle.
+        int mates = 0;
+        double cx = pos.x();
+        double cz = pos.z();
+        int around = 1;
+        for (Entity near : handle.getNearbyEntities(6.0D, 3.0D, 6.0D)) {
+            if (near instanceof Player && plugin.adapter() != null
+                    && plugin.adapter().isNullEntity(near.getUniqueId()) && !near.isDead()) {
+                mates++;
+                around++;
+                cx += near.getLocation().getX();
+                cz += near.getLocation().getZ();
+            }
+        }
+        cx /= around;
+        cz /= around;
+        boolean onRing = false;
+        if (mates >= 1) {
+            // The ring: a slot on a circle round the middle of the squad (or the
+            // camp fire standing there), claimed by where this body already is.
+            double radius = Math.max(2.2D, 0.45D * (around + 1));
+            double here = Math.atan2(pos.z() - cz, pos.x() - cx);
+            double slotX = cx + Math.cos(here) * radius;
+            double slotZ = cz + Math.sin(here) * radius;
+            onRing = Math.hypot(pos.x() - slotX, pos.z() - slotZ) <= 0.5D;
+            if (!onRing) {
+                mind.campBehaviour = "ring";
+                campBehaviours.add("ring");
+                intent.dx = (slotX - pos.x()) * 0.35D;
+                intent.dz = (slotZ - pos.z()) * 0.35D;
+                intent.gait = NullBody.GAIT_WALK;
+            }
+        }
+        if (mates < 1 || onRing) {
+            mind.campBehaviour = "watch";
+            campBehaviours.add("watch");
+        }
+        // A guard never stares at his boots: the head keeps moving.
+        Vec3d ahead = forward(body, 6.0D);
+        double base = Math.atan2(ahead.z(), ahead.x());
+        double yaw = base + Math.sin((now % 120L) / 120.0D * Math.PI * 2.0D) * 0.8D;
+        intent.look = new Vec3d(pos.x() + Math.cos(yaw) * 6.0D, pos.y() + 1.6D,
+                pos.z() + Math.sin(yaw) * 6.0D);
+        intent.lookHeadOnly = true;
+    }
+
+    private UUID ownerOf(NullBody body) {
+        return plugin.squads() == null ? null : plugin.squads().ownerOf(body);
     }
 
     /**
@@ -501,13 +1180,29 @@ public final class NullBrain implements Reloadable {
             if (mind == null) {
                 continue;
             }
-            mind.order = new Mind.Order(verb, point, entity, issuer, now, Math.max(1, count));
+            // P-04: the totem holder is the only commander. An order from anyone
+            // else is not "partly obeyed" - it is refused here, at the source, so
+            // no later code path can move a Null for a stranger.
+            if (issuer != null && body.uuid() != null) {
+                UUID owner = plugin.squads() == null ? null : plugin.squads().ownerOf(body);
+                if (owner != null && !owner.equals(issuer)) {
+                    continue;
+                }
+            }
+            Mind.Order created = new Mind.Order(verb, point, entity, issuer, now, Math.max(1, count));
+            mind.order = created;
             mind.detour = null;
             mind.blockedTicks = 0;
-            if (verb == Mind.Verb.HOLD) {
+            mind.saluted = false;
+            mind.patrolToB = false;
+            mind.drillForm = "";
+            if (verb == Mind.Verb.HOLD || verb == Mind.Verb.DRILL) {
                 mind.holdCell = point != null ? point : body.bodyPosition();
             } else {
                 mind.holdCell = null;
+            }
+            if (verb == Mind.Verb.DESTROY) {
+                created.radius = Math.max(1, count);
             }
             if (verb == Mind.Verb.STOP) {
                 mind.combatTarget = null;
@@ -515,7 +1210,7 @@ public final class NullBrain implements Reloadable {
                     plugin.builder().release(body);
                 }
             }
-            if (verb == Mind.Verb.ATTACK && entity != null) {
+            if ((verb == Mind.Verb.ATTACK || verb == Mind.Verb.HUNT) && entity != null) {
                 mind.combatTarget = entity;
                 mind.combatUntil = now + 20L * 120L;
             }
@@ -525,7 +1220,100 @@ public final class NullBrain implements Reloadable {
             }
             given++;
         }
+        if (verb == Mind.Verb.MARCH) {
+            assignMarchCells(targets, point);
+        }
         return given + " Null(s): " + verb.name().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /**
+     * L-01: marching Nulls walk to their own cell in a phalanx around the
+     * destination, so they arrive as a block instead of a crowd.
+     */
+    private void assignMarchCells(List<NullBody> targets, Vec3d point) {
+        if (targets == null || point == null || targets.isEmpty()) {
+            return;
+        }
+        int count = targets.size();
+        double spacing = v3 == null ? 1.5D : v3.formationSpacing();
+        List<double[]> cells = FormationMatrix.worldCells("phalanx", count, spacing, point.x(), point.z(), 0.0F);
+        if (cells.isEmpty()) {
+            return;
+        }
+        double[][] cost = new double[count][cells.size()];
+        List<Vec3d> positions = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            positions.add(targets.get(i).bodyPosition());
+        }
+        for (int i = 0; i < count; i++) {
+            Vec3d p = positions.get(i);
+            for (int j = 0; j < cells.size(); j++) {
+                cost[i][j] = Math.hypot(p.x() - cells.get(j)[0], p.z() - cells.get(j)[1]);
+            }
+        }
+        int[] assignment = FormationMatrix.optimalAssignment(cost);
+        for (int i = 0; i < count; i++) {
+            Mind mind = mind(targets.get(i));
+            if (mind == null || mind.order == null) {
+                continue;
+            }
+            int cell = assignment[i] >= 0 && assignment[i] < cells.size() ? assignment[i] : i % cells.size();
+            mind.holdCell = new Vec3d(cells.get(cell)[0], point.y(), cells.get(cell)[1]);
+        }
+    }
+
+    /** L-03: walk between two points for ever. */
+    public String patrol(List<NullBody> targets, Vec3d a, Vec3d b, UUID issuer) {
+        String answer = order(targets, Mind.Verb.PATROL, a, null, issuer, 1);
+        for (NullBody body : targets) {
+            Mind mind = mind(body);
+            if (mind != null && mind.order != null) {
+                mind.order.pointB = b;
+                mind.patrolToB = true;
+            }
+        }
+        return answer;
+    }
+
+    /** L-02 / P-07: walk forward along a line, bridging the gaps on the way. */
+    public String bridge(List<NullBody> targets, Vec3d ahead, UUID issuer) {
+        return order(targets, Mind.Verb.BRIDGE, ahead, null, issuer, 1);
+    }
+
+    /**
+     * L-07: hunt a target to the end.
+     *
+     * <p>Up to {@code behaviour.hunt-chasers} bodies chase; the rest hold the
+     * line and watch. When the target is dead or gone every one of them
+     * regroups on the owner by itself.</p>
+     */
+    public String hunt(List<NullBody> targets, UUID target, UUID issuer, int chasers) {
+        String answer = order(targets, Mind.Verb.HUNT, null, target, issuer, 1);
+        int limit = Math.max(1, chasers);
+        huntEngagements = 0;
+        for (int i = 0; i < targets.size(); i++) {
+            Mind mind = mind(targets.get(i));
+            if (mind == null || mind.order == null) {
+                continue;
+            }
+            mind.order.chaser = i < limit;
+            mind.order.holder = !mind.order.chaser;
+            mind.holdCell = targets.get(i).bodyPosition();
+            if (mind.order.chaser) {
+                huntEngagements++;
+            }
+        }
+        return answer;
+    }
+
+    /** P-09: teardown of a marked area. Only ever called after policy + confirm. */
+    public String destroy(List<NullBody> targets, Vec3d centre, int radius, UUID issuer) {
+        return order(targets, Mind.Verb.DESTROY, centre, null, issuer, Math.max(1, radius));
+    }
+
+    /** L-03: one salute. */
+    public String salute(List<NullBody> targets, UUID issuer) {
+        return order(targets, Mind.Verb.SALUTE, null, issuer, issuer, 1);
     }
 
     /** A visible "understood": an arm swing and a short nod. */
@@ -954,7 +1742,8 @@ public final class NullBrain implements Reloadable {
     }
 
     /** Raises or lowers the offhand shield. */
-    void raiseShield(Player handle, Mind mind, boolean up) {
+    /** Raises or lowers a shield, the way a Null does it in a fight. */
+    public void raiseShield(Player handle, Mind mind, boolean up) {
         if (handle == null) {
             return;
         }
@@ -1052,7 +1841,7 @@ public final class NullBrain implements Reloadable {
             Location bodyAt = Bodies.location(body);
             if (bodyAt != null && bodyAt.getWorld() == at.getWorld() && bodyAt.distanceSquared(at) < 16.0D * 16.0D) {
                 Mind mind = mind(body);
-                if (mind != null && mind.combatTarget == null) {
+                if (mind != null && mind.combatTarget == null && mayTarget(body, attacker)) {
                     startFight(body, mind, attacker);
                 }
             }
@@ -1060,6 +1849,9 @@ public final class NullBrain implements Reloadable {
     }
 
     private void startFight(NullBody body, Mind mind, LivingEntity attacker) {
+        if (!mayTarget(body, attacker)) {
+            return;
+        }
         if (mind.combatTarget == null || !mind.combatTarget.equals(attacker.getUniqueId())) {
             mind.combatTarget = attacker.getUniqueId();
             if (plugin.chatGate() != null) {
@@ -1067,6 +1859,87 @@ public final class NullBrain implements Reloadable {
             }
         }
         mind.combatUntil = now + 20L * 30L;
+    }
+
+    /**
+     * The one rule that decides whether a Null may ever fight something.
+     *
+     * <p><b>P-04.</b> The totem/horn holder is the sole commander and the army
+     * never turns on him: not in retaliation, not by order, not because he is
+     * the nearest target, not with a bow. Squad mates and the Commander are
+     * exempt too, and so is anyone on {@code policy.protected}. Every path that
+     * sets a combat target - retaliation, the "nearest hostile" scan, a chat
+     * order, {@code /null order attack} - goes through this method.</p>
+     *
+     * @param attacker the Null that would be doing the fighting (a real player
+     *                 passes too, so the same rule can be asked about an order)
+     * @param target   what it would fight
+     */
+    public boolean mayTarget(Entity attacker, Entity target) {
+        return mayTarget(attacker, target, null);
+    }
+
+    /**
+     * As {@link #mayTarget(Entity, Entity)}, for the case where the squad of a
+     * Null body is already known.
+     */
+    public boolean mayTarget(NullBody body, Entity target) {
+        return mayTarget(body == null ? null : Bodies.player(body), target, body);
+    }
+
+    private boolean mayTarget(Entity attacker, Entity target, NullBody body) {
+        if (target == null || target.isDead() || attacker == null) {
+            return false;
+        }
+        UUID id = target.getUniqueId();
+        if (attacker.getUniqueId().equals(id)) {
+            return false; // nobody fights itself
+        }
+        if (plugin.adapter() == null) {
+            return false;
+        }
+        NullBody self = body != null ? body : (isNullEntity(attacker) ? plugin.adapter().bodyOf(attacker.getUniqueId()) : null);
+
+        // 1. Never the Commander.
+        if (plugin.commander() != null && plugin.commander().body() != null
+                && id.equals(plugin.commander().body().uuid())) {
+            return false;
+        }
+        String name = target.getName();
+        if (plugin.commander() != null && plugin.commander().commanderName() != null
+                && plugin.commander().commanderName().equalsIgnoreCase(name)) {
+            return false;
+        }
+        // 2. Never a squad mate: another Null with the same owner.
+        if (isNullEntity(target)) {
+            NullBody other = plugin.adapter().bodyOf(id);
+            if (self != null && other != null) {
+                UUID mine = plugin.squads() == null ? null : plugin.squads().ownerOf(self);
+                UUID theirs = plugin.squads() == null ? null : plugin.squads().ownerOf(other);
+                if (mine != null && mine.equals(theirs)) {
+                    return false;
+                }
+            }
+        }
+        // 3. Never the owner. A Null is the owner's; it does not hit back at him.
+        if (isNullEntity(attacker) && plugin.squads() != null) {
+            NullBody attackerBody = self;
+            if (attackerBody != null) {
+                UUID owner = plugin.squads().ownerOf(attackerBody);
+                if (owner != null && owner.equals(id)) {
+                    return false;
+                }
+            }
+        }
+        // 4. Never anyone the owner protected.
+        if (v3 != null && v3.isProtected(name, id)) {
+            return false;
+        }
+        return true;
+    }
+
+    private boolean isNullEntity(Entity entity) {
+        return entity != null && plugin.adapter() != null && plugin.adapter().isNullEntity(entity.getUniqueId());
     }
 
     private boolean sameOwner(NullBody a, NullBody b) {

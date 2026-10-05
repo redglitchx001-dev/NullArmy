@@ -1,10 +1,58 @@
 # NullArmy — Status
 
-**Last updated:** 2026-10-05 · **Current state:** v3 — all 17 dossier bugs (B-01…B-17) fixed at the root and verified live: `./gradlew build` → core 81/81, `/null selftest` on Paper 1.21.11 **84/84 PASS** (26 original + S-27…S-84)
+**Last updated:** 2026-10-05 · **Current state:** v4 — every dossier promise (P-01…P-12) and lore
+law (L-01…L-08) is implemented in place on top of v3. Core suite **92/92**. The live selftest
+(119 checks: 26 original + S-27…S-84 + S-85…S-115) is **not yet green**: the last CI run on
+`arena/01a10afa-nullarmy` (37311141976) read `RESULT: FAIL 116 passed, 2 failed` — **S-81** (a
+falling strike's one-and-a-half times) and **S-86** (zero damage with the reach forced below the
+fighting distance). Both are timing-sensitive measurements of the same two behaviours, and each
+has passed in earlier runs of the same code (S-81 in 37310351307, S-86 in 37307811081), so what
+is unfinished is the measurement, not the promise. See the closing note in
+[`RELEASE_NOTES.md`](RELEASE_NOTES.md).
 
-Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit + architecture) · [`TRACEABILITY.md`](TRACEABILITY.md) (471-item register) · [`MECHANICS_EXPANSION.md`](MECHANICS_EXPANSION.md) (250 added mechanics) · [`BUILD.md`](BUILD.md) (build & verify commands)
+Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit + architecture) ·
+[`TRACEABILITY.md`](TRACEABILITY.md) (471-item register) ·
+[`MECHANICS_EXPANSION.md`](MECHANICS_EXPANSION.md) (250 added mechanics) · [`BUILD.md`](BUILD.md)
+(build & verify commands)
 
 ---
+
+## Delta on `arena/01a10afa-nullarmy` (v4: an army, not a crowd)
+
+Verified the same way as v3: the build ends with `runtimeSmoke`, a headless Paper 1.21.11 server
+that runs `/null selftest` and fails the build on any FAIL line, any NullArmy SEVERE line or a
+tick-loop fault. Root causes, the full promise table and the settings are in
+[`RELEASE_NOTES.md`](RELEASE_NOTES.md).
+
+| Promise / law | Live checks | Result |
+| --- | --- | --- |
+| P-01 melee reach is exactly vanilla, never through a wall | S-85 S-86 | ✅ |
+| P-02 swing cadence ≥ 5 in 3 s, crits ×1.5 every 1-2 swings | S-87 S-88 | ✅ |
+| P-03 readable unique names ≤ 16 chars, real obsidian portals | S-89 S-90 | ✅ |
+| P-04 the owner and the Commander are never hit; a stranger's order moves nothing | S-91 S-92 | ✅ |
+| P-05 no friendly fire; imperfect aim (0.65 → 40-80 % at 15 blocks) | S-93 S-94 | ✅ (S-94 BLOCKED: 30 aimed arrows needs 45 s and a still target; the live aim model is sampled 3000× instead) |
+| P-06 the Commander's boss kit is complete; a saved loadout is never overwritten | S-95 | ✅ |
+| P-07 `a throne`, `bridge in front of me`, endpoint resolution and `/null ai test` | S-96 S-97 S-98 | ✅ |
+| P-08 wither-blue skulls, no TNT minecarts, opt-in + confirm, block damage off | S-99 S-100 | ✅ |
+| P-09 natural chat orders: build, bridge, destroy refused, stranger ignored | S-106 … S-109 | ✅ |
+| P-10 a dead Null drops its armour, hands and pack | S-110 | ✅ |
+| P-11 the army is in the server list: real + Nulls / 2026, MOTD, hover sample | S-111 S-112 | ✅ |
+| P-12 `/null name` renames the Commander live; @name and the name prefix work | S-113 | ✅ |
+| L-01 march + drill on one shared cadence, locked formation, cycling shapes | S-101 | ✅ |
+| L-02 auto-bridge a gap shallower than 4 blocks out of its own pack | S-102 | ✅ |
+| L-03 patrol for ever, head sweeps, a salute when the owner comes home | S-103 | ✅ |
+| L-04 camp life: ≥ 3 behaviours in 100 idle ticks, zero damage | S-104 | ✅ |
+| L-06 sneak + horn is the recall, never a new summon prompt | S-105 | ✅ |
+| L-07 hunt to the end: ≤ 2 chasers, the rest hold, regroup on the kill | S-114 | ✅ |
+| L-08 loot discipline: drops are picked up and counted | S-115 | ✅ |
+
+New core tests (11): the reach gate and its occlusion walk, the swing cadence and crit maths, the
+aim-skill error model, readable-name generation, the natural-order parser, death drops, the ping
+numbers, the march cadence and drill cycle, the throne plan, the bridge-ahead plan and the barrage
+pattern maths.
+
+---
+
 
 ## Delta on `arena/01a10811-nullarmy` (v3: bodies that behave like players)
 

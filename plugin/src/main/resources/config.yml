@@ -200,6 +200,13 @@ chat:
   commander-only-conversation: true
   nulls-orders-only: true
   commander-chat-prefix: true
+  # v4: how a player gets the Commander's attention. With the default "@" the
+  # Commander answers anyone who writes "@NullCommander ..." (or his own name at
+  # the start of a line), while the wake words below still work for everybody.
+  mention-prefix: "@"
+  # Units never speak. Deaths, arrivals, kit, missions and shutdown all go to
+  # the console and to /null status instead of chat.
+  silence-units: true
   wake-words:
     # Quoted: an unquoted `null` is YAML's null value, not the word.
     - "null"
@@ -250,6 +257,18 @@ nulls:
   rest-after-idle-s: 60
 
 # ---------------------------------------------------------------------
+#  NAMES  (v4, P-03)
+#
+#  A Null's name used to be 16 random alphanumerics, which reads as unreadable
+#  hex gibberish (c1b12d32d3dc74c4) in the tab list, on the nameplate and in the
+#  server list. style: "words" gives every Null a readable themed handle such as
+#  Voidwalker, Null_07 or Grimjaw_12 - unique, at most 16 characters, never a
+#  UUID fragment. "codes" restores the old random strings.
+# ---------------------------------------------------------------------
+names:
+  style: "words"
+
+# ---------------------------------------------------------------------
 #  SUMMON ZONE  (v3)
 #
 #  A summon opens a square zone of this edge length centred on the horn user.
@@ -275,6 +294,18 @@ combat:
   # A real player's melee and arrows hurt a Null (even on a pvp=false server).
   players-can-hit-nulls: true
   nulls-can-hit-nulls: true
+  # v4 (P-01): hard reach gate. A Null may only strike inside this many blocks,
+  # eye to target, and only with a clear line of sight - never through a wall or
+  # round a corner. Values above the vanilla 3.0 are clamped down to 3.0.
+  melee-reach: 3.0
+  # v4 (P-02): a Null swings as soon as its cooldown reaches this fraction
+  # instead of waiting for a full meter, so it really does rain blows.
+  attack-threshold: 0.55
+  crit-every-swings: 2
+  # v4 (P-05): imperfect aim. 0 = hopeless, 1 = as good as it gets, and even
+  # that is never perfect. At 0.65 a shot carries a +-6 degree error, a lead
+  # error, a 0.3-0.8 s reaction delay and misses sometimes beyond 12 blocks.
+  aim-skill: 0.65
   crits: true
   shields: true
   bows: true
@@ -299,6 +330,58 @@ formations:
 orders:
   # A Null that takes an order swings its arm and nods.
   gesture-ack: true
+
+# ---------------------------------------------------------------------
+#  DEATH DROPS  (v4, P-10)
+#
+#  A Null used to vanish with its kit - armour, tools, blocks and all - which
+#  meant beating one paid nothing. With enabled: true a defeated Null drops what
+#  it carries on the ground, exactly like a player: armour, both hands and the
+#  contents of its inventory. chance is the share of the kit that drops (1.0 =
+#  everything). Real players' own drops stay vanilla and are never touched.
+#  A server that already set nulls.no-death-drops keeps that answer.
+# ---------------------------------------------------------------------
+drops:
+  enabled: true
+  chance: 1.0
+
+# ---------------------------------------------------------------------
+#  SERVER LIST  (v4, P-11)
+#
+#  The Nulls are real server-driven bodies, so the vanilla ping used to answer
+#  0/2026 while two hundred of them stood in front of the castle. show-army adds
+#  the live Null count to the player count in the multiplayer screen, the hover
+#  sample lists their names next to the real players, and format is the optional
+#  MOTD line ({nulls}, {players} and {total} are substituted).
+# ---------------------------------------------------------------------
+motd:
+  show-army: true
+  max-players: 2026
+  format: "NULL ARMY - {nulls} strong"
+
+# ---------------------------------------------------------------------
+#  BEHAVIOUR  (v4, L-01..L-08)  -  the Unstable-SMP NULL feeling
+#
+#  march-cadence: a squad ordered to march shares one step clock, so the line
+#                 stays a line instead of stringing out.
+#  auto-bridge:   walking towards a gap, the lead Null places blocks under the
+#                 route out of its own inventory, one block per place rate.
+#  camp-life:     silent idle life - rest in a ring round a light source, spar
+#                 in pairs with zero damage, eat when hurt, haul spare blocks to
+#                 a builder that needs them.
+# ---------------------------------------------------------------------
+behaviour:
+  march-cadence: true
+  auto-bridge: true
+  camp-life: true
+  # Ticks between two steps of a march (8 ticks = 0.4 s).
+  march-period-ticks: 8
+  # Ticks the drill holds one formation before cycling line -> wedge -> phalanx.
+  drill-hold-ticks: 80
+  # A Null on guard salutes when its owner comes within this many blocks.
+  salute-range: 8
+  # How many Nulls may break formation to chase a fleeing target (L-07).
+  hunt-chasers: 2
 
 # ---------------------------------------------------------------------
 #  MECHANICS
@@ -350,6 +433,10 @@ ai:
   api-key: ""
   builder:
     enabled: true
+    # v4 (P-07): ANY OpenAI-compatible base URL, or "id:<name>" to use one of
+    # the endpoints defined under ai.endpoints below with its own model, key and
+    # timeout. Empty = the offline planner. /null ai test [id] reports the
+    # endpoint's HTTP status and model; /null ai endpoints lists them.
     endpoint: ""
     api-key: ""
     model: ""
@@ -486,6 +573,9 @@ policy:
   # by an AI endpoint, whatever this says. The nullarmy.moderation permission
   # still has to be granted to anyone who should be able to use it.
   moderation-integration-enabled: true
+  # v4 (P-09): names or UUIDs the army must never hunt. "null attack them"
+  # skips everyone on this list, and so does every other targeting rule.
+  protected: []
 
 # =====================================================================
 #  WITHER CANNON  —  a real TNT minecart, delivered through sky portals
@@ -504,13 +594,35 @@ policy:
 #  setting or permission is missing when it cannot fire.
 # =====================================================================
 wither-cannon:
-  enabled: true
+  # v4 (P-08): OPT-IN. The barrage is a huge sphere of wither-blue skulls, so it
+  # is off until the owner turns it on: set this to true, then /null cannon aim,
+  # look at the target, right-click the rod to lock it, /null cannon fire.
+  enabled: false
   require-permission: nullarmy.admin
   max-charge: 3
   tnt-per-shot: 3
   cooldown-seconds: 20
   # !! MAP PROTECTION !! Needs policy.griefing-enabled to be true as well.
   blocks-damage: false
+  # ---- v4: the orbital barrage -----------------------------------------
+  # How many barrages one fire order launches.
+  shots: 3
+  # Wither skulls per barrage. 24 reads as a real sphere in the sky.
+  skulls-per-shot: 24
+  # Backwards-compatible alias: minecarts-per-shot is accepted too.
+  minecarts-per-shot: 24
+  # sphere = a converging shell, rain = a wide column, line = a single rank.
+  pattern: "sphere"
+  # Ticks before a landed skull detonates (60 = 3 s).
+  fuse-ticks: 60
+  # Ticks between two barrages of one fire order (10 = 0.5 s).
+  shot-delay-ticks: 10
+  # How far the aiming rod can see for a target, in blocks.
+  range: 120
+  # Horizontal radius of one barrage, in blocks.
+  radius: 8
+  # How far above the target the skulls appear, in blocks.
+  height: 40
 
 # =====================================================================
 #  AIR DROP  —  sky portals that deliver a squad
