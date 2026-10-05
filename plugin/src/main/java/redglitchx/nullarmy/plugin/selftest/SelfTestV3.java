@@ -1555,8 +1555,8 @@ final class SelfTestV3 {
         // nudged off its exact mark.  A shield check needs a stable, face-on
         // sword blow, not fall/knockback noise from the previous sample.
         Vec3d base = ground(-24, 28);
-        attacker.teleport(new Location(world, base.x(), base.y(), base.z()));
-        victim.teleport(new Location(world, base.x() + 2.2D, base.y(), base.z()));
+        attacker.teleport(new Location(world, base.x(), base.y(), base.z(), -90.0F, 0.0F));
+        victim.teleport(new Location(world, base.x() + 2.2D, base.y(), base.z(), 90.0F, 0.0F));
         attacker.setVelocity(new org.bukkit.util.Vector(0, 0, 0));
         victim.setVelocity(new org.bukkit.util.Vector(0, 0, 0));
         attacker.setFallDistance(0.0F);
@@ -1593,8 +1593,10 @@ final class SelfTestV3 {
         Vec3d a = one.bodyPosition();
         double want = Math.toDegrees(Math.atan2(-(a.x() - v.x()), a.z() - v.z()));
         numberA = Math.abs(wrap(two.headYaw() - want));
-        if (numberA > 20.0D && counter < 3) {
+        if (numberA > 20.0D && counter < 6) {
             counter++;
+            Location here = victim.getLocation();
+            victim.teleport(new Location(world, here.getX(), here.getY(), here.getZ(), 90.0F, 0.0F));
             t.gap(5);
             t.retry(this::b17ShieldHit);
             return;
@@ -1603,12 +1605,17 @@ final class SelfTestV3 {
         // this check's setup, and an item use that never started (a body that
         // dropped it, a tick that ended it) is not a failed block - it is a
         // measurement that never began.
-        if (!victim.isBlocking()) {
+        boolean activeShield = victim.isHandRaised() && victim.getActiveItem() != null
+                && victim.getActiveItem().getType() == Material.SHIELD;
+        if (!activeShield) {
             // Whatever the hands were doing has to stop first: a body already
             // using another item cannot raise a shield. The shield itself is
             // put back in the offhand here, in this tick - the body's inventory
             // is restored from its own ledger between ticks, and a shield that
-            // was equipped several ticks ago may no longer be in the hand.
+            // was equipped several ticks ago may no longer be in the hand. Once
+            // the shield is raised, do not clear it merely because Bukkit's
+            // isBlocking() has not flipped yet; that resets vanilla's shield
+            // warm-up timer and makes the sample self-defeating.
             victim.clearActiveItem();
             victim.getInventory().setItemInOffHand(new ItemStack(Material.SHIELD));
             // A bow in the hands outranks a shield: while the string is drawn
