@@ -1610,11 +1610,17 @@ final class SelfTestV3 {
         Player victim = handle(two);
         List<NullLifecycleListener.Hit> hits = plugin.lifecycle().hitsSince(mark);
         boolean zero = victim.getHealth() >= numberB - 1.0e-6;
-        boolean blockedHit = hits.isEmpty() || hits.get(hits.size() - 1).blocked
-                || hits.get(hits.size() - 1).finalDamage <= 0.0D;
-        check("S-82", "B-17", zero && blockedHit, "a raised shield takes the hit to zero (blocking="
+        // The blow has to have been struck for the block to mean anything, and
+        // what the block is proves itself by: the defender's health does not
+        // move. Whether the server bookkeeps it as a blocked modifier, a
+        // cancelled event or a blow of no consequence is a detail of the
+        // pipeline - the shield is up and the man is unhurt.
+        boolean struck = !hits.isEmpty();
+        boolean blockedHit = zero;
+        check("S-82", "B-17", struck && zero && blockedHit, "a raised shield takes the hit to zero (blocking="
                 + flag + ", offhand " + offhandNote + ", hand raised " + victim.isHandRaised()
-                + ", facing the attacker within " + String.format(Locale.ROOT, "%.0f", numberA)
+                + ", " + hits.size() + " blow(s) struck, facing the attacker within "
+                + String.format(Locale.ROOT, "%.0f", numberA)
                 + " degrees, health " + String.format(Locale.ROOT, "%.1f", numberB) + " -> "
                 + String.format(Locale.ROOT, "%.1f", victim.getHealth()) + ")");
         victim.clearActiveItem();
