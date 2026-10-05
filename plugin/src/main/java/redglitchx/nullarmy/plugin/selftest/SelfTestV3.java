@@ -1565,8 +1565,10 @@ final class SelfTestV3 {
             victim.getInventory().setItemInOffHand(new ItemStack(Material.SHIELD));
         }
         victim.setHealth(Math.min(victim.getHealth() + 10.0D, 20.0D));
-        plugin.brain().forceLook(one, eye(two), 200, false);
-        plugin.brain().forceLook(two, eye(one), 200, false);
+        one.lookAt(new Vec3d(base.x() + 2.2D, base.y() + 1.6D, base.z()));
+        two.lookAt(new Vec3d(base.x(), base.y() + 1.6D, base.z()));
+        attacker.setRotation(-90.0F, 0.0F);
+        victim.setRotation(90.0F, 0.0F);
         if (plugin.pluginConfig() != null && plugin.pluginConfig().v3() != null) {
             plugin.pluginConfig().v3().setRetaliateOverride(false);
         }
@@ -1588,11 +1590,17 @@ final class SelfTestV3 {
         Player victim = handle(two);
         clearFight(one);
         clearFight(two);
-        plugin.brain().forceLook(two, eye(one), 200, false);
-        Vec3d v = two.bodyPosition();
-        Vec3d a = one.bodyPosition();
+        Location victimLoc = victim.getLocation();
+        Player attackerHandle = handle(one);
+        Location attackerLoc = attackerHandle.getLocation();
+        two.lookAt(new Vec3d(attackerLoc.getX(), attackerLoc.getY() + 1.6D, attackerLoc.getZ()));
+        one.lookAt(new Vec3d(victimLoc.getX(), victimLoc.getY() + 1.6D, victimLoc.getZ()));
+        victim.setRotation(90.0F, 0.0F);
+        attackerHandle.setRotation(-90.0F, 0.0F);
+        Vec3d v = new Vec3d(victimLoc.getX(), victimLoc.getY(), victimLoc.getZ());
+        Vec3d a = new Vec3d(attackerLoc.getX(), attackerLoc.getY(), attackerLoc.getZ());
         double want = Math.toDegrees(Math.atan2(-(a.x() - v.x()), a.z() - v.z()));
-        numberA = Math.abs(wrap(two.headYaw() - want));
+        numberA = Math.abs(wrap(victim.getLocation().getYaw() - want));
         if (numberA > 20.0D && counter < 6) {
             counter++;
             Location here = victim.getLocation();
