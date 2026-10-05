@@ -485,9 +485,17 @@ final class SelfTestV4 {
         try {
             Player victimHandle = handle(victim);
             Player attackerHandle = handle(attacker);
-            double max = victimHandle == null ? 20.0D
-                    : victimHandle.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).getValue();
-            untouched = victim != null && victim.health() >= max - 0.01D;
+            boolean damagingHit = false;
+            if (plugin.lifecycle() != null && attacker != null && victim != null) {
+                for (redglitchx.nullarmy.plugin.body.NullLifecycleListener.Hit hit
+                        : plugin.lifecycle().hitsSince(mark)) {
+                    if (attacker.uuid().equals(hit.attacker) && victim.uuid().equals(hit.victim)
+                            && !hit.blocked && !hit.cancelled && hit.finalDamage > 0.1D) {
+                        damagingHit = true;
+                    }
+                }
+            }
+            untouched = !damagingHit;
             if (attackerHandle != null && victimHandle != null) {
                 // Measure exactly the same fresh geometry as CombatBrain's
                 // ReachGate call: attacker eye to the target point on the
