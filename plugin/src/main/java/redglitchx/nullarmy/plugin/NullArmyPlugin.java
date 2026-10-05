@@ -26,6 +26,7 @@ import redglitchx.nullarmy.plugin.shutdown.ShutdownDirector;
 import redglitchx.nullarmy.plugin.skin.SkinResolver;
 import redglitchx.nullarmy.plugin.spectacle.Airdrop;
 import redglitchx.nullarmy.plugin.spectacle.EntityRegistry;
+import redglitchx.nullarmy.plugin.ping.ArmyPingListener;
 import redglitchx.nullarmy.plugin.spectacle.WitherCannon;
 import redglitchx.nullarmy.plugin.totem.TotemWatcher;
 import redglitchx.nullarmy.plugin.util.Guard;
@@ -85,6 +86,7 @@ public final class NullArmyPlugin extends JavaPlugin {
     private CommanderManager commander;
     private EntityRegistry entityRegistry;
     private WitherCannon witherCannon;
+    private ArmyPingListener armyPing;
     private Airdrop airdrop;
     private NullCommand command;
     private MenuManager menuManager;
@@ -209,6 +211,7 @@ public final class NullArmyPlugin extends JavaPlugin {
                 () -> adapter.applyBodySettings(pluginConfig.v3().bodySettings()));
         this.entityRegistry = new EntityRegistry(this);
         this.witherCannon = new WitherCannon(this, entityRegistry);
+        this.armyPing = new ArmyPingListener(this);
         this.airdrop = new Airdrop(this, entityRegistry);
 
         this.command = new NullCommand(this, squads, pluginConfig);
@@ -242,6 +245,11 @@ public final class NullArmyPlugin extends JavaPlugin {
         registerListener(chatDirector, "chat interface");
         registerListener(lifecycle, "Null lifecycle (deaths, hits, silence)");
         registerListener(loadouts, "loadout editor");
+        // The cannon's own guard: the aiming rod locks a target, and a barrage
+        // can never turn on the hand that fired it.
+        registerListener(witherCannon.guard(), "wither cannon guard");
+        // P-11: the army shows up in the server list - real players plus Nulls.
+        registerListener(armyPing, "army server list ping");
 
         // 5. Commands. A missing command is a warning, not a crash: the rest of
         //    the plugin is still useful through the tick loop and the menu.
@@ -412,6 +420,7 @@ public final class NullArmyPlugin extends JavaPlugin {
         guarded("cannon tick", () -> {
             if (witherCannon != null) {
                 witherCannon.tick(tickCounter);
+                witherCannon.tickAim();
             }
         });
         guarded("airdrop tick", () -> {
@@ -645,6 +654,9 @@ public final class NullArmyPlugin extends JavaPlugin {
     public CommanderManager commander() { return commander; }
     public EntityRegistry registry() { return entityRegistry; }
     public WitherCannon witherCannon() { return witherCannon; }
+
+    /** P-11: the server-list ping listener. */
+    public ArmyPingListener armyPing() { return armyPing; }
     public Airdrop airdrop() { return airdrop; }
     public NullCommand command() { return command; }
     public MenuManager menu() { return menuManager; }

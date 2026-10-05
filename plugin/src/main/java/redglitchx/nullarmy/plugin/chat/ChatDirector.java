@@ -1,17 +1,23 @@
 package redglitchx.nullarmy.plugin.chat;
 
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 
+import redglitchx.nullarmy.core.math.Vec3d;
 import redglitchx.nullarmy.core.util.RateLimiter;
+import redglitchx.nullarmy.nms.NullBody;
 import redglitchx.nullarmy.plugin.NullArmyPlugin;
+import redglitchx.nullarmy.plugin.body.Mind;
 import redglitchx.nullarmy.plugin.command.NullCommand;
 import redglitchx.nullarmy.plugin.config.PluginConfig;
 import redglitchx.nullarmy.plugin.config.Reloadable;
+import redglitchx.nullarmy.plugin.config.V3Settings;
 import redglitchx.nullarmy.plugin.util.Guard;
 import redglitchx.nullarmy.plugin.util.PluginText;
 
@@ -378,6 +384,12 @@ public final class ChatDirector implements Listener, Reloadable {
             args = asCommand(rest);
         }
         if (args == null) {
+            // P-09: a natural sentence. The pure core parser decides whether it
+            // is an order at all; anything the word-matching path understood
+            // above is untouched, so no old sentence changes meaning.
+            if (naturalOrder(player, raw)) {
+                return;
+            }
             // A question or a remark: the Commander answers.
             if (publicReplies) {
                 answerPublicly(player, rest);
@@ -400,6 +412,256 @@ public final class ChatDirector implements Listener, Reloadable {
         if (publicReplies) {
             commanderReply(acknowledgement(verb, player.getName()));
         }
+    }
+
+    // ------------------------------------------------------- natural orders (P-09)
+
+    /** A destroy order waiting for its confirm: owner -> verb + target. */
+    private final Map<UUID, String> pendingDestroy = new LinkedHashMap<>();
+
+    /** How many natural-language orders were obeyed (self test). */
+    private int naturalOrders;
+    /** How many destroy orders were refused in one console line (self test). */
+    private int destroyRefusals;
+    /** How many orders were ignored because the speaker is not the owner (self test). */
+    private int ignoredNonOwner;
+
+    /** How many natural-language orders were obeyed this session. */
+    public int naturalOrders() { return naturalOrders; }
+    /** How many destroy refusals were written to the console. */
+    public int destroyRefusals() { return destroyRefusals; }
+    /** How many addressed orders were ignored because the speaker is not the owner. */
+    public int ignoredNonOwner() { return ignoredNonOwner; }
+
+    /** Self test: clears the P-09 counters before a measured window. */
+    public void resetOrderCounters() {
+        naturalOrders = 0;
+        destroyRefusals = 0;
+        ignoredNonOwner = 0;
+        pendingDestroy.clear();
+    }
+
+    /**
+     * Handles a natural sentence.
+     *
+     * <p>Only the owner is obeyed. A non-owner's order is ignored in silence -
+     * not a word in chat, not a Null moved - while a non-owner's conversation is
+     * left for the Commander to answer like any other player would.</p>
+     *
+     * @return true when the line was an order and has been dealt with
+     */
+    private boolean naturalOrder(Player player, String raw) {
+        if (player == null || plugin.pluginConfig() == null) {
+            return false;
+        }
+        V3Settings settings = plugin.pluginConfig().v3();
+        redglitchx.nullarmy.core.orders.OrderParser.Order order =
+                redglitchx.nullarmy.core.orders.OrderParser.parse(raw, commanderName(),
+                        settings == null ? "@" : settings.mentionPrefix());
+        if (order == null || !order.addressed() || !order.isOrder()) {
+            return false;
+        }
+        if (plugin.commander() != null && plugin.commander().owner() != null
+                && !plugin.commander().isOwner(player)) {
+            // P-09: a non-owner's order is ignored silently. No chat, no movement.
+            ignoredNonOwner++;
+            plugin.getLogger().info("[NullArmy] " + player.getName() + " ordered the army without being"
+                    + " its owner; the order was ignored in silence.");
+            return true; // the line was ours, but nothing happens and nothing is said
+        }
+        if (!allowOrder(player)) {
+            player.sendMessage(PREFIX + "Slow down - the Nulls can only take so many orders a minute.");
+            return true;
+        }
+        if (order.verb() == redglitchx.nullarmy.core.orders.OrderParser.Verb.DESTROY) {
+            return destroyOrder(player, order);
+        }
+        // A confirm that is not a destroy cancels it: "stop" after "destroy".
+        pendingDestroy.remove(player.getUniqueId());
+        if (!obey(player, order)) {
+            return false;
+        }
+        naturalOrders++;
+        commanderReply(acknowledgement(order.verb().name(), player.getName()));
+        return true;
+    }
+
+    /** Carries out one parsed order. @return false when the verb is not ours. */
+    private boolean obey(Player player, redglitchx.nullarmy.core.orders.OrderParser.Order order) {
+        if (plugin.brain() == null || plugin.squads() == null) {
+            return false;
+        }
+        UUID owner = player.getUniqueId();
+        List<NullBody> targets = new ArrayList<>(plugin.squads().membersOf(owner));
+        if (targets.isEmpty()) {
+            player.sendMessage(PREFIX + "You have no Nulls to order - summon some first.");
+            return true;
+        }
+        V3Settings settings = plugin.pluginConfig() == null ? null : plugin.pluginConfig().v3();
+        switch (order.verb()) {
+            case BUILD: {
+                if (plugin.builder() == null) {
+                    return false;
+                }
+                String goal = order.argument().isEmpty() ? "a small hut" : order.argument();
+                Location at = player.getLocation();
+                String answer = plugin.builder().start(owner, at.getWorld().getName(),
+                        new Vec3d(at.getX(), at.getY(), at.getZ()), at.getYaw(), goal,
+                        line -> player.sendMessage(PREFIX + line));
+                player.sendMessage(PREFIX + answer);
+                return true;
+            }
+            case BRIDGE: {
+                // L-02: the whole squad bridges forward out of its own inventory.
+                Location at = player.getLocation();
+                double yaw = Math.toRadians(at.getYaw());
+                Vec3d ahead = new Vec3d(at.getX() - Math.sin(yaw) * 10.0D, at.getY(),
+                        at.getZ() + Math.cos(yaw) * 10.0D);
+                player.sendMessage(PREFIX + plugin.brain().bridge(targets, ahead, owner));
+                return true;
+            }
+            case ATTACK: {
+                Entity target = attackTarget(player, order.argument());
+                if (target == null) {
+                    player.sendMessage(PREFIX + "Attack whom? Name a player, or say 'them' for"
+                            + " whatever you are looking at.");
+                    return true;
+                }
+                if (target.getUniqueId().equals(owner)) {
+                    player.sendMessage(PREFIX + "Never. The army does not touch its own owner.");
+                    return true;
+                }
+                if (settings != null && settings.isProtected(target.getName(),
+                        target.getUniqueId())) {
+                    player.sendMessage(PREFIX + target.getName() + " is protected"
+                            + " (policy.protected) - the army will not touch them.");
+                    return true;
+                }
+                // L-07: hunt to the end - two chasers, the rest hold the line.
+                player.sendMessage(PREFIX + plugin.brain().hunt(targets, target.getUniqueId(), owner, 2));
+                return true;
+            }
+            case FOLLOW:
+            case COME:
+                player.sendMessage(PREFIX + plugin.brain().order(targets, Mind.Verb.FOLLOW, null,
+                        owner, owner, 1));
+                return true;
+            case STOP:
+                if (plugin.builder() != null) {
+                    plugin.builder().stop(owner, "stopped by order");
+                }
+                player.sendMessage(PREFIX + plugin.brain().order(targets, Mind.Verb.STOP, null, null,
+                        owner, 1));
+                return true;
+            case GUARD:
+                player.sendMessage(PREFIX + plugin.brain().order(targets, Mind.Verb.DEFEND, null,
+                        owner, owner, 1));
+                return true;
+            case MARCH:
+            case DRILL: {
+                Location at = player.getLocation();
+                player.sendMessage(PREFIX + plugin.brain().order(targets,
+                        order.verb() == redglitchx.nullarmy.core.orders.OrderParser.Verb.MARCH
+                                ? Mind.Verb.MARCH : Mind.Verb.DRILL,
+                        new Vec3d(at.getX(), at.getY(), at.getZ()), null, owner, 1));
+                return true;
+            }
+            case PATROL: {
+                Location at = player.getLocation();
+                double yaw = Math.toRadians(at.getYaw());
+                Vec3d b = new Vec3d(at.getX() - Math.sin(yaw) * 16.0D, at.getY(),
+                        at.getZ() + Math.cos(yaw) * 16.0D);
+                player.sendMessage(PREFIX + plugin.brain().patrol(targets,
+                        new Vec3d(at.getX(), at.getY(), at.getZ()), b, owner));
+                return true;
+            }
+            case SALUTE:
+                player.sendMessage(PREFIX + plugin.brain().salute(targets, owner));
+                return true;
+            case REGROUP:
+                player.sendMessage(PREFIX + plugin.brain().order(targets, Mind.Verb.REGROUP, null,
+                        owner, owner, 1));
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /** Resolves the target of an attack: 'them' (what the owner is looking at) or a name. */
+    private Entity attackTarget(Player player, String argument) {
+        String arg = argument == null ? "" : argument.trim();
+        if (arg.isEmpty() || arg.equalsIgnoreCase("them") || arg.equalsIgnoreCase("him")
+                || arg.equalsIgnoreCase("her") || arg.equalsIgnoreCase("it")
+                || arg.equalsIgnoreCase("that")) {
+            org.bukkit.util.RayTraceResult hit = player.rayTraceEntities(48);
+            if (hit != null && hit.getHitEntity() != null) {
+                return hit.getHitEntity();
+            }
+            Entity nearest = null;
+            double best = Double.MAX_VALUE;
+            Location at = player.getLocation();
+            for (Entity near : player.getNearbyEntities(16.0D, 8.0D, 16.0D)) {
+                if (!(near instanceof org.bukkit.entity.LivingEntity) || near.isDead()) {
+                    continue;
+                }
+                if (plugin.adapter() != null && plugin.adapter().isNullEntity(near.getUniqueId())) {
+                    continue;
+                }
+                if (near.getUniqueId().equals(player.getUniqueId())) {
+                    continue;
+                }
+                double d = near.getLocation().distanceSquared(at);
+                if (d < best) {
+                    best = d;
+                    nearest = near;
+                }
+            }
+            return nearest;
+        }
+        Player named = Bukkit.getPlayerExact(arg);
+        return named;
+    }
+
+    /**
+     * P-09: destroy.
+     *
+     * <p>Refused unless {@code policy.griefing-enabled} is on, and even then only
+     * after the owner confirms. A refusal is <b>one line in the console</b> - the
+     * army says nothing, because a refusal in chat from a dozen Nulls would be a
+     * shout, not an answer.</p>
+     */
+    private boolean destroyOrder(Player player, redglitchx.nullarmy.core.orders.OrderParser.Order order) {
+        boolean griefing = plugin.pluginConfig() != null && plugin.pluginConfig().griefingEnabled();
+        if (!griefing) {
+            destroyRefusals++;
+            plugin.getLogger().info("[NullArmy] destroy refused: " + player.getName()
+                    + " asked the army to tear down " + (order.argument().isEmpty() ? "the area"
+                    : "'" + order.argument() + "'") + " but policy.griefing-enabled is false.");
+            return true;
+        }
+        String pending = pendingDestroy.get(player.getUniqueId());
+        if (pending == null || !pending.equals(order.argument())) {
+            pendingDestroy.put(player.getUniqueId(), order.argument());
+            player.sendMessage(PREFIX + "Tearing down " + (order.argument().isEmpty() ? "the area"
+                    : "'" + order.argument() + "'") + " will really destroy blocks."
+                    + " Say it again to confirm.");
+            return true;
+        }
+        pendingDestroy.remove(player.getUniqueId());
+        if (plugin.brain() == null || plugin.squads() == null) {
+            return true;
+        }
+        List<NullBody> targets = new ArrayList<>(plugin.squads().membersOf(player.getUniqueId()));
+        if (targets.isEmpty()) {
+            player.sendMessage(PREFIX + "You have no Nulls to order - summon some first.");
+            return true;
+        }
+        Location at = player.getLocation();
+        player.sendMessage(PREFIX + plugin.brain().destroy(targets,
+                new Vec3d(at.getX(), at.getY(), at.getZ()), 2, player.getUniqueId()));
+        naturalOrders++;
+        commanderReply("As you say. It comes down.");
+        return true;
     }
 
     private int triggered;

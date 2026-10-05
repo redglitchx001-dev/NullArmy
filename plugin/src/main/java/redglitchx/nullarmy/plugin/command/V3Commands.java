@@ -14,6 +14,7 @@ import redglitchx.nullarmy.nms.NullBody;
 import redglitchx.nullarmy.plugin.NullArmyPlugin;
 import redglitchx.nullarmy.plugin.body.Mind;
 import redglitchx.nullarmy.plugin.loadout.LoadoutService;
+import redglitchx.nullarmy.plugin.spectacle.WitherCannon;
 import redglitchx.nullarmy.plugin.zone.ZoneService;
 
 import java.util.ArrayList;
@@ -36,7 +37,8 @@ public final class V3Commands {
 
     public static final List<String> SUBCOMMANDS = Arrays.asList("config", "zone", "order");
     public static final List<String> VERBS = Arrays.asList("walk", "run", "sprint", "jump", "stop", "follow",
-            "hold", "gather", "build", "attack", "defend");
+            "hold", "gather", "build", "attack", "defend", "march", "drill", "patrol", "bridge", "salute",
+            "regroup", "hunt");
 
     private final NullArmyPlugin plugin;
 
@@ -54,8 +56,15 @@ public final class V3Commands {
             case "loadout":
             case "reload":
                 return true;
+            case "name":
+            case "cannon":
+                return true;
             case "ai":
-                return args.length >= 2 && (args[1].equalsIgnoreCase("build") || args[1].equalsIgnoreCase("stop"));
+                if (args.length < 2) {
+                    return false;
+                }
+                return args[1].equalsIgnoreCase("build") || args[1].equalsIgnoreCase("stop")
+                        || args[1].equalsIgnoreCase("test") || args[1].equalsIgnoreCase("endpoints");
             default:
                 return false;
         }
@@ -75,8 +84,21 @@ public final class V3Commands {
                 return loadout(sender, args);
             case "reload":
                 return reload(sender);
+            case "name":
+                return name(sender, args);
+            case "cannon":
+                return cannon(sender, args);
             case "ai":
-                return args[1].equalsIgnoreCase("build") ? aiBuild(sender, args) : aiStop(sender);
+                if (args[1].equalsIgnoreCase("build")) {
+                    return aiBuild(sender, args);
+                }
+                if (args[1].equalsIgnoreCase("test")) {
+                    return aiTest(sender, args);
+                }
+                if (args[1].equalsIgnoreCase("endpoints")) {
+                    return aiEndpoints(sender);
+                }
+                return aiStop(sender);
             default:
                 return false;
         }
@@ -355,10 +377,316 @@ public final class V3Commands {
                 say(sender, plugin.brain().order(targets, verb, null, target.getUniqueId(), issuer, 1));
                 return true;
             }
+            case MARCH: {
+                // L-01: march to a point in a locked phalanx, on one cadence.
+                Vec3d point = pointOf(sender, player, rest);
+                if (point == null) {
+                    say(sender, "Where to? 'here' or '<x> <y> <z>'.");
+                    return true;
+                }
+                say(sender, plugin.brain().order(targets, verb, point, null, issuer, 1));
+                return true;
+            }
+            case DRILL: {
+                // L-01: cycle line -> wedge -> phalanx where the squad stands.
+                Vec3d point = rest.length == 0 && player != null ? here(player) : pointOf(sender, player, rest);
+                if (point == null) {
+                    say(sender, "Drill needs a player to stand on, or '<x> <y> <z>'.");
+                    return true;
+                }
+                say(sender, plugin.brain().order(targets, verb, point, null, issuer, 1));
+                return true;
+            }
+            case PATROL: {
+                // L-03: patrol between two points for ever.
+                Vec3d[] points = patrolPoints(player, rest);
+                if (points == null) {
+                    say(sender, "Patrol where? 'patrol here to <x> <y> <z>' or"
+                            + " 'patrol <x1> <y1> <z1> to <x2> <y2> <z2>'.");
+                    return true;
+                }
+                say(sender, plugin.brain().patrol(targets, points[0], points[1], issuer));
+                return true;
+            }
+            case BRIDGE: {
+                // L-02: walk forward, bridging the gaps on the way.
+                if (player == null) {
+                    say(sender, "Bridging needs a player to stand in front of.");
+                    return true;
+                }
+                int blocks = 12;
+                if (rest.length > 0) {
+                    try {
+                        blocks = Math.max(1, Math.min(64, Integer.parseInt(rest[0])));
+                    } catch (NumberFormatException ignored) {
+                        blocks = 12;
+                    }
+                }
+                say(sender, plugin.brain().bridge(targets, ahead(player, blocks), issuer));
+                return true;
+            }
+            case SALUTE: {
+                say(sender, plugin.brain().salute(targets, issuer));
+                return true;
+            }
+            case REGROUP: {
+                // L-07: come back to the owner.
+                say(sender, plugin.brain().order(targets, verb, null, issuer, issuer, 1));
+                return true;
+            }
+            case HUNT: {
+                // L-07: hunt to the end - two chasers, the rest hold the line.
+                Entity target = rest.length > 0 ? Bukkit.getPlayerExact(rest[0]) : null;
+                if (target == null && player != null && rest.length > 0 && rest[0].equalsIgnoreCase("nearest")) {
+                    target = nearestHostile(player);
+                }
+                if (target == null) {
+                    say(sender, "Hunt whom? Name an online player, or 'nearest' for the nearest hostile mob.");
+                    return true;
+                }
+                int chasers = 2;
+                if (rest.length > 1) {
+                    try {
+                        chasers = Math.max(1, Math.min(8, Integer.parseInt(rest[1])));
+                    } catch (NumberFormatException ignored) {
+                        chasers = 2;
+                    }
+                }
+                say(sender, plugin.brain().hunt(targets, target.getUniqueId(), issuer, chasers));
+                return true;
+            }
+            case DESTROY: {
+                // P-09: teardown. Refused here too unless griefing is enabled.
+                if (plugin.pluginConfig() == null || !plugin.pluginConfig().griefingEnabled()) {
+                    say(sender, "Tearing blocks down is off: set policy.griefing-enabled to true"
+                            + " in config.yml first.");
+                    plugin.getLogger().info("[NullArmy] destroy refused for " + sender.getName()
+                            + ": policy.griefing-enabled is false.");
+                    return true;
+                }
+                if (player == null) {
+                    say(sender, "Tearing down needs a player position.");
+                    return true;
+                }
+                int radius = 2;
+                if (rest.length > 0) {
+                    try {
+                        radius = Math.max(1, Math.min(8, Integer.parseInt(rest[0])));
+                    } catch (NumberFormatException ignored) {
+                        radius = 2;
+                    }
+                }
+                say(sender, plugin.brain().destroy(targets, here(player), radius, issuer));
+                return true;
+            }
             default:
                 say(sender, "That order is not available.");
                 return true;
         }
+    }
+
+    // ------------------------------------------------------------------- name
+
+    /**
+     * {@code /null name <new>}: renames the Commander live (P-12).
+     *
+     * <p>The name is the one anybody can call him by in chat, and it is saved
+     * into {@code commander.yml} so it survives a restart.</p>
+     */
+    private boolean name(CommandSender sender, String[] args) {
+        if (!need(sender, "nullarmy.admin")) {
+            return true;
+        }
+        if (args.length < 2) {
+            say(sender, "The Commander is called " + plugin.commander().commanderName()
+                    + ". Usage: /null name <new>");
+            return true;
+        }
+        String wanted = String.join(" ", Arrays.copyOfRange(args, 1, args.length)).trim();
+        if (wanted.isEmpty()) {
+            say(sender, "The Commander needs a name.");
+            return true;
+        }
+        if (wanted.length() > 16) {
+            say(sender, "That name is " + wanted.length() + " characters; a player name is at most 16.");
+            return true;
+        }
+        String answer = plugin.commander().rename(wanted);
+        say(sender, answer);
+        return true;
+    }
+
+    // ----------------------------------------------------------------- cannon
+
+    /** {@code /null cannon aim|fire [shots]|confirm|cancel} (P-08). */
+    private boolean cannon(CommandSender sender, String[] args) {
+        if (!need(sender, "nullarmy.admin")) {
+            return true;
+        }
+        if (plugin.witherCannon() == null) {
+            say(sender, "The cannon is unavailable in this state.");
+            return true;
+        }
+        String what = args.length >= 2 ? args[1].toLowerCase(Locale.ROOT) : "aim";
+        Player player = sender instanceof Player ? (Player) sender : null;
+        switch (what) {
+            case "aim":
+                if (player == null) {
+                    say(sender, "Aiming needs a player: the rod goes into your hand.");
+                    return true;
+                }
+                say(sender, plugin.witherCannon().aim(player));
+                return true;
+            case "fire": {
+                if (player == null) {
+                    say(sender, "Firing needs a player to aim from.");
+                    return true;
+                }
+                int shots = 0;
+                if (args.length >= 3) {
+                    try {
+                        shots = Integer.parseInt(args[2]);
+                    } catch (NumberFormatException notANumber) {
+                        say(sender, "'" + args[2] + "' is not a number of volleys.");
+                        return true;
+                    }
+                }
+                // The confirm step: nothing is created until /null cannon confirm.
+                say(sender, plugin.witherCannon().requestFire(player, shots));
+                return true;
+            }
+            case "confirm": {
+                if (player == null) {
+                    say(sender, "Only a player can fire the cannon.");
+                    return true;
+                }
+                WitherCannon.Result result = plugin.witherCannon().confirm(player);
+                say(sender, result.message());
+                if (!result.fired()) {
+                    say(sender, "The cannon is opt-in: see the wither-cannon: section of config.yml"
+                            + " and policy.explosives-enabled / policy.wither-enabled.");
+                    say(sender, "Note: the blasts destroy no blocks unless you also enable"
+                            + " policy.griefing-enabled and wither-cannon.blocks-damage.");
+                }
+                return true;
+            }
+            case "cancel":
+                if (player == null) {
+                    say(sender, "Only a player can stand the cannon down.");
+                    return true;
+                }
+                say(sender, plugin.witherCannon().cancel(player));
+                return true;
+            default:
+                say(sender, "Usage: /null cannon aim | fire [shots] | confirm | cancel");
+                say(sender, plugin.witherCannon().describeState(player));
+                return true;
+        }
+    }
+
+    // ---------------------------------------------------------------------- ai
+
+    /**
+     * {@code /null ai test [id]}: one real HTTP call against an endpoint,
+     * printing the status code and the model it answered with (P-07).
+     */
+    private boolean aiTest(CommandSender sender, String[] args) {
+        if (!need(sender, "nullarmy.admin")) {
+            return true;
+        }
+        if (plugin.builder() == null) {
+            say(sender, "The builder is not running.");
+            return true;
+        }
+        String id = args.length >= 3 ? args[2] : "";
+        say(sender, "Testing" + (id.isEmpty() ? " the configured builder endpoint" : " endpoint '" + id + "'")
+                + "...");
+        plugin.builder().testEndpoint(id, line -> say(sender, line));
+        return true;
+    }
+
+    /** {@code /null ai endpoints}: every configured endpoint, resolved or not. */
+    private boolean aiEndpoints(CommandSender sender) {
+        if (!need(sender, "nullarmy.admin")) {
+            return true;
+        }
+        if (plugin.builder() == null) {
+            say(sender, "The builder is not running.");
+            return true;
+        }
+        for (String line : plugin.builder().describeEndpoints().split("\n")) {
+            say(sender, line);
+        }
+        return true;
+    }
+
+    /** The player's own feet, as a Vec3d. */
+    private Vec3d here(Player player) {
+        Location at = player.getLocation();
+        return new Vec3d(at.getX(), at.getY(), at.getZ());
+    }
+
+    /** A point {@code blocks} ahead of the player, along where he is looking. */
+    private Vec3d ahead(Player player, int blocks) {
+        Location at = player.getLocation();
+        double yaw = Math.toRadians(at.getYaw());
+        // Minecraft yaw: 0 is south (+Z), and it grows towards west (-X).
+        double dx = -Math.sin(yaw) * blocks;
+        double dz = Math.cos(yaw) * blocks;
+        return new Vec3d(at.getX() + dx, at.getY(), at.getZ() + dz);
+    }
+
+    /** Resolves an order point: 'here' or '<x> <y> <z>' or a player name. */
+    private Vec3d pointOf(CommandSender sender, Player player, String[] rest) {
+        Object where = place(sender, rest);
+        if (where instanceof Entity) {
+            Location at = ((Entity) where).getLocation();
+            return new Vec3d(at.getX(), at.getY(), at.getZ());
+        }
+        if (where instanceof Vec3d) {
+            return (Vec3d) where;
+        }
+        return player == null ? null : here(player);
+    }
+
+    /** Two patrol points from 'here to <x> <y> <z>' or '<a> to <b>'. */
+    private Vec3d[] patrolPoints(Player player, String[] rest) {
+        if (player == null || rest.length == 0) {
+            return null;
+        }
+        int split = -1;
+        for (int i = 0; i < rest.length; i++) {
+            if (rest[i].equalsIgnoreCase("to")) {
+                split = i;
+                break;
+            }
+        }
+        Vec3d a = here(player);
+        Vec3d b = null;
+        if (split < 0) {
+            b = ahead(player, 16);
+        } else {
+            String[] first = Arrays.copyOfRange(rest, 0, split);
+            String[] second = Arrays.copyOfRange(rest, split + 1, rest.length);
+            Object pointA = place(player, first);
+            Object pointB = place(player, second);
+            if (pointA instanceof Entity) {
+                Location at = ((Entity) pointA).getLocation();
+                a = new Vec3d(at.getX(), at.getY(), at.getZ());
+            } else if (pointA instanceof Vec3d) {
+                a = (Vec3d) pointA;
+            }
+            if (pointB instanceof Entity) {
+                Location at = ((Entity) pointB).getLocation();
+                b = new Vec3d(at.getX(), at.getY(), at.getZ());
+            } else if (pointB instanceof Vec3d) {
+                b = (Vec3d) pointB;
+            }
+        }
+        if (b == null) {
+            return null;
+        }
+        return new Vec3d[] {a, b};
     }
 
     private Entity nearestHostile(Player player) {

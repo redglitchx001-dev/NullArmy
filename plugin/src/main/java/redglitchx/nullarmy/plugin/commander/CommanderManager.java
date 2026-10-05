@@ -31,6 +31,7 @@ import redglitchx.nullarmy.plugin.util.PluginText;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.UUID;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Level;
@@ -68,6 +69,8 @@ public final class CommanderManager implements Listener, Reloadable {
     private NullBody commander;
     private SkinData skin;
     private String name = DEFAULT_NAME;
+    /** P-04/P-09/P-12: the one player the Commander obeys. */
+    private UUID ownerId;
 
     public CommanderManager(NullArmyPlugin plugin, SkinResolver skins) {
         this.plugin = plugin;
@@ -147,6 +150,62 @@ public final class CommanderManager implements Listener, Reloadable {
 
     public SkinData skin() { return skin; }
     public String commanderName() { return name; }
+
+    /**
+     * P-12: renames the Commander live.
+     *
+     * <p>Everybody may talk to him by name; only the owner is obeyed. The name
+     * is written back into {@code config.yml} so the rename survives a restart,
+     * and it takes effect for chat addressing immediately.</p>
+     */
+    public String rename(String wanted) {
+        String clean = wanted == null ? "" : wanted.replaceAll("[^A-Za-z0-9_]", "");
+        if (clean.isEmpty()) {
+            return "That name has no letters or numbers a Minecraft name can hold.";
+        }
+        if (clean.length() > 16) {
+            clean = clean.substring(0, 16);
+        }
+        String previous = name;
+        if (clean.equalsIgnoreCase(previous)) {
+            return "The Commander is already called " + clean + ".";
+        }
+        name = clean;
+        try {
+            plugin.getConfig().set("commander.name", clean);
+            plugin.saveConfig();
+        } catch (Throwable t) {
+            plugin.getLogger().warning("[NullArmy] commander.name could not be written to config.yml: "
+                    + Guard.describe(t));
+        }
+        plugin.getLogger().info("[NullArmy] the Commander is now called " + clean + " (was " + previous + ")");
+        // Also recorded in commander.yml, so a bare save never resurrects the old name.
+        try {
+            File folder = plugin.getDataFolder();
+            if (folder != null && (folder.isDirectory() || folder.mkdirs())) {
+                File file = new File(folder, FILE_NAME);
+                org.bukkit.configuration.file.YamlConfiguration yaml =
+                        org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(file);
+                yaml.set("name", clean);
+                yaml.save(file);
+            }
+        } catch (Throwable t) {
+            plugin.getLogger().fine("[NullArmy] commander.yml name note skipped: " + Guard.describe(t));
+        }
+        if (plugin.chatGate() != null) {
+            plugin.chatGate().event("commander.renamed", "from", previous, "to", clean);
+        }
+        return "The Commander answers to " + clean + " now" + (commander == null ? "." : ". His name tag"
+                + " changes the next time he is summoned.");
+    }
+
+    /** P-04: the player the Commander obeys, or null before he is summoned. */
+    public UUID owner() { return ownerId; }
+
+    /** True when this player is the one the Commander obeys. */
+    public boolean isOwner(Player player) {
+        return player != null && ownerId != null && ownerId.equals(player.getUniqueId());
+    }
     public ItemStack[] loadout() { return loadout; }
 
     /** The live Commander body, or null when it is not here. */
@@ -216,6 +275,7 @@ public final class CommanderManager implements Listener, Reloadable {
         if (owner == null) {
             return false;
         }
+        ownerId = owner.getUniqueId();
         // Creating an NPC is main-thread work only (spec 2.4); refuse politely
         // rather than corrupting the world from another thread.
         if (!Bukkit.isPrimaryThread()) {

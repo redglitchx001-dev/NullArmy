@@ -182,6 +182,149 @@ public final class BuilderService implements Reloadable {
         return start(owner, world, standAt, yaw, goal, report, null, null, null);
     }
 
+    /**
+     * P-07: resolves {@code ai.builder.endpoint}.
+     *
+     * <p>Two spellings are accepted:</p>
+     * <ul>
+     *   <li>a plain base URL - any OpenAI-compatible server
+     *       ({@code http://localhost:1234/v1}, {@code https://openrouter.ai/api/v1}, ...);</li>
+     *   <li><code>id:&lt;name&gt;</code> - a named endpoint from the
+     *       {@code ai.endpoints} map, which also supplies its model and key.</li>
+     * </ul>
+     *
+     * @return the resolved triple (endpoint, model, key); the key is never a
+     *     literal - either it is an {@code env:NAME} reference or empty
+     */
+    public Endpoint resolveEndpoint() {
+        String configured = v3 == null ? "" : v3.builderEndpoint();
+        return resolve(configured);
+    }
+
+    /** Resolves one configured endpoint string. Never throws, never returns null. */
+    public Endpoint resolve(String configured) {
+        String spec = configured == null ? "" : configured.trim();
+        if (spec.isEmpty()) {
+            return new Endpoint("", v3 == null ? "" : v3.builderModel(), v3 == null ? "" : v3.builderApiKey(), "");
+        }
+        if (spec.toLowerCase(Locale.ROOT).startsWith("id:")) {
+            String id = spec.substring(3).trim();
+            redglitchx.nullarmy.core.agent.EndpointConfig ep =
+                    plugin.pluginConfig() == null ? null : plugin.pluginConfig().endpoints().get(id);
+            if (ep == null) {
+                return new Endpoint("", "", "", "unknown endpoint id '" + id + "'");
+            }
+            return new Endpoint(ep.baseUrl(), ep.modelId(), ep.resolveApiKey(), ep.id());
+        }
+        return new Endpoint(spec, v3 == null ? "" : v3.builderModel(), v3 == null ? "" : v3.builderApiKey(), "");
+    }
+
+    /** A resolved endpoint: where to POST, which model, which key, and where it came from. */
+    public static final class Endpoint {
+        private final String url;
+        private final String model;
+        private final String key;
+        private final String id;
+
+        Endpoint(String url, String model, String key, String id) {
+            this.url = url == null ? "" : url;
+            this.model = model == null ? "" : model;
+            this.key = key == null ? "" : key;
+            this.id = id == null ? "" : id;
+        }
+
+        public String url() { return url; }
+        public String model() { return model; }
+        public String key() { return key; }
+        public String id() { return id; }
+        public boolean usable() { return !url.isEmpty(); }
+    }
+
+    /**
+     * P-07: {@code /null ai test [id]} - one real HTTP call, and the honest
+     * answer printed: the HTTP status and the model that answered.
+     */
+    public void testEndpoint(String id, Consumer<String> report) {
+        Endpoint endpoint = id == null || id.isEmpty() ? resolveEndpoint() : resolve("id:" + id);
+        if (!endpoint.usable()) {
+            report.accept(id == null || id.isEmpty()
+                    ? "No endpoint is configured: set ai.builder.endpoint to a base URL or id:<name>."
+                    : "No endpoint with the id '" + id + "' is configured.");
+            return;
+        }
+        String url = endpoint.url().endsWith("/chat/completions") ? endpoint.url()
+                : endpoint.url().replaceAll("/+$", "") + "/chat/completions";
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("role", "user");
+        message.put("content", "Reply with the single word: ready");
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("model", endpoint.model().isEmpty() ? "default" : endpoint.model());
+        body.put("max_tokens", 8);
+        body.put("messages", List.of(message));
+        long startedAt = System.currentTimeMillis();
+        try {
+            HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url))
+                    .timeout(Duration.ofMillis(v3 == null ? 20000 : v3.builderTimeoutMs()))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(Json.write(body)));
+            if (!endpoint.key().isEmpty()) {
+                request.header("Authorization", "Bearer " + endpoint.key());
+            }
+            http.sendAsync(request.build(), HttpResponse.BodyHandlers.ofString()).whenComplete((response, error) -> {
+                long millis = System.currentTimeMillis() - startedAt;
+                String line;
+                if (error != null) {
+                    line = "endpoint " + url + " -> request failed: " + Guard.describe(error);
+                } else {
+                    String model = contentModel(response.body());
+                    line = "endpoint " + url + " -> HTTP " + response.statusCode()
+                            + ", model " + (model.isEmpty() ? "(none reported)" : model)
+                            + " in " + millis + "ms";
+                }
+                Bukkit.getScheduler().runTask(plugin, () -> Guard.attempt(plugin.getLogger(),
+                        "reporting an endpoint test", () -> report.accept(line)));
+            });
+        } catch (Throwable t) {
+            report.accept("endpoint " + url + " -> the request could not be sent: " + Guard.describe(t));
+        }
+    }
+
+    /** {@code /null ai endpoints}: every configured endpoint and what resolves. */
+    public String describeEndpoints() {
+        StringBuilder out = new StringBuilder();
+        out.append("builder endpoint: ");
+        String configured = v3 == null ? "" : v3.builderEndpoint();
+        out.append(configured.isEmpty() ? "(none - the offline planner is used)" : configured);
+        Endpoint resolved = resolveEndpoint();
+        out.append("\n  resolved: ").append(resolved.usable() ? resolved.url() : "(nothing to resolve)")
+                .append(" model ").append(resolved.model().isEmpty() ? "(default)" : resolved.model());
+        Map<String, redglitchx.nullarmy.core.agent.EndpointConfig> known =
+                plugin.pluginConfig() == null ? Map.of() : plugin.pluginConfig().endpoints();
+        if (known.isEmpty()) {
+            out.append("\n  ai.endpoints: none configured");
+            return out.toString();
+        }
+        out.append("\n  ai.endpoints:");
+        for (redglitchx.nullarmy.core.agent.EndpointConfig ep : known.values()) {
+            out.append("\n    ").append(ep.id()).append(" -> ").append(ep.baseUrl())
+                    .append(" model ").append(ep.modelId())
+                    .append(ep.enabled() ? "" : " (disabled)")
+                    .append(ep.hasInlineKey() ? " WARNING: inline API key" : "");
+        }
+        return out.toString();
+    }
+
+    /** The model name an OpenAI-style reply reports, or empty. */
+    private static String contentModel(String body) {
+        try {
+            Map<String, Object> root = Json.asObject(Json.parse(body, 1024 * 1024));
+            Object model = root.get("model");
+            return model instanceof String ? (String) model : "";
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
     /** As {@link #start}, with an explicit endpoint (the self test's local stub). */
     public String start(UUID owner, String world, Vec3d standAt, float yaw, String goal, Consumer<String> report,
                         String endpointOverride, String modelOverride, String keyOverride) {
@@ -204,9 +347,11 @@ public final class BuilderService implements Reloadable {
         final ZoneService.Record useZone = zone;
         int facing = facingOf(yaw);
         int[] anchor = relative(useZone, standAt);
-        String endpoint = endpointOverride != null ? endpointOverride : (v3 == null ? "" : v3.builderEndpoint());
-        String model = modelOverride != null ? modelOverride : (v3 == null ? "" : v3.builderModel());
-        String key = keyOverride != null ? keyOverride : (v3 == null ? "" : v3.builderApiKey());
+        Endpoint resolved = endpointOverride != null ? new Endpoint(endpointOverride, modelOverride, keyOverride, "")
+                : resolveEndpoint();
+        String endpoint = resolved.url();
+        String model = resolved.model();
+        String key = resolved.key();
         Map<String, Integer> stock = stock(bodies);
         if (endpoint.isEmpty()) {
             Job job = fallback(owner, world, useZone, goal, anchor, facing, stock, "no ai.builder.endpoint configured");
