@@ -1384,10 +1384,19 @@ final class SelfTestV3 {
         try {
             Vec3d a = at(-24, 24);
             prepare(a, 24);
-            SquadManager.Squad s = plugin.squads().spawnSquadAt(owner("b17"), worldName,
-                    List.of(a, ground(a.x() + 2.2D, a.z())));
+            /*
+             * v4 (P-05): the two sparring partners belong to DIFFERENT owners on
+             * purpose. Every Null of one owner shares a scoreboard team with
+             * friendly fire off, so two squad mates can no longer hurt each
+             * other - which is exactly what S-93 asserts. B-17 measures vanilla
+             * combat maths (crit x1.5, shield blocking), not squad-on-squad
+             * damage, so its two bodies are two different armies instead.
+             */
+            SquadManager.Squad s = plugin.squads().spawnSquadAt(owner("b17"), worldName, List.of(a));
+            SquadManager.Squad other = plugin.squads().spawnSquadAt(owner("b17b"), worldName,
+                    List.of(ground(a.x() + 2.2D, a.z())));
             one = s.members().get(0);
-            two = s.members().get(1);
+            two = other.members().get(0);
             Player attacker = handle(one);
             attacker.getInventory().setItemInMainHand(new ItemStack(Material.NETHERITE_SWORD));
             attacker.getInventory().setHeldItemSlot(attacker.getInventory().getHeldItemSlot());

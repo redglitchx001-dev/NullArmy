@@ -1052,7 +1052,7 @@ public final class NullBrain implements Reloadable {
             Location bodyAt = Bodies.location(body);
             if (bodyAt != null && bodyAt.getWorld() == at.getWorld() && bodyAt.distanceSquared(at) < 16.0D * 16.0D) {
                 Mind mind = mind(body);
-                if (mind != null && mind.combatTarget == null) {
+                if (mind != null && mind.combatTarget == null && mayTarget(body, attacker)) {
                     startFight(body, mind, attacker);
                 }
             }
@@ -1060,6 +1060,9 @@ public final class NullBrain implements Reloadable {
     }
 
     private void startFight(NullBody body, Mind mind, LivingEntity attacker) {
+        if (!mayTarget(body, attacker)) {
+            return;
+        }
         if (mind.combatTarget == null || !mind.combatTarget.equals(attacker.getUniqueId())) {
             mind.combatTarget = attacker.getUniqueId();
             if (plugin.chatGate() != null) {
@@ -1067,6 +1070,87 @@ public final class NullBrain implements Reloadable {
             }
         }
         mind.combatUntil = now + 20L * 30L;
+    }
+
+    /**
+     * The one rule that decides whether a Null may ever fight something.
+     *
+     * <p><b>P-04.</b> The totem/horn holder is the sole commander and the army
+     * never turns on him: not in retaliation, not by order, not because he is
+     * the nearest target, not with a bow. Squad mates and the Commander are
+     * exempt too, and so is anyone on {@code policy.protected}. Every path that
+     * sets a combat target - retaliation, the "nearest hostile" scan, a chat
+     * order, {@code /null order attack} - goes through this method.</p>
+     *
+     * @param attacker the Null that would be doing the fighting (a real player
+     *                 passes too, so the same rule can be asked about an order)
+     * @param target   what it would fight
+     */
+    public boolean mayTarget(Entity attacker, Entity target) {
+        return mayTarget(attacker, target, null);
+    }
+
+    /**
+     * As {@link #mayTarget(Entity, Entity)}, for the case where the squad of a
+     * Null body is already known.
+     */
+    public boolean mayTarget(NullBody body, Entity target) {
+        return mayTarget(body == null ? null : Bodies.player(body), target, body);
+    }
+
+    private boolean mayTarget(Entity attacker, Entity target, NullBody body) {
+        if (target == null || target.isDead() || attacker == null) {
+            return false;
+        }
+        UUID id = target.getUniqueId();
+        if (attacker.getUniqueId().equals(id)) {
+            return false; // nobody fights itself
+        }
+        if (plugin.adapter() == null) {
+            return false;
+        }
+        NullBody self = body != null ? body : (isNullEntity(attacker) ? plugin.adapter().bodyOf(attacker.getUniqueId()) : null);
+
+        // 1. Never the Commander.
+        if (plugin.commander() != null && plugin.commander().body() != null
+                && id.equals(plugin.commander().body().uuid())) {
+            return false;
+        }
+        String name = target.getName();
+        if (plugin.commander() != null && plugin.commander().commanderName() != null
+                && plugin.commander().commanderName().equalsIgnoreCase(name)) {
+            return false;
+        }
+        // 2. Never a squad mate: another Null with the same owner.
+        if (isNullEntity(target)) {
+            NullBody other = plugin.adapter().bodyOf(id);
+            if (self != null && other != null) {
+                UUID mine = plugin.squads() == null ? null : plugin.squads().ownerOf(self);
+                UUID theirs = plugin.squads() == null ? null : plugin.squads().ownerOf(other);
+                if (mine != null && mine.equals(theirs)) {
+                    return false;
+                }
+            }
+        }
+        // 3. Never the owner. A Null is the owner's; it does not hit back at him.
+        if (isNullEntity(attacker) && plugin.squads() != null) {
+            NullBody attackerBody = self;
+            if (attackerBody != null) {
+                UUID owner = plugin.squads().ownerOf(attackerBody);
+                if (owner != null && owner.equals(id)) {
+                    return false;
+                }
+            }
+        }
+        // 4. Never anyone the owner protected.
+        if (v3 != null && v3.isProtected(name, id)) {
+            return false;
+        }
+        return true;
+    }
+
+    private boolean isNullEntity(Entity entity) {
+        return entity != null && plugin.adapter() != null && plugin.adapter().isNullEntity(entity.getUniqueId());
     }
 
     private boolean sameOwner(NullBody a, NullBody b) {

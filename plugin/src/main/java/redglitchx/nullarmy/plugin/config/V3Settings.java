@@ -6,8 +6,12 @@ import redglitchx.nullarmy.core.formation.FormationMatrix;
 import redglitchx.nullarmy.core.zone.SummonZone;
 import redglitchx.nullarmy.nms.BodySettings;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.logging.Logger;
 
 /**
@@ -70,6 +74,30 @@ public final class V3Settings {
     // chat
     private final boolean commanderPublicReplies;
     private final boolean commanderNameTrigger;
+    private final String mentionPrefix;
+    private final boolean silenceUnits;
+    private final List<String> protectedNames;
+
+    // v4: names, combat feel, drops, server list, behaviour
+    private final String namesStyle;
+    private final double meleeReach;
+    private final float attackThreshold;
+    private final int critEverySwings;
+    private final double aimSkill;
+    private final boolean dropsEnabled;
+    /** Self-test only: forces the drops decision so both halves can be measured. */
+    private volatile Boolean dropsOverride;
+    private final double dropsChance;
+    private final boolean motdShowArmy;
+    private final int motdMaxPlayers;
+    private final String motdFormat;
+    private final boolean marchCadence;
+    private final boolean autoBridge;
+    private final boolean campLife;
+    private final int marchPeriodTicks;
+    private final int drillHoldTicks;
+    private final int saluteRange;
+    private final int huntChasers;
 
     // AI builder
     private final boolean builderEnabled;
@@ -137,6 +165,35 @@ public final class V3Settings {
 
         this.commanderPublicReplies = config.getBoolean("chat.commander-public-replies", true);
         this.commanderNameTrigger = config.getBoolean("chat.commander-name-trigger", true);
+        this.mentionPrefix = trimmed(config.getString("chat.mention-prefix", "@"));
+        this.silenceUnits = config.getBoolean("chat.silence-units", true);
+        this.protectedNames = readProtected(config);
+
+        String style = trimmed(config.getString("names.style", "words")).toLowerCase(Locale.ROOT);
+        this.namesStyle = "codes".equals(style) ? "codes" : "words";
+        this.meleeReach = clampD(config.getDouble("combat.melee-reach", 3.0D), 0.5D, 3.0D);
+        this.attackThreshold = (float) clampD(config.getDouble("combat.attack-threshold", 0.55D), 0.1D, 1.0D);
+        this.critEverySwings = clamp(config.getInt("combat.crit-every-swings", 2), 1, 5,
+                "combat.crit-every-swings", logger);
+        this.aimSkill = clampD(config.getDouble("combat.aim-skill", 0.65D), 0.0D, 1.0D);
+        this.dropsEnabled = config.getBoolean("drops.enabled", true);
+        this.dropsChance = clampD(config.getDouble("drops.chance", 1.0D), 0.0D, 1.0D);
+        this.motdShowArmy = config.getBoolean("motd.show-army", true);
+        this.motdMaxPlayers = clamp(config.getInt("motd.max-players", 2026), 1, 100000,
+                "motd.max-players", logger);
+        String format = config.getString("motd.format", "NULL ARMY - {nulls} strong");
+        this.motdFormat = format == null ? "" : format;
+        this.marchCadence = config.getBoolean("behaviour.march-cadence", true);
+        this.autoBridge = config.getBoolean("behaviour.auto-bridge", true);
+        this.campLife = config.getBoolean("behaviour.camp-life", true);
+        this.marchPeriodTicks = clamp(config.getInt("behaviour.march-period-ticks", 8), 2, 40,
+                "behaviour.march-period-ticks", logger);
+        this.drillHoldTicks = clamp(config.getInt("behaviour.drill-hold-ticks", 80), 20, 1200,
+                "behaviour.drill-hold-ticks", logger);
+        this.saluteRange = clamp(config.getInt("behaviour.salute-range", 8), 1, 32,
+                "behaviour.salute-range", logger);
+        this.huntChasers = clamp(config.getInt("behaviour.hunt-chasers", 2), 1, 8,
+                "behaviour.hunt-chasers", logger);
 
         this.builderEnabled = config.getBoolean("ai.builder.enabled", true);
         this.builderEndpoint = trimmed(config.getString("ai.builder.endpoint", ""));
@@ -173,6 +230,17 @@ public final class V3Settings {
 
     private static String trimmed(String s) {
         return s == null ? "" : s.trim();
+    }
+
+    /** {@code policy.protected}: names or UUIDs the army may never be ordered to hunt. */
+    private static List<String> readProtected(FileConfiguration config) {
+        List<String> out = new ArrayList<>();
+        for (String raw : config.getStringList("policy.protected")) {
+            if (raw != null && !raw.trim().isEmpty()) {
+                out.add(raw.trim().toLowerCase(Locale.ROOT));
+            }
+        }
+        return out;
     }
 
     private static int clamp(int value, int min, int max, String key, Logger logger) {
@@ -237,6 +305,41 @@ public final class V3Settings {
 
     public boolean commanderPublicReplies() { return commanderPublicReplies; }
     public boolean commanderNameTrigger() { return commanderNameTrigger; }
+    public String mentionPrefix() { return mentionPrefix.isEmpty() ? "@" : mentionPrefix; }
+    public boolean silenceUnits() { return silenceUnits; }
+    public List<String> protectedNames() { return protectedNames; }
+
+    /** True when a name or UUID is on {@code policy.protected}. */
+    public boolean isProtected(String name, UUID id) {
+        if (protectedNames.isEmpty()) {
+            return false;
+        }
+        if (name != null && protectedNames.contains(name.toLowerCase(Locale.ROOT))) {
+            return true;
+        }
+        return id != null && protectedNames.contains(id.toString().toLowerCase(Locale.ROOT));
+    }
+
+    public String namesStyle() { return namesStyle; }
+    public boolean readableNames() { return "words".equals(namesStyle); }
+    public double meleeReach() { return meleeReach; }
+    public float attackThreshold() { return attackThreshold; }
+    public int critEverySwings() { return critEverySwings; }
+    public double aimSkill() { return aimSkill; }
+    public boolean dropsEnabled() { return dropsOverride == null ? dropsEnabled : dropsOverride; }
+    /** Self-test only: null restores the configured value. */
+    public void setDropsOverride(Boolean override) { this.dropsOverride = override; }
+    public double dropsChance() { return dropsChance; }
+    public boolean motdShowArmy() { return motdShowArmy; }
+    public int motdMaxPlayers() { return motdMaxPlayers; }
+    public String motdFormat() { return motdFormat; }
+    public boolean marchCadence() { return marchCadence; }
+    public boolean autoBridge() { return autoBridge; }
+    public boolean campLife() { return campLife; }
+    public int marchPeriodTicks() { return marchPeriodTicks; }
+    public int drillHoldTicks() { return drillHoldTicks; }
+    public int saluteRange() { return saluteRange; }
+    public int huntChasers() { return huntChasers; }
 
     public boolean builderEnabled() { return builderEnabled; }
     public String builderEndpoint() { return builderEndpoint; }
@@ -278,6 +381,21 @@ public final class V3Settings {
         out.put("ai.builder.max-steps", builderMaxSteps);
         out.put("ai.builder.place-rate-ticks", builderPlaceRateTicks);
         out.put("ai.builder.gather-outside-zone", builderGatherOutsideZone);
+        out.put("names.style", namesStyle);
+        out.put("combat.melee-reach", meleeReach);
+        out.put("combat.attack-threshold", attackThreshold);
+        out.put("combat.aim-skill", aimSkill);
+        out.put("chat.mention-prefix", mentionPrefix.isEmpty() ? "@" : mentionPrefix);
+        out.put("chat.silence-units", silenceUnits);
+        out.put("policy.protected", protectedNames.isEmpty() ? "(none)" : String.join(", ", protectedNames));
+        out.put("drops.enabled", dropsEnabled);
+        out.put("drops.chance", dropsChance);
+        out.put("motd.show-army", motdShowArmy);
+        out.put("motd.max-players", motdMaxPlayers);
+        out.put("motd.format", motdFormat.isEmpty() ? "(unset)" : motdFormat);
+        out.put("behaviour.march-cadence", marchCadence);
+        out.put("behaviour.auto-bridge", autoBridge);
+        out.put("behaviour.camp-life", campLife);
         return out;
     }
 }

@@ -79,6 +79,11 @@ public final class Mind {
     boolean critJumped;
     long critJumpTick;
     long bowDrawStart = -1L;
+    /** P-05 aim: when the shot may be loosed, and how wrong this one is. */
+    long aimReadyTick = -1L;
+    boolean aimMiss;
+    double aimYawError;
+    double aimPitchError;
     long nextAttackTick;
     boolean shieldUp;
 

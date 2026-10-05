@@ -13,12 +13,14 @@ import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityShootBowEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.event.player.PlayerAdvancementDoneEvent;
 import org.bukkit.event.player.PlayerItemConsumeEvent;
 import org.bukkit.inventory.ItemStack;
 
 import net.kyori.adventure.text.Component;
 
+import redglitchx.nullarmy.core.drops.DeathDrops;
 import redglitchx.nullarmy.nms.NullBody;
 import redglitchx.nullarmy.plugin.NullArmyPlugin;
 import redglitchx.nullarmy.plugin.config.V3Settings;
@@ -130,11 +132,18 @@ public final class NullLifecycleListener implements Listener {
             event.deathMessage(null);
             event.setShowDeathMessages(false);
             V3Settings s = settings();
-            if (s == null || s.noDeathDrops()) {
+            // v4 (P-10): a defeated Null leaves its kit on the ground, like a
+            // player. drops.enabled is the master switch; the pre-v4
+            // nulls.no-death-drops still wins when it is explicitly on, so a
+            // server that already answered "no" is not overridden by an update.
+            boolean drop = s == null || DeathDrops.enabled(s.dropsEnabled(), s.noDeathDrops());
+            if (!drop) {
                 event.getDrops().clear();
                 event.setDroppedExp(0);
                 event.setShouldDropExperience(false);
                 event.setKeepInventory(false);
+            } else {
+                equipDrops(body, event.getDrops(), s == null ? 1.0D : s.dropsChance());
             }
             if (plugin.chatGate() != null) {
                 plugin.chatGate().vanillaSilenced();
@@ -179,6 +188,98 @@ public final class NullLifecycleListener implements Listener {
     }
 
     // ----------------------------------------------------------------- damage
+
+    /**
+     * Puts a defeated Null's equipment on the ground.
+     *
+     * <p>Whatever the server already put in {@code drops} is kept; the armour,
+     * both hands and the inventory that are missing are added, so the loot is
+     * complete whichever half of the drop list the server version fills in.
+     * {@code chance} is the share of the kit that survives.</p>
+     */
+    private void equipDrops(Player body, List<ItemStack> drops, double chance) {
+        try {
+            java.util.Set<String> present = new java.util.HashSet<>();
+            for (ItemStack already : drops) {
+                if (already != null && already.getType() != Material.AIR) {
+                    present.add(already.getType().name());
+                }
+            }
+            PlayerInventory inv = body.getInventory();
+            java.util.Random random = new java.util.Random(body.getUniqueId().getLeastSignificantBits()
+                    ^ plugin.currentTick());
+            for (int slot = 0; slot < 41; slot++) {
+                ItemStack stack = inv.getItem(slot);
+                if (stack == null || stack.getType() == Material.AIR || stack.getAmount() <= 0) {
+                    continue;
+                }
+                if (!DeathDrops.shouldDrop(true, chance, random.nextDouble())) {
+                    continue;
+                }
+                if (present.contains(stack.getType().name())) {
+                    continue;
+                }
+                present.add(stack.getType().name());
+                drops.add(stack.clone());
+            }
+            dropsCleared++;
+            lastDropCount = drops.size();
+        } catch (Throwable t) {
+            plugin.getLogger().fine("[NullArmy] could not equip the drops: " + Guard.describe(t));
+        }
+    }
+
+    /**
+     * Friendly fire, cancelled at the lowest priority so nothing else sees it.
+     *
+     * <p><b>P-04 / P-05.</b> The owner's own arrows and swings used to land on
+     * his own Nulls, and a Null hit by its owner hit back. The squads share a
+     * scoreboard team with friendly fire off (see {@code SquadManager}), and
+     * this is the belt-and-braces half: no Null may ever damage its owner, the
+     * Commander, a squad mate, or anyone on {@code policy.protected} - not with
+     * a sword, not with an arrow, not in retaliation.</p>
+     */
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
+    public void onFriendlyFire(EntityDamageByEntityEvent event) {
+        Entity victimEntity = event.getEntity();
+        Entity raw = event.getDamager();
+        if (raw == null || victimEntity == null) {
+            return;
+        }
+        Entity attacker = raw;
+        if (attacker instanceof Projectile && ((Projectile) attacker).getShooter() instanceof Entity) {
+            attacker = (Entity) ((Projectile) attacker).getShooter();
+        }
+        if (!(attacker instanceof LivingEntity)) {
+            return;
+        }
+        if (!isNull(attacker) && !isNull(victimEntity)) {
+            return; // two real players: server PvP rules decide, not us
+        }
+        boolean blocked;
+        try {
+            blocked = !plugin.brain().mayTarget(attacker, victimEntity);
+        } catch (Throwable t) {
+            blocked = false;
+        }
+        if (blocked) {
+            event.setCancelled(true);
+            friendlyFireBlocked++;
+        }
+    }
+
+    /** How many squad-on-squad, owner or Commander hits were cancelled (P-04/P-05). */
+    public int friendlyFireBlocked() { return friendlyFireBlocked; }
+
+    /** How many Null deaths dropped a kit (P-10). */
+    public int dropsCleared() { return dropsCleared; }
+
+    /** Items in the last death's drop list (P-10). */
+    public int lastDropCount() { return lastDropCount; }
+
+    private volatile int friendlyFireBlocked;
+    private volatile int dropsCleared;
+    private volatile int lastDropCount;
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onDamage(EntityDamageEvent event) {

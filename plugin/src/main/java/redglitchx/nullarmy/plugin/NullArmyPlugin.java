@@ -157,6 +157,9 @@ public final class NullArmyPlugin extends JavaPlugin {
         // 1. Data folder + config, before anything reads a setting.
         final File configFile = ConfigBootstrap.prepare(this);
         this.pluginConfig = buildConfig();
+        if (this.pluginConfig != null) {
+            NameGenerator.setStyle(this.pluginConfig.v3().namesStyle());
+        }
 
         // 2. Version adapter. Without one there is no entity layer at all, so
         //    this is the only condition that stops NullArmy from enabling.
@@ -602,6 +605,7 @@ public final class NullArmyPlugin extends JavaPlugin {
                 return false;
             }
             this.pluginConfig = fresh;
+            NameGenerator.setStyle(fresh.v3().namesStyle());
             Caps caps = fresh.caps();
             this.pathBudget = new TickBudget("paths", caps.concurrentPathSearches());
             this.blockInspectionBudget = new TickBudget("blockInspections", caps.blockInspectionsPerTick());
