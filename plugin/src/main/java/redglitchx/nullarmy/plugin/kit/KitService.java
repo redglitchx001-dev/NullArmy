@@ -236,6 +236,7 @@ public final class KitService implements Reloadable {
             }
             loadout[item.slot()] = stack;
         }
+        installBossKit(loadout);
         try {
             commander.save();
         } catch (Throwable t) {
@@ -244,7 +245,117 @@ public final class KitService implements Reloadable {
             return false;
         }
         plugin.getLogger().info("[NullArmy] no Commander loadout was saved, so the default kit ("
-                + describe() + ") was installed into commander.yml.");
+                + describe() + ") plus the Commander's boss kit was installed into commander.yml.");
         return true;
+    }
+
+    // ------------------------------------------------------------------ P-06
+
+    /**
+     * The Commander's boss kit (P-06).
+     *
+     * <p>An ordinary Null is a soldier: netherite armour, tools, blocks, potions
+     * and food - the normal kit, unchanged. The Commander is the boss, and it is
+     * the one body that carries the toys: a mace, an elytra, two totems of
+     * undying, four enchanted golden apples, wind charges, fireworks and a
+     * netherite sword.</p>
+     *
+     * <p>The slot in these entries is a placeholder: the items are placed into
+     * the first free slots, so nothing already carried is ever displaced.</p>
+     *
+     * <p>Nothing already in a slot is replaced - whatever the owner left there
+     * (a book, a renamed item) stays - and this only ever runs on a fresh
+     * install, so a saved {@code commander.yml} is never overwritten.</p>
+     */
+    public static final List<DefaultKit.Item> BOSS_KIT = List.of(
+            new DefaultKit.Item(0, "MACE", 1),
+            new DefaultKit.Item(0, "ELYTRA", 1),
+            new DefaultKit.Item(0, "TOTEM_OF_UNDYING", 2),
+            new DefaultKit.Item(0, "ENCHANTED_GOLDEN_APPLE", 4),
+            new DefaultKit.Item(0, "WIND_CHARGE", 16),
+            new DefaultKit.Item(0, "FIREWORK_ROCKET", 32),
+            new DefaultKit.Item(0, "NETHERITE_SWORD", 1));
+
+    /** The boss kit materials, for checks and /null status. */
+    public static List<String> bossKitMaterials() {
+        List<String> out = new ArrayList<>();
+        for (DefaultKit.Item item : BOSS_KIT) {
+            out.add(item.material());
+        }
+        return out;
+    }
+
+    /**
+     * Adds the boss kit to a loadout in free slots.
+     *
+     * @return how many of the boss items are now present
+     */
+    public int installBossKit(ItemStack[] loadout) {
+        if (loadout == null) {
+            return 0;
+        }
+        int added = 0;
+        for (int i = 0; i < loadout.length; i++) {
+            ItemStack existing = loadout[i];
+            if (existing != null && existing.getType() != org.bukkit.Material.AIR
+                    && existing.getType().name().equals("ENCHANTED_GOLDEN_APPLE")
+                    && existing.getAmount() < 4) {
+                // The ordinary kit carries one; the Commander carries four.
+                existing.setAmount(4);
+            }
+        }
+        for (DefaultKit.Item item : BOSS_KIT) {
+            if (present(loadout, item.material())) {
+                added++;
+                continue;
+            }
+            int slot = freeSlot(loadout);
+            if (slot < 0) {
+                plugin.getLogger().fine("[NullArmy] the Commander's inventory is full - '"
+                        + item.material() + "' was not added.");
+                continue;
+            }
+            List<String> problems = new ArrayList<>();
+            ItemStack stack = KitItems.toStack(
+                    new DefaultKit.Item(slot, item.material(), item.count()), problems);
+            if (stack == null) {
+                plugin.getLogger().fine("[NullArmy] the Commander's '" + item.material()
+                        + "' is not an item on this server - skipped (" + problems + ").");
+                continue;
+            }
+            loadout[slot] = stack;
+            added++;
+        }
+        return added;
+    }
+
+    private static boolean present(ItemStack[] loadout, String material) {
+        for (ItemStack stack : loadout) {
+            if (stack != null && stack.getType() != org.bukkit.Material.AIR
+                    && stack.getType().name().equalsIgnoreCase(material)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The first empty inventory slot, or -1. Storage first, then the hotbar. */
+    private static int freeSlot(ItemStack[] loadout) {
+        for (int i = 9; i < 36 && i < loadout.length; i++) {
+            if (loadout[i] == null || loadout[i].getType() == org.bukkit.Material.AIR) {
+                return i;
+            }
+        }
+        for (int i = 0; i < 9 && i < loadout.length; i++) {
+            if (loadout[i] == null || loadout[i].getType() == org.bukkit.Material.AIR) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** Materials the Commander is expected to carry (P-06, S-95). */
+    public static List<String> bossKitExpectations() {
+        return List.of("MACE", "ELYTRA", "TOTEM_OF_UNDYING", "ENCHANTED_GOLDEN_APPLE");
     }
 }

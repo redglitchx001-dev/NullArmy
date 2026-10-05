@@ -239,6 +239,33 @@ public final class NullLifecycleListener implements Listener {
      * Commander, a squad mate, or anyone on {@code policy.protected} - not with
      * a sword, not with an arrow, not in retaliation.</p>
      */
+    /**
+     * L-08: loot discipline - a Null picks up the drops of the players it
+     * defeats. Nothing is taken from a living player and nothing is teleported:
+     * the body simply walks over the item, which is why the pickup is the
+     * vanilla one, only counted here.
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPickup(org.bukkit.event.player.PlayerPickupItemEvent event) {
+        if (event == null || event.getPlayer() == null || plugin.brain() == null) {
+            return;
+        }
+        UUID id = event.getPlayer().getUniqueId();
+        if (plugin.adapter() == null || !plugin.adapter().isNullEntity(id)) {
+            return;
+        }
+        NullBody body = plugin.adapter().bodyOf(id);
+        if (body == null) {
+            return;
+        }
+        plugin.brain().notePickup(body);
+        if (plugin.chatGate() != null) {
+            plugin.chatGate().event("loot.pickup", "null", event.getPlayer().getName(),
+                    "item", event.getItem() == null || event.getItem().getItemStack() == null
+                            ? "?" : event.getItem().getItemStack().getType().name());
+        }
+    }
+
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
     public void onFriendlyFire(EntityDamageByEntityEvent event) {
         Entity victimEntity = event.getEntity();

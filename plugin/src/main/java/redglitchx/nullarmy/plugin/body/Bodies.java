@@ -4,8 +4,15 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
+import org.bukkit.Sound;
+import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
+import org.bukkit.block.BlockState;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 
@@ -146,6 +153,92 @@ public final class Bodies {
      *
      * @return the hotbar slot now selected, or -1
      */
+    /**
+     * Places ONE block by hand, the way a player does.
+     *
+     * <p>The Null holds the block, swings, {@link BlockPlaceEvent} is fired so a
+     * protection plugin gets its say, and only then is the block written. The
+     * stack in the hand is really decremented, so the block genuinely comes out
+     * of the body's inventory - the rule every build in this plugin obeys.</p>
+     *
+     * @return true when a block was really placed
+     */
+    public static boolean placeOne(Player handle, Block block, Material material) {
+        if (handle == null || block == null || material == null || !material.isBlock()) {
+            return false;
+        }
+        if (block.getType() == material) {
+            return false;
+        }
+        if (!block.getType().isAir() && !block.isReplaceable()) {
+            return false;
+        }
+        PlayerInventory inv = handle.getInventory();
+        int slot = find(inv, material);
+        if (slot < 0) {
+            return false;
+        }
+        Block against = null;
+        for (BlockFace face : new BlockFace[] {BlockFace.DOWN, BlockFace.NORTH, BlockFace.SOUTH,
+                BlockFace.EAST, BlockFace.WEST, BlockFace.UP}) {
+            Block neighbour = block.getRelative(face);
+            if (neighbour.getType().isSolid()) {
+                against = neighbour;
+                break;
+            }
+        }
+        if (against == null) {
+            return false; // nothing to place it against: a player could not either
+        }
+        hold(handle, slot);
+        ItemStack inHand = inv.getItemInMainHand();
+        BlockState replaced = block.getState();
+        handle.swingMainHand();
+        BlockPlaceEvent event = new BlockPlaceEvent(block, replaced, against, inHand, handle, true,
+                EquipmentSlot.HAND);
+        Bukkit.getPluginManager().callEvent(event);
+        if (event.isCancelled() || !event.canBuild()) {
+            return false;
+        }
+        block.setType(material, true);
+        try {
+            block.getWorld().playSound(block.getLocation().add(0.5D, 0.5D, 0.5D),
+                    block.getBlockData().getSoundGroup().getPlaceSound(), 1.0F, 0.8F);
+        } catch (Throwable ignored) {
+            block.getWorld().playSound(block.getLocation().add(0.5D, 0.5D, 0.5D),
+                    Sound.BLOCK_STONE_PLACE, 1.0F, 0.8F);
+        }
+        if (inHand.getAmount() <= 1) {
+            inv.setItemInMainHand(null);
+        } else {
+            inHand.setAmount(inHand.getAmount() - 1);
+        }
+        return true;
+    }
+
+    /**
+     * Breaks ONE block by hand.
+     *
+     * <p>{@link BlockBreakEvent} is fired first, so griefing stays the owner's
+     * decision and a protection plugin can refuse it; nothing is ever
+     * bulk-removed and nothing is ever set to air behind the event's back.</p>
+     *
+     * @return true when the block was really broken
+     */
+    public static boolean breakOne(Player handle, Block block) {
+        if (handle == null || block == null || block.getType().isAir()) {
+            return false;
+        }
+        BlockBreakEvent event = new BlockBreakEvent(block, handle);
+        Bukkit.getPluginManager().callEvent(event);
+        if (event.isCancelled()) {
+            return false;
+        }
+        handle.swingMainHand();
+        block.breakNaturally(handle.getInventory().getItemInMainHand());
+        return true;
+    }
+
     public static int hold(Player handle, int from) {
         if (handle == null || from < 0 || from >= 36) {
             return -1;
