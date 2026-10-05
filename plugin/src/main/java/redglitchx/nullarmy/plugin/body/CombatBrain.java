@@ -244,23 +244,22 @@ public final class CombatBrain {
         // A shield that is up stays up: a player cannot swing and block at the
         // same time, and a guard who drops his guard to take a free swing is
         // not guarding.
-        boolean blocking = mind.shieldUp || holdingShield(handle);
         boolean ready = SwingCadence.ready(cooldown);
+        boolean blocking = mind.shieldUp || holdingShield(handle);
         if (ready && mind.shieldUp) {
-            // The brain's own guard comes down the moment it means to hit, as a
-            // player's does; the swing itself lands on the next tick.
+            // The brain's own guard comes down on the tick it means to hit, as a
+            // player's does - and the swing lands on that same tick, because a
+            // player who stops blocking to hit does hit in the same motion.
             brain.raiseShield(handle, mind, false);
             mind.shieldUp = false;
-            blocking = false;
-            ready = false;
-        } else if (ready && holdingShield(handle)) {
-            // Hands full: a Null holding up a shield it did not raise is
-            // blocking, and a Null that is blocking does not swing.
-            ready = false;
-            lastNote = "blocking";
+            blocking = holdingShield(handle);
         }
         if (dist > reach - 0.3D) {
-            // Close the gap; sprinting, so the first hit carries sprint knockback.
+            // Close the gap; running, so the first hit carries sprint knockback.
+            // No shield on the way in: a raised shield is a fifth of a body's
+            // speed, and a Null that blocks while it charges never arrives.
+            brain.raiseShield(handle, mind, false);
+            mind.shieldUp = false;
             intent.dx = dx / dist;
             intent.dz = dz / dist;
             intent.gait = dist > 4.0D ? NullBody.GAIT_SPRINT : NullBody.GAIT_RUN;
@@ -272,7 +271,6 @@ public final class CombatBrain {
                         + (ready ? "" : " (cooldown " + String.format(java.util.Locale.ROOT, "%.2f", cooldown)
                         + " < " + gate + ")");
             }
-            brain.raiseShield(handle, mind, v3.shields() && cooldown < gate && dist < 5.0D);
             return intent;
         }
 
@@ -288,7 +286,7 @@ public final class CombatBrain {
         intent.dz = nx * mind.strafeDir * 0.6D + nz * radial;
         intent.gait = NullBody.GAIT_RUN;
 
-        if (ready && dist <= reach) {
+        if (ready && dist <= reach && !blocking) {
             // P-01: the strike still has to be legal - inside reach AND with a
             // clear line of sight. A Null that cannot see its target does not
             // swing at it, and it certainly does not damage it.

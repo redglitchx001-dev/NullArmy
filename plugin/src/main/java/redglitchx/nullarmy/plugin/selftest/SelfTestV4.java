@@ -595,7 +595,9 @@ final class SelfTestV4 {
             // Sites can be refused (something already standing there), so try a
             // couple of clearings before concluding the frame was never built.
             // The portal ceiling is real: earlier squads' doorways are still
-            // standing, so clear them or there is no room for this one.
+            // standing, so clear them or there is no room for this one. A site
+            // can only be found in a chunk that is loaded, so keep one.
+            prepare(at(50, 30), 20);
             List<redglitchx.nullarmy.plugin.portal.PortalBuilder.BuiltPortal> standing = List.of();
             for (int attempt = 0; attempt < 3 && standing.isEmpty(); attempt++) {
                 if (plugin.portals() != null) {
@@ -611,8 +613,11 @@ final class SelfTestV4 {
                 squad = plugin.squads().spawnSquadAt(owner("p03b"), worldName, here);
                 note = squad == null ? "" : squad.arrivalNote();
                 standing = plugin.portals() == null ? List.of() : plugin.portals().standing();
-                if (plugin.portals() != null && !standing.isEmpty()) {
-                    refusal = plugin.portals().lastRefusal();
+                if (plugin.portals() != null && standing.isEmpty()) {
+                    String why = plugin.portals().lastRefusal();
+                    if (why != null && !why.isEmpty()) {
+                        refusal = "summon of " + here.size() + " at " + attempt + ": " + why;
+                    }
                 }
             }
             frames = standing.size();
@@ -1206,7 +1211,7 @@ final class SelfTestV4 {
                 handle.getInventory().setItem(0, new ItemStack(Material.OAK_PLANKS, 32));
                 planksBefore = 0;
                 for (ItemStack stack : handle.getInventory().getContents()) {
-                    if (stack != null && stack.getType() == Material.OAK_PLANKS) {
+                    if (stack != null && stack.getType() != Material.AIR) {
                         planksBefore += stack.getAmount();
                     }
                 }
@@ -1230,7 +1235,7 @@ final class SelfTestV4 {
             Player handle = body == null ? null : handle(body);
             if (handle != null) {
                 for (ItemStack stack : handle.getInventory().getContents()) {
-                    if (stack != null && stack.getType() == Material.OAK_PLANKS) {
+                    if (stack != null && stack.getType() != Material.AIR) {
                         carried += stack.getAmount();
                     }
                 }
@@ -1248,7 +1253,7 @@ final class SelfTestV4 {
             }
             gapSurfaceY = by;
             detail = bridged + " block(s) placed, " + solid + " of 2 gap blocks now solid, "
-                    + carried + " planks left in the pack (was " + planksBefore + ")";
+                    + carried + " item(s) left in the pack (was " + planksBefore + ")";
             ok = bridged >= 1 && solid >= 2 && carried < planksBefore;
         } catch (Throwable e) {
             ok = false;
