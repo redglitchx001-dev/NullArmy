@@ -20,7 +20,7 @@ import java.time.Duration;
  * <ol>
  *   <li>{@code GET https://api.mojang.com/users/profiles/minecraft/<name>}
  *       returns the account's UUID.</li>
- *   <li>{@code GET https://sessionserver.mojang.com/session/minecraft/profile/<uuid>}
+ *   <li>{@code GET https://sessionserver.mojang.com/session/minecraft/profile/<uuid>?unsigned=false}
  *       returns the base64 {@code textures} property with its signature.</li>
  * </ol>
  *
@@ -33,6 +33,7 @@ public final class MojangSkinClient {
 
     private static final String UUID_URL = "https://api.mojang.com/users/profiles/minecraft/";
     private static final String PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/";
+    private static final String SIGNED_PROFILE_QUERY = "?unsigned=false";
 
     private final HttpClient http;
 
@@ -82,7 +83,7 @@ public final class MojangSkinClient {
 
     /** Step 2: UUID -> texture value + signature. */
     SkinData fetchProfile(String uuid) throws IOException, InterruptedException {
-        String body = get(PROFILE_URL + encode(uuid.replace("-", "")));
+        String body = get(PROFILE_URL + encode(uuid.replace("-", "")) + SIGNED_PROFILE_QUERY);
         if (body == null) {
             return null;
         }

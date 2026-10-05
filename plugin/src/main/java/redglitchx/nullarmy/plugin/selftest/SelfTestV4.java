@@ -461,24 +461,26 @@ final class SelfTestV4 {
     private void p01FarCheck() {
         boolean untouched = false;
         boolean close = false;
+        double apart = -1.0D;
         try {
             Player victimHandle = handle(victim);
+            Player attackerHandle = handle(attacker);
             double max = victimHandle == null ? 20.0D
                     : victimHandle.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).getValue();
             untouched = victim != null && victim.health() >= max - 0.01D;
-            if (attacker != null && victim != null) {
-                Vec3d a = attacker.bodyPosition();
-                Vec3d b = victim.bodyPosition();
-                close = Math.hypot(a.x() - b.x(), a.z() - b.z()) < 4.0D;
+            if (attackerHandle != null && victimHandle != null) {
+                // Measure exactly the same fresh geometry as CombatBrain's
+                // ReachGate call: attacker eye to the target point on the
+                // victim, not cached centre-to-centre body positions.
+                Location eye = attackerHandle.getEyeLocation();
+                Location target = victimHandle.getLocation();
+                double ty = target.getY() + Math.min(1.8D, victimHandle.getHeight() * 0.6D);
+                apart = ReachGate.eyeDistance(eye.getX(), eye.getY(), eye.getZ(),
+                        target.getX(), ty, target.getZ());
+                close = apart < 4.0D;
             }
         } catch (Throwable e) {
             notes.add("p01 far check threw " + Guard.describe(e));
-        }
-        double apart = -1.0D;
-        if (attacker != null && victim != null) {
-            Vec3d a = attacker.bodyPosition();
-            Vec3d b = victim.bodyPosition();
-            apart = Math.hypot(a.x() - b.x(), a.z() - b.z());
         }
         check("S-86", "P-01", untouched && close, "with the reach forced below the distance the Null stands at,"
                 + " zero damage lands while it stays in range (health "
