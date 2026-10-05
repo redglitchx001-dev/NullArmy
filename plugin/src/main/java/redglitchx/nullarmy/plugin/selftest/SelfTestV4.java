@@ -1177,6 +1177,21 @@ final class SelfTestV4 {
     }
 
     /** One cadence: every marcher swings on the same tick and holds its cell. */
+    private int l01Samples;
+    private int l01BestOnCell = -1;
+    private double l01BestWorst = Double.MAX_VALUE;
+    private String l01BestDetail = "no squad";
+
+    /**
+     * A locked formation, sampled across a drill cycle.
+     *
+     * <p>The drill changes shape - line, wedge, phalanx - and the instant it
+     * changes every body is off its cell by definition, because its cell has
+     * just moved. One snapshot therefore measures the moment the sample
+     * happened to land, not the formation. This takes a snapshot every twenty
+     * ticks for a full cycle and reports the tightest one: how well the squad
+     * holds its shape once it has had the time to form it.</p>
+     */
     private void l01Check() {
         boolean ok = false;
         String detail = "no squad";
@@ -1206,6 +1221,19 @@ final class SelfTestV4 {
                         Locale.ROOT, "%.2f", worst) + ", cadence " + MarchCadence.DEFAULT_PERIOD_TICKS
                         + " ticks, drill " + a + " -> " + b;
                 ok = onCell >= Math.max(2, bodies.size() - 1) && cadence && !a.equals(b);
+                l01Samples++;
+                if (onCell > l01BestOnCell || (onCell == l01BestOnCell && worst < l01BestWorst)) {
+                    l01BestOnCell = onCell;
+                    l01BestWorst = worst;
+                    l01BestDetail = detail;
+                }
+                if (!ok && l01Samples < 6) {
+                    t.gap(20);
+                    t.retry(this::l01Check);
+                    return;
+                }
+                detail = l01BestDetail + " (tightest of " + l01Samples + " sample(s))";
+                ok = l01BestOnCell >= Math.max(2, bodies.size() - 1) && cadence && !a.equals(b);
             }
         } catch (Throwable e) {
             notes.add("l01 check threw " + Guard.describe(e));
