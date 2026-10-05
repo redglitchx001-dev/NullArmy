@@ -83,6 +83,16 @@ public final class CombatBrain {
     public int reachRefusals() { return reachRefusals; }
     public int aimedShots() { return aimedShots; }
 
+    /**
+     * Why the last combat tick did not swing: one short word, for the self test.
+     *
+     * <p>"A swing did not land" is not a diagnosis. This is the branch the
+     * fighter actually took, so a failing check says which rule stopped it.</p>
+     */
+    public String lastNote() { return lastNote; }
+
+    private String lastNote = "no fight yet";
+
     /** Self test: clears the swing / crit counters before a measured window. */
     public void resetCounters() {
         swings = 0;
@@ -205,6 +215,7 @@ public final class CombatBrain {
         // Retreat and heal when badly hurt.
         double max = NullBrain.maxHealth(handle);
         if (body.health() < max * 0.3D) {
+            lastNote = "retreating";
             brain.raiseShield(handle, mind, false);
             cancelBow(mind, handle);
             if (dist < 6.0D) {
@@ -220,6 +231,7 @@ public final class CombatBrain {
 
         // Ranged.
         if (v3.bows() && dist > BOW_MIN_DISTANCE && hasBowAndArrow(handle)) {
+            lastNote = "shooting at " + (int) dist;
             brain.raiseShield(handle, mind, false);
             return bow(body, mind, handle, target, pos, intent, now);
         }
@@ -245,6 +257,7 @@ public final class CombatBrain {
             // Hands full: a Null holding up a shield it did not raise is
             // blocking, and a Null that is blocking does not swing.
             ready = false;
+            lastNote = "blocking";
         }
         if (dist > reach - 0.3D) {
             // Close the gap; sprinting, so the first hit carries sprint knockback.
@@ -254,6 +267,10 @@ public final class CombatBrain {
             // P-02: swing as soon as the meter is worth it, not only at full.
             if (ready && strikeAllowed(handle, target)) {
                 strike(handle, mind, target, now, fallingFor(body));
+            } else {
+                lastNote = "closing to " + String.format(java.util.Locale.ROOT, "%.1f", dist)
+                        + (ready ? "" : " (cooldown " + String.format(java.util.Locale.ROOT, "%.2f", cooldown)
+                        + " < " + gate + ")");
             }
             brain.raiseShield(handle, mind, v3.shields() && cooldown < gate && dist < 5.0D);
             return intent;
@@ -278,6 +295,9 @@ public final class CombatBrain {
             if (!strikeAllowed(handle, target)) {
                 reachRefusals++;
                 mind.critJumped = false;
+                lastNote = "reach gate refused at "
+                        + String.format(java.util.Locale.ROOT, "%.1f", dist) + " (reach "
+                        + String.format(java.util.Locale.ROOT, "%.1f", reach) + ")";
                 brain.raiseShield(handle, mind, v3.shields() && !mind.critJumped);
                 return intent;
             }
@@ -298,6 +318,8 @@ public final class CombatBrain {
                 strike(handle, mind, target, now, falling);
             }
         } else {
+            lastNote = ready ? "out of reach at " + String.format(java.util.Locale.ROOT, "%.1f", dist)
+                    : "cooldown " + String.format(java.util.Locale.ROOT, "%.2f", cooldown);
             brain.raiseShield(handle, mind, v3.shields() && cooldown < gate && !mind.critJumped);
         }
         return intent;

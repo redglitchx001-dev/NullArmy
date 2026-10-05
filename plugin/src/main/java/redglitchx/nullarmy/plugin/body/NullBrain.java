@@ -998,8 +998,10 @@ public final class NullBrain implements Reloadable {
         if (ownerUuid == null) {
             return;
         }
-        Player owner = Bukkit.getPlayer(ownerUuid);
-        if (owner == null || !owner.isOnline() || owner.getWorld() == null
+        // Bukkit.getPlayer only knows real, listed players: an owner stand-in
+        // in the self test is a Null, and a Null is an entity first.
+        Entity ownerEntity = Bukkit.getEntity(ownerUuid);
+        if (!(ownerEntity instanceof Player owner) || owner.isDead() || owner.getWorld() == null
                 || !world.equals(owner.getWorld().getName())) {
             return;
         }

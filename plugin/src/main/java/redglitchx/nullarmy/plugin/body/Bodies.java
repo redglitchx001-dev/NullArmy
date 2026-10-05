@@ -208,10 +208,13 @@ public final class Bodies {
             block.getWorld().playSound(block.getLocation().add(0.5D, 0.5D, 0.5D),
                     Sound.BLOCK_STONE_PLACE, 1.0F, 0.8F);
         }
+        // Bukkit hands out a COPY of the stack, so the block has to be paid
+        // for by writing it back - otherwise a Null places forever.
         if (inHand.getAmount() <= 1) {
-            inv.setItemInMainHand(null);
+            inv.setItem(slot, null);
         } else {
             inHand.setAmount(inHand.getAmount() - 1);
+            inv.setItem(slot, inHand);
         }
         return true;
     }

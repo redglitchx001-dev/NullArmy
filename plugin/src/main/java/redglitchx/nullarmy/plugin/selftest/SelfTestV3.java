@@ -591,7 +591,16 @@ final class SelfTestV3 {
                 .contains(one);
         check("S-46", "B-05", gone, "the body is removed after the animation");
         int itemsNow = itemsNear(one.bodyPosition());
-        check("S-47", "B-05", itemsNow <= counter, "a dead Null drops nothing (" + itemsNow + " items near)");
+        // P-10 reverses this one: a defeated Null now leaves its kit on the
+        // ground, so this check measures the new promise instead of the old one.
+        // The old answer is not lost - the migration folds nulls.no-death-drops
+        // into drops.enabled, and S-110 proves a server that said no keeps it.
+        redglitchx.nullarmy.plugin.config.V3Settings v3 =
+                plugin.pluginConfig() == null ? null : plugin.pluginConfig().v3();
+        boolean nullsDrop = v3 == null || v3.dropsEnabled();
+        check("S-47", "B-05", nullsDrop ? itemsNow > counter : itemsNow <= counter, (nullsDrop
+                ? "a dead Null leaves its kit on the ground (" : "a dead Null drops nothing (")
+                + itemsNow + " items near, was " + counter + ", drops.enabled=" + nullsDrop + ")");
         List<NullLifecycleListener.Death> deaths = plugin.lifecycle().deathsSince(mark);
         boolean cleared = !deaths.isEmpty();
         for (NullLifecycleListener.Death d : deaths) {
