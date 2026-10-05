@@ -438,6 +438,7 @@ final class SelfTestV4 {
         try {
             if (settings() != null) {
                 settings().setMeleeReachOverride(0.1D);
+                settings().setRetaliateOverride(false);
             }
             // Put the two back in reach: the wall check that ran before this
             // one left them facing each other through stone, and a Null that
@@ -448,13 +449,18 @@ final class SelfTestV4 {
                 if (victimHandle != null && attackerHandle != null) {
                     Location at = attackerHandle.getLocation();
                     // Keep them comfortably inside the check's four-block
-                    // observation window while still outside the forced
-                    // forced tiny reach.  Even with the same X/Z, the eye to
-                    // target-point distance is about 0.54 blocks, so one block
-                    // of separation cannot pass the 0.1 reach gate.
+                    // observation window while still outside the forced tiny
+                    // reach. Even with the same X/Z, the eye to target-point
+                    // distance is about 0.54 blocks, so one block of separation
+                    // cannot pass the 0.1 reach gate.
                     victimHandle.teleport(new Location(world, at.getX() + 1.0D, at.getY(), at.getZ()));
+                    double max = victimHandle.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).getValue();
+                    victimHandle.setHealth(max);
                 }
-                victim.heal(1000.0D);
+                Mind victimMind = plugin.brain().mind(victim);
+                if (victimMind != null) {
+                    victimMind.clearFight();
+                }
             }
             plugin.brain().combat().resetCounters();
         } catch (Throwable e) {
@@ -495,6 +501,7 @@ final class SelfTestV4 {
         if (settings() != null) {
             settings().setMeleeReachOverride(null);
             settings().setBowsOverride(null);
+            settings().setRetaliateOverride(null);
         }
     }
 

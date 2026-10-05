@@ -1491,6 +1491,7 @@ final class SelfTestV3 {
             if (!flagJump) {
                 // Like the combat brain: only jump for a crit with a full cooldown.
                 armSword(attackerNow);
+                attackerNow.setSprinting(false);
                 if (attackerNow.getAttackCooldown() >= 0.98F && body.onGround()) {
                     body.setMovement(0, 0, NullBody.GAIT_STOP, true, false);
                     flagJump = true;
@@ -1509,6 +1510,7 @@ final class SelfTestV3 {
             if (!body.onGround() && developedFall && attackerNow.getAttackCooldown() >= 0.9F) {
                 Player attacker = handle(body);
                 armSword(attacker);
+                attacker.setSprinting(false);
                 fallingCooldown = attacker.getAttackCooldown();
                 notes.add("falling hand=" + attacker.getInventory().getItemInMainHand().getType() + " cooldown="
                         + String.format(Locale.ROOT, "%.2f", fallingCooldown) + " fall="
