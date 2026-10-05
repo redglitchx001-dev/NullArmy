@@ -63,16 +63,24 @@ public final class NullLifecycleListener implements Listener {
         public final double finalDamage;
         public final boolean critical;
         public final boolean blocked;
+        /** True when the event was cancelled before it cost anybody health. */
+        public final boolean cancelled;
         public final long tick;
 
         Hit(UUID victim, UUID attacker, double baseDamage, double finalDamage, boolean critical,
             boolean blocked, long tick) {
+            this(victim, attacker, baseDamage, finalDamage, critical, blocked, false, tick);
+        }
+
+        Hit(UUID victim, UUID attacker, double baseDamage, double finalDamage, boolean critical,
+            boolean blocked, boolean cancelled, long tick) {
             this.victim = victim;
             this.attacker = attacker;
             this.baseDamage = baseDamage;
             this.finalDamage = finalDamage;
             this.critical = critical;
             this.blocked = blocked;
+            this.cancelled = cancelled;
             this.tick = tick;
         }
     }
@@ -364,7 +372,8 @@ public final class NullLifecycleListener implements Listener {
                 // Older modifier API: the final damage below still tells the story.
             }
             Hit hit = new Hit(victim.getUniqueId(), attacker == null ? null : attacker.getUniqueId(),
-                    event.getDamage(), event.getFinalDamage(), event.isCritical(), blocked, plugin.currentTick());
+                    event.getDamage(), event.getFinalDamage(), event.isCritical(), blocked,
+                    event.isCancelled(), plugin.currentTick());
             synchronized (hits) {
                 hits.addLast(hit);
                 while (hits.size() > 64) {
