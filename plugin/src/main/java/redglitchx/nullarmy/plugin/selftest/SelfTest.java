@@ -76,6 +76,7 @@ public final class SelfTest {
     private int ticksObserved;
     private boolean tickingClean = true;
     private SelfTestV3 v3;
+    private SelfTestV4 v4;
 
     public SelfTest(NullArmyPlugin plugin) {
         this.plugin = plugin;
@@ -143,6 +144,9 @@ public final class SelfTest {
         // v3 (S-27 onward): one block of checks per bug B-01..B-17.
         v3 = new SelfTestV3(plugin, this, worldName, origin);
         v3.enqueue(steps);
+        // v4 (S-85 onward): one block of checks per promise P-01..P-12, L-01..L-08.
+        v4 = new SelfTestV4(plugin, this, worldName, origin);
+        v4.enqueue(steps);
         steps.add(this::stepShutdownSequence);
         // The sequence spends its configured delay between bodies, so it needs
         // more ticks than one step: wait until it is done rather than hoping.
@@ -522,6 +526,9 @@ public final class SelfTest {
     private void cleanupEverything() {
         if (v3 != null) {
             Guard.attempt(plugin.getLogger(), "v3 self test cleanup", () -> v3.cleanup());
+        }
+        if (v4 != null) {
+            Guard.attempt(plugin.getLogger(), "v4 self test cleanup", () -> v4.cleanup());
         }
         Guard.attempt(plugin.getLogger(), "self test cleanup", () -> {
             if (probe != null) {

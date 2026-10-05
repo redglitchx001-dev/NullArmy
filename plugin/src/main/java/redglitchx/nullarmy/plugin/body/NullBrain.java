@@ -119,7 +119,7 @@ public final class NullBrain implements Reloadable {
         }
     }
 
-    V3Settings settings() { return v3; }
+    public V3Settings settings() { return v3; }
 
     long now() { return now; }
 
@@ -966,21 +966,17 @@ public final class NullBrain implements Reloadable {
         // Spar with a nearby squad mate: swing at him, deal nothing.
         if (now % 40L == (Math.abs(mind.id.hashCode()) % 40L)) {
             for (Entity near : handle.getNearbyEntities(2.5D, 2.0D, 2.5D)) {
-                if (near instanceof Player && plugin.adapter() != null
-                        && plugin.adapter().isNullEntity(near.getUniqueId())
-                        && mayTarget(body, near)) {
-                    Guard.attempt(plugin.getLogger(), "camp sparring", handle::swingMainHand);
-                    mind.campBehaviour = "spar";
-                    campBehaviours.add("spar");
-                    return;
+                if (!(near instanceof Player) || near.isDead()) {
+                    continue;
                 }
-                if (near instanceof Player && !plugin.adapter().isNullEntity(near.getUniqueId())
-                        && mayTarget(body, near)) {
-                    Guard.attempt(plugin.getLogger(), "camp sparring", handle::swingMainHand);
-                    mind.campBehaviour = "spar";
-                    campBehaviours.add("spar");
-                    return;
+                if (plugin.adapter() != null && !plugin.adapter().isNullEntity(near.getUniqueId())
+                        && !mayTarget(body, near)) {
+                    continue; // a real player who must not be touched
                 }
+                Guard.attempt(plugin.getLogger(), "camp sparring", handle::swingMainHand);
+                mind.campBehaviour = "spar";
+                campBehaviours.add("spar");
+                return;
             }
         }
         // Haul: a builder in the squad that is short of blocks gets a top-up.
@@ -992,6 +988,29 @@ public final class NullBrain implements Reloadable {
                 return;
             }
         }
+        // Otherwise: ring round the light with the squad, or stand watch alone.
+        // Nothing here moves the body more than a step, so an idle camp stays idle.
+        int mates = 0;
+        for (Entity near : handle.getNearbyEntities(6.0D, 3.0D, 6.0D)) {
+            if (near instanceof Player && plugin.adapter() != null
+                    && plugin.adapter().isNullEntity(near.getUniqueId()) && !near.isDead()) {
+                mates++;
+            }
+        }
+        if (mates >= 2) {
+            mind.campBehaviour = "ring";
+            campBehaviours.add("ring");
+        } else {
+            mind.campBehaviour = "watch";
+            campBehaviours.add("watch");
+        }
+        // A guard never stares at his boots: the head keeps moving.
+        Vec3d ahead = forward(body, 6.0D);
+        double base = Math.atan2(ahead.z(), ahead.x());
+        double yaw = base + Math.sin((now % 120L) / 120.0D * Math.PI * 2.0D) * 0.8D;
+        intent.look = new Vec3d(pos.x() + Math.cos(yaw) * 6.0D, pos.y() + 1.6D,
+                pos.z() + Math.sin(yaw) * 6.0D);
+        intent.lookHeadOnly = true;
     }
 
     private UUID ownerOf(NullBody body) {

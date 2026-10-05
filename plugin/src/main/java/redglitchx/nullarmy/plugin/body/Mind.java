@@ -72,7 +72,7 @@ public final class Mind {
     double speedFactor = 1.0D;
     boolean speedApplied;
 
-    Order order;
+    public Order order;
 
     // Attention: who or what the head is turned to.
     Vec3d attention;
@@ -127,7 +127,7 @@ public final class Mind {
     long gestureUntil;
 
     /** Formation hold: the cell this Null was told to hold, if any. */
-    Vec3d holdCell;
+    public Vec3d holdCell;
 
     /** L-03: which end of a patrol this Null is walking to. */
     boolean patrolToB;
@@ -148,7 +148,7 @@ public final class Mind {
     boolean saluted;
 
     /** L-03: last tick the owner was close enough to be saluted. */
-    long lastOwnerNearTick;
+    public long lastOwnerNearTick;
 
     /** L-03: the order to go back to once the salute is finished. */
     Mind.Order orderAfterSalute;

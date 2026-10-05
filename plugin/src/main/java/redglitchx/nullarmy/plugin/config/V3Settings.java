@@ -87,6 +87,12 @@ public final class V3Settings {
     private final boolean dropsEnabled;
     /** Self-test only: forces the drops decision so both halves can be measured. */
     private volatile Boolean dropsOverride;
+    /** Self test override for {@code combat.melee-reach} (P-01 wiring). */
+    private volatile Double meleeReachOverride;
+    /** Self test override for {@code combat.aim-skill} (P-05 wiring). */
+    private volatile Double aimSkillOverride;
+    /** Self test override for {@code behaviour.camp-life} (L-04). */
+    private volatile Boolean campLifeOverride;
     private final double dropsChance;
     private final boolean motdShowArmy;
     private final int motdMaxPlayers;
@@ -322,20 +328,29 @@ public final class V3Settings {
 
     public String namesStyle() { return namesStyle; }
     public boolean readableNames() { return "words".equals(namesStyle); }
-    public double meleeReach() { return meleeReach; }
+    public double meleeReach() { return meleeReachOverride == null ? meleeReach : meleeReachOverride; }
     public float attackThreshold() { return attackThreshold; }
     public int critEverySwings() { return critEverySwings; }
-    public double aimSkill() { return aimSkill; }
+    public double aimSkill() { return aimSkillOverride == null ? aimSkill : aimSkillOverride; }
     public boolean dropsEnabled() { return dropsOverride == null ? dropsEnabled : dropsOverride; }
     /** Self-test only: null restores the configured value. */
     public void setDropsOverride(Boolean override) { this.dropsOverride = override; }
+
+    /** Self test: forces {@code combat.melee-reach} without touching config.yml. */
+    public void setMeleeReachOverride(Double override) { this.meleeReachOverride = override; }
+
+    /** Self test: forces {@code combat.aim-skill} without touching config.yml. */
+    public void setAimSkillOverride(Double override) { this.aimSkillOverride = override; }
+
+    /** Self test: forces {@code behaviour.camp-life} without touching config.yml. */
+    public void setCampLifeOverride(Boolean override) { this.campLifeOverride = override; }
     public double dropsChance() { return dropsChance; }
     public boolean motdShowArmy() { return motdShowArmy; }
     public int motdMaxPlayers() { return motdMaxPlayers; }
     public String motdFormat() { return motdFormat; }
     public boolean marchCadence() { return marchCadence; }
     public boolean autoBridge() { return autoBridge; }
-    public boolean campLife() { return campLife; }
+    public boolean campLife() { return campLifeOverride == null ? campLife : campLifeOverride; }
     public int marchPeriodTicks() { return marchPeriodTicks; }
     public int drillHoldTicks() { return drillHoldTicks; }
     public int saluteRange() { return saluteRange; }
