@@ -142,6 +142,18 @@ public final class Mind {
     /** The tick of the last swing, so the cadence can be counted here too. */
     long lastSwingTick;
 
+    /**
+     * Stops whatever this body is fighting.
+     *
+     * <p>A check that holds a body's hands itself has to be able to stop the
+     * brain from spending the swing it is measuring.</p>
+     */
+    public void clearFight() {
+        combatTarget = null;
+        combatUntil = 0L;
+        critJumped = false;
+    }
+
     /** L-04: the idle behaviour this Null is performing right now. */
     String campBehaviour = "";
 

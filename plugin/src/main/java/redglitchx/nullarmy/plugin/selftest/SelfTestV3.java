@@ -1475,6 +1475,12 @@ final class SelfTestV3 {
             if (counter > 0) {
                 return;
             }
+            // This check holds the body's hands itself, so the brain must not
+            // spend the charge the blow is being measured with.
+            Mind self = plugin.brain().mind(body);
+            if (self != null) {
+                self.clearFight();
+            }
             Player attackerNow = handle(body);
             if (!flagJump) {
                 // Like the combat brain: only jump for a crit with a full cooldown.
@@ -1485,7 +1491,10 @@ final class SelfTestV3 {
                 }
                 return;
             }
-            if (!body.onGround() && body.velocity().y() < 0.0D && body.fallDistance() > 0.0D) {
+            // Vanilla only calls a blow critical when the swing was fully
+            // loaded, so the strike waits for the meter as well as the fall.
+            if (!body.onGround() && body.velocity().y() < 0.0D && body.fallDistance() > 0.0D
+                    && attackerNow.getAttackCooldown() >= 0.9F) {
                 Player attacker = handle(body);
                 armSword(attacker);
                 fallingCooldown = attacker.getAttackCooldown();
@@ -1541,6 +1550,7 @@ final class SelfTestV3 {
         }
         mark = plugin.currentTick();
         counter = 0;
+        matchedReset = false;
         final double wanted = fallingCooldown;
         final NullBody body = one;
         sampler = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
@@ -1548,7 +1558,26 @@ final class SelfTestV3 {
                 return;
             }
             Player attacker = handle(body);
-            if (!body.onGround() || attacker.getAttackCooldown() < wanted - 0.02D) {
+            Mind self = plugin.brain().mind(body);
+            if (self != null) {
+                self.clearFight();
+            }
+            if (!body.onGround()) {
+                return;
+            }
+            if (!matchedReset) {
+                // Spend the standing charge first, so the blow being measured
+                // is taken at the same charge the falling one was.
+                if (attacker.getAttackCooldown() < 0.98F) {
+                    return;
+                }
+                armSword(attacker);
+                attacker.swingMainHand();
+                attacker.attack(handle(two));
+                matchedReset = true;
+                return;
+            }
+            if (attacker.getAttackCooldown() < wanted - 0.02D) {
                 return;
             }
             armSword(attacker);
@@ -1561,6 +1590,7 @@ final class SelfTestV3 {
     }
 
     private double matchedCooldown = 1.0D;
+    private boolean matchedReset;
 
     private void b17MatchedCheck() {
         stopSampler();

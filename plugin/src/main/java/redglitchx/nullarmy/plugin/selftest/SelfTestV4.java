@@ -1379,11 +1379,11 @@ final class SelfTestV4 {
             int blows = 0;
             for (redglitchx.nullarmy.plugin.body.NullLifecycleListener.Hit hit
                     : plugin.lifecycle().hitsSince(mark)) {
-                if (!hit.blocked && !hit.cancelled && hit.finalDamage > 0.0D) {
+                if (!hit.blocked && !hit.cancelled && hit.finalDamage >= 0.5D) {
                     blows++;
                 }
             }
-            detail = seen + ", " + blows + " blow(s) landed between Nulls, total health "
+            detail = seen + ", " + blows + " real blow(s) landed between Nulls, total health "
                     + String.format(Locale.ROOT, "%.1f", health)
                     + " (was " + String.format(Locale.ROOT, "%.1f", numberA) + "), friendly fire blocked "
                     + friendly + " time(s)";

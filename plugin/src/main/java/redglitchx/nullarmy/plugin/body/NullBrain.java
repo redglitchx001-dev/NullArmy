@@ -369,8 +369,11 @@ public final class NullBrain implements Reloadable {
         }
         // L-03: the owner comes home - the guard salutes.
         homecomingSalute(body, mind, world, pos);
-        // L-08: a Null picks up what it walks over and carries it.
-        if (!busy) {
+        // L-08: a Null picks up what it walks over and carries it - when it is
+        // not under orders. A marcher breaking formation for a dropped apple is
+        // not loot discipline, it is indiscipline.
+        if (!busy && mind.order == null && squad != null
+                && squad.objective() == SquadManager.Objective.NONE) {
             lootDiscipline(body, mind, handle, pos, intent);
         }
 
