@@ -1084,14 +1084,25 @@ final class SelfTestV3 {
         blocked("S-69", "B-13", "the headless smoke uses a pig to exercise EntityPortalEvent; a real player's"
                 + " separate PlayerPortalEvent still needs a live client to verify end-to-end");
         plugin.portals().resetRefusals();
-        double[] out = groundPortal.frame().stepOutPoint();
-        Vec3d c = groundPortal.center();
-        Location from = new Location(world, out[0], out[1] + 0.2D, out[2]);
+        /*
+         * A pig thrown at the doorway can bounce off the ground, miss, or stop
+         * short - and then "it is still on this side" says nothing about the
+         * containment. So the pig is put *inside* the opening: standing on the
+         * bottom frame row, in the middle of the two real NETHER_PORTAL blocks.
+         * That is the exact situation the lock exists for, and from there the
+         * two facts that matter are measurable: the crossing is refused (the
+         * manager counts its refusals) and the pig is still in this world after
+         * more than vanilla's portal dwell delay.
+         */
+        PortalFrame frame = groundPortal.frame();
+        int[] left = frame.cell(1, 1, 0);
+        int[] right = frame.cell(2, 1, 0);
+        Location from = new Location(world, (left[0] + right[0]) / 2.0D + 0.5D, frame.baseY() + 1.05D,
+                (left[2] + right[2]) / 2.0D + 0.5D);
         Pig pig = (Pig) world.spawnEntity(from, EntityType.PIG);
         extraEntities.add(pig);
-        Vector push = new Vector(c.x() - out[0], 0.25D, c.z() - out[2]).normalize().multiply(0.9D);
-        pig.setVelocity(push);
-        flag = groundPortal.frame().widthOnX();
+        pig.teleport(from);
+        flag = frame.widthOnX();
         vecA = new Vec3d(from.getX(), from.getY(), from.getZ());
         // Wait beyond the normal portal dwell threshold: a cancellation test at
         // forty ticks would pass even if travel had merely not started yet.
@@ -1126,10 +1137,14 @@ final class SelfTestV3 {
         String where = pig == null ? "the pig is gone"
                 : pig.getWorld().getName() + " at " + String.format(Locale.ROOT, "%.1f,%.1f,%.1f",
                 pig.getLocation().getX(), pig.getLocation().getY(), pig.getLocation().getZ());
-        check("S-69", "B-13", stayed && portalBlocks == expectedPortalBlocks,
-                "the doorway contains real NETHER_PORTAL blocks but travel events are cancelled"
-                        + " (" + portalBlocks + "/" + expectedPortalBlocks + " portal blocks; entity stayed=" + stayed
-                        + "; " + plugin.portals().refusals() + " crossing(s) refused by containment; " + where + ")");
+        int refusals = plugin.portals().refusals();
+        boolean refused = refusals >= 1;
+        check("S-69", "B-13", stayed && portalBlocks == expectedPortalBlocks && refused,
+                "the doorway contains real NETHER_PORTAL blocks, an entity put inside the opening is refused"
+                        + " and does not travel (" + portalBlocks + "/" + expectedPortalBlocks + " portal blocks;"
+                        + " entity stayed=" + stayed + "; " + refusals
+                        + " crossing(s) refused by containment; mouth " + String.format(Locale.ROOT, "%.1f,%.1f,%.1f",
+                        vecA.x(), vecA.y(), vecA.z()) + "; " + where + ")");
         if (pig != null) {
             pig.remove();
         }

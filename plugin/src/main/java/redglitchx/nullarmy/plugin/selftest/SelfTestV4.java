@@ -2073,17 +2073,26 @@ final class SelfTestV4 {
             NullBody body = squad.members().get(0);
             Player handle = handle(body);
             lootBefore = plugin.brain().lootPicked();
-            if (handle != null) {
-                Location at = handle.getLocation();
-                org.bukkit.entity.Item drop = world.dropItem(at, new ItemStack(Material.DIAMOND, 3));
-                extraEntities.add(drop);
+            lootDrop = null;
+            lootDroppedAt = "";
+            if (handle == null) {
+                lootDroppedAt = "no handle: the diamond drop could not be created";
+                return;
             }
+            Location at = handle.getLocation();
+            org.bukkit.entity.Item drop = world.dropItem(at, new ItemStack(Material.DIAMOND, 3));
+            extraEntities.add(drop);
+            lootDrop = drop.getUniqueId();
+            lootDroppedAt = String.format(Locale.ROOT, "%.1f,%.1f,%.1f", at.getX(), at.getY(), at.getZ());
         } catch (Throwable e) {
             notes.add("l08 drop threw " + Guard.describe(e));
         }
     }
 
     private int lootBefore;
+    /** The one dropped stack this check is about, so a pickup can be attributed. */
+    private UUID lootDrop;
+    private String lootDroppedAt = "";
 
     private void l08LootCheck() {
         boolean ok = false;
@@ -2112,10 +2121,33 @@ final class SelfTestV4 {
                     }
                 }
             }
+            Entity drop = lootDrop == null ? null : Bukkit.getEntity(lootDrop);
+            boolean dropGone = lootDrop == null ? false : drop == null || drop.isDead();
+            /*
+             * Why the body could refuse to look for loot at all: the brain only
+             * runs loot discipline while the body is idle, under no order and
+             * under no squad objective. All three are cheap to read out, so a
+             * failure names the blocker instead of leaving it to guesswork.
+             */
+            Mind mind = plugin.brain().mind(body);
+            String blockers = "order=" + (mind == null || mind.order() == null
+                    ? "-" : mind.order().verb.name().toLowerCase(Locale.ROOT))
+                    + ", objective=" + (squad == null ? "-" : squad.objective())
+                    + ", fighting=" + (mind != null && mind.combatTarget() != null)
+                    + ", builderDrives=" + (plugin.builder() != null && plugin.builder().drives(body));
             detail = picked + " pickup(s) counted, " + carried + " diamonds in the pack, " + onGround
                     + " item(s) still on the ground (" + delayed + " of them still on pickup delay),"
-                    + " pickup-items=" + (settings() == null ? "?" : settings().pickupItems());
-            ok = picked >= 1 || carried >= 1;
+                    + " pickup-items=" + (settings() == null ? "?" : settings().pickupItems())
+                    + "; the measured drop " + (lootDrop == null ? "was never created" : (dropGone ? "is gone" : "is still there"))
+                    + (lootDroppedAt.isEmpty() ? "" : " (dropped at " + lootDroppedAt + ")")
+                    + ", " + blockers;
+            /*
+             * The promise is about the drop this body walked over, so the check
+             * wants the diamonds in its pack - or, if something else consumed
+             * the stack first, a real pickup that took it off the ground while
+             * the counter moved. A pickup somewhere else does not count.
+             */
+            ok = (carried >= 1) || (picked >= 1 && dropGone);
         } catch (Throwable e) {
             ok = false;
             detail = Guard.describe(e);
