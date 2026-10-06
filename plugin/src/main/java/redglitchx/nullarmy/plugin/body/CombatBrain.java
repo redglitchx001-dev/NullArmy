@@ -123,7 +123,7 @@ public final class CombatBrain {
     }
 
     /** Restores a body's chest equipment immediately when its order is cancelled. */
-    void stopFlight(NullBody body, Player handle) {
+    public void stopFlight(NullBody body, Player handle) {
         flight.stop(body, handle);
     }
 
