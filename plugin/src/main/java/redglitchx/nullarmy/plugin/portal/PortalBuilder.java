@@ -65,6 +65,8 @@ public final class PortalBuilder {
 
         private final String worldName;
         private final Map<BlockKey, BlockData> changed = new LinkedHashMap<>();
+        private int restoredBlockCount;
+        private boolean restoreRequested;
         private final List<Vec3d> exits;
         private final Vec3d center;
         private final long expiresAtTick;
@@ -96,7 +98,15 @@ public final class PortalBuilder {
 
         public boolean isRestored() { return restored; }
 
-        public int blockCount() { return changed.size(); }
+        boolean restorationRequested() { return restoreRequested; }
+
+        void requestRestore() { restoreRequested = true; }
+
+        /** Total number of blocks this doorway changed, including blocks already restored. */
+        public int blockCount() { return restoredBlockCount + changed.size(); }
+
+        /** How many changed blocks still need restoration. */
+        public int pendingRestoreCount() { return changed.size(); }
 
         public PortalFrame frame() { return frame; }
 
@@ -137,6 +147,7 @@ public final class PortalBuilder {
                 return 0;
             }
             int done = 0;
+            List<BlockKey> restoredKeys = new ArrayList<>();
             for (Map.Entry<BlockKey, BlockData> entry : changed.entrySet()) {
                 BlockKey key = entry.getKey();
                 BlockData original = entry.getValue();
@@ -146,15 +157,20 @@ public final class PortalBuilder {
                     // flow or a torch pop off. The world goes back, nothing more.
                     block.setBlockData(original == null
                             ? Material.AIR.createBlockData() : original, false);
+                    restoredKeys.add(key);
                     done++;
                 } catch (Throwable t) {
-                    // One stubborn block must not stop the rest of the undo.
+                    // One stubborn block must not stop the rest of the undo. Keep
+                    // its snapshot so a later cleanup pass can retry it.
                     logger.fine("[NullArmy] could not restore a portal block at "
                             + key.x + "," + key.y + "," + key.z + ": " + Guard.describe(t));
                 }
             }
-            changed.clear();
-            restored = true;
+            for (BlockKey key : restoredKeys) {
+                changed.remove(key);
+            }
+            restoredBlockCount += restoredKeys.size();
+            restored = changed.isEmpty();
             return done;
         }
     }
@@ -229,9 +245,15 @@ public final class PortalBuilder {
         final int airMax;
         final long lifetimeTicks;
         final List<BuiltPortal> avoid;
+        final boolean particlesEnabled;
 
         public Request(SummonZone zone, int originY, double floatingChance, int airMin, int airMax,
                        long lifetimeTicks, List<BuiltPortal> avoid) {
+            this(zone, originY, floatingChance, airMin, airMax, lifetimeTicks, avoid, true);
+        }
+
+        public Request(SummonZone zone, int originY, double floatingChance, int airMin, int airMax,
+                       long lifetimeTicks, List<BuiltPortal> avoid, boolean particlesEnabled) {
             this.zone = zone;
             this.originY = originY;
             this.floatingChance = floatingChance;
@@ -239,10 +261,19 @@ public final class PortalBuilder {
             this.airMax = airMax;
             this.lifetimeTicks = lifetimeTicks;
             this.avoid = avoid == null ? Collections.emptyList() : avoid;
+            this.particlesEnabled = particlesEnabled;
         }
     }
 
     private static final int SITE_ATTEMPTS = 90;
+
+    private static long expiryTick(long now, long lifetimeTicks) {
+        // Keep the legacy 3-second floor, while avoiding overflow for callers
+        // that use an unusually large lifetime. Persistence is handled by the
+        // manager's sweep rather than by changing this recorded deadline.
+        long duration = Math.max(60L, lifetimeTicks);
+        return now > Long.MAX_VALUE - duration ? Long.MAX_VALUE : now + duration;
+    }
 
     private final Logger logger;
     private final Random random = new Random();
@@ -303,9 +334,9 @@ public final class PortalBuilder {
                         continue;
                     }
                     BuiltPortal portal = new BuiltPortal(world.getName(), frame, exits, now,
-                            now + Math.max(60L, request.lifetimeTicks));
+                            expiryTick(now, request.lifetimeTicks));
                     try {
-                        place(world, frame, portal);
+                        place(world, frame, portal, request.particlesEnabled);
                     } catch (RuntimeException failure) {
                         return Result.refused("could not safely place a doorway (" + Guard.describe(failure) + ")",
                                 tried);
@@ -446,7 +477,7 @@ public final class PortalBuilder {
         }
     }
 
-    private void place(World world, PortalFrame frame, BuiltPortal portal) {
+    private void place(World world, PortalFrame frame, BuiltPortal portal, boolean particlesEnabled) {
         BlockData obsidian = Material.OBSIDIAN.createBlockData();
         BlockData portalData = Material.NETHER_PORTAL.createBlockData();
         if (!(portalData instanceof Orientable)) {
@@ -472,18 +503,25 @@ public final class PortalBuilder {
             portal.restore(world, logger);
             throw failure;
         }
-        effects(world, portal, true);
+        effects(world, portal, true, particlesEnabled);
     }
 
     /** Portal swirl inside the opening, plus the open/close sounds. */
     static void effects(World world, BuiltPortal portal, boolean withSound) {
+        effects(world, portal, withSound, true);
+    }
+
+    /** Cosmetic particles can be disabled without affecting the physical doorway or its sounds. */
+    static void effects(World world, BuiltPortal portal, boolean withSound, boolean particlesEnabled) {
         try {
             Vec3d c = portal.center();
             Location mouth = new Location(world, c.x(), c.y() - 0.4D, c.z());
-            double spreadAlong = 0.45D;
-            boolean onX = portal.frame().widthOnX();
-            world.spawnParticle(org.bukkit.Particle.PORTAL, mouth, 30,
-                    onX ? spreadAlong : 0.1D, 0.8D, onX ? 0.1D : spreadAlong, 0.05D);
+            if (particlesEnabled) {
+                double spreadAlong = 0.45D;
+                boolean onX = portal.frame().widthOnX();
+                world.spawnParticle(org.bukkit.Particle.PORTAL, mouth, 30,
+                        onX ? spreadAlong : 0.1D, 0.8D, onX ? 0.1D : spreadAlong, 0.05D);
+            }
             if (withSound) {
                 world.playSound(mouth, org.bukkit.Sound.BLOCK_PORTAL_TRIGGER, 0.6f, 1.2f);
                 world.playSound(mouth, org.bukkit.Sound.BLOCK_END_PORTAL_FRAME_FILL, 0.8f, 0.8f);

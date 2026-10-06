@@ -385,9 +385,9 @@ public final class SelfTest {
         }
         int standing = plugin.portals().activeCount();
         int restored = plugin.portals().restoreAll();
-        check(restored >= 0, "portal cleanup ran (" + standing + " standing, "
-                + restored + " restored)");
-        check(plugin.portals().activeCount() == 0, "no doorway is left standing after cleanup");
+        int remaining = plugin.portals().activeCount();
+        check(restored == standing && remaining == 0, "every active doorway restored ("
+                + restored + "/" + standing + " restored, " + remaining + " still active)");
     }
 
     private void stepSquadCleanup() {

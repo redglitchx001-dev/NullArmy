@@ -1156,10 +1156,15 @@ final class SelfTestV3 {
         for (PortalBuilder.BuiltPortal portal : portals) {
             cells.addAll(portal.frame().faceCells());
         }
+        int expectedBlocks = 0;
+        int restoredBlocks = 0;
         int closed = 0;
         for (PortalBuilder.BuiltPortal portal : portals) {
-            plugin.portals().close(portal);
-            closed++;
+            expectedBlocks += portal.blockCount();
+            restoredBlocks += plugin.portals().close(portal);
+            if (portal.isRestored()) {
+                closed++;
+            }
         }
         int left = 0;
         for (int[] cell : cells) {
@@ -1167,8 +1172,9 @@ final class SelfTestV3 {
                 left++;
             }
         }
-        check("S-70", "B-13", closed == portals.size() && left == 0, "closing the doorways restores every block ("
-                + cells.size() + " checked, " + left + " not restored)");
+        check("S-70", "B-13", closed == portals.size() && restoredBlocks == expectedBlocks && left == 0,
+                "closing the doorways restores every changed block (" + restoredBlocks + "/" + expectedBlocks
+                        + " restored, " + cells.size() + " world cells checked, " + left + " not restored)");
         portals = new ArrayList<>();
     }
 

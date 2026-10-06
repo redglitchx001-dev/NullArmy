@@ -10,16 +10,23 @@ import redglitchx.nullarmy.plugin.NullArmyPlugin;
 import redglitchx.nullarmy.plugin.config.PluginConfig;
 import redglitchx.nullarmy.plugin.util.Guard;
 
-import java.net.URI;
+import java.io.ByteArrayOutputStream;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Flow;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * The one place the plugin talks to a language model.
@@ -62,7 +69,7 @@ public final class ChatBrain {
         public String content() { return content; }
     }
 
-    /** Result callback. Exactly one of the two methods is called, once. */
+    /** Result callback. Exactly one method is called once; callbacks run on the server thread while it is available. */
     public interface Reply {
         void ok(String text);
         void failed(String reason);
@@ -78,12 +85,69 @@ public final class ChatBrain {
     private final NullArmyPlugin plugin;
     private final HttpClient http;
     private final RateLimiter limiter;
+    private final Map<String, EndpointBudget> endpointBudgets = new ConcurrentHashMap<>();
+
+    private static final int MAX_ENDPOINT_RETRIES = 5;
+
+    private static final class EndpointBudget {
+        private final int callsPerMinute;
+        private final RateLimiter limiter;
+
+        EndpointBudget(int callsPerMinute) {
+            this.callsPerMinute = callsPerMinute;
+            this.limiter = RateLimiter.perMinute(callsPerMinute);
+        }
+    }
+
+    /** Guards every completion path and prevents a throwing callback from being retried as a failure. */
+    private final class OnceReply implements Reply {
+        private final Reply delegate;
+        private final AtomicBoolean completed = new AtomicBoolean();
+
+        private OnceReply(Reply delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void ok(String text) {
+            complete(() -> delegate.ok(text));
+        }
+
+        @Override
+        public void failed(String reason) {
+            complete(() -> delegate.failed(reason));
+        }
+
+        private void complete(Runnable callback) {
+            if (!completed.compareAndSet(false, true)) {
+                return;
+            }
+            onMainThread(() -> {
+                try {
+                    callback.run();
+                } catch (Throwable t) {
+                    plugin.getLogger().warning("[NullArmy] chat callback failed: " + Guard.describe(t));
+                }
+            });
+        }
+    }
+
+    private static final class ResponseTooLargeException extends RuntimeException {
+        private final int maxBytes;
+
+        ResponseTooLargeException(int maxBytes) {
+            super("response exceeded max-json-bytes (" + maxBytes + ")");
+            this.maxBytes = maxBytes;
+        }
+    }
 
     public ChatBrain(NullArmyPlugin plugin) {
         this.plugin = plugin;
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
-                .followRedirects(HttpClient.Redirect.NORMAL)
+                // Do not follow a redirect with an Authorization header. A
+                // provider/gateway should expose its final OpenAI-compatible URL.
+                .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
         // Conservative default; the per-endpoint limit is applied too.
         this.limiter = RateLimiter.perMinute(20);
@@ -91,7 +155,7 @@ public final class ChatBrain {
 
     // --------------------------------------------------------------- availability
 
-    /** True when a model can actually be reached with the current config. */
+    /** True when at least one role endpoint has a valid URL and resolved key. */
     public boolean available() {
         return !chain().isEmpty();
     }
@@ -108,7 +172,9 @@ public final class ChatBrain {
             return "ai.enabled is false in config.yml";
         }
         if (config.endpoints().isEmpty()) {
-            return "no endpoints are defined under ai.endpoints in config.yml";
+            return config.endpointProblems().isEmpty()
+                    ? "no endpoints are defined under ai.endpoints in config.yml"
+                    : "no valid endpoint was registered; inspect /null ai endpoints and fix the skipped entries";
         }
         if (chain().isEmpty()) {
             return "no enabled endpoint for the ChatCommander role resolves -"
@@ -145,8 +211,10 @@ public final class ChatBrain {
     /**
      * Asks the model what a Null or the Commander should say.
      *
-     * <p>Returns immediately. {@code reply} is always called exactly once, on
-     * the main thread, whatever happens.</p>
+     * <p>Returns immediately. For a non-null callback, exactly one result is
+     * delivered on the main thread whenever the server is available. If the
+     * plugin is already shutting down and the scheduler rejects tasks, the
+     * callback is completed inline rather than being lost.</p>
      *
      * @param persona  the system prompt describing who is speaking
      * @param history  previous turns, oldest first (trimmed by the caller)
@@ -156,80 +224,253 @@ public final class ChatBrain {
         if (reply == null) {
             return;
         }
+        OnceReply once = new OnceReply(reply);
         try {
             List<EndpointConfig> chain = chain();
             if (chain.isEmpty()) {
-                reply.failed(unavailableReason());
+                once.failed(unavailableReason());
                 return;
             }
             if (!limiter.tryAcquire()) {
-                reply.failed("the chat rate limit is reached; try again in "
+                once.failed("the chat rate limit is reached; try again in "
                         + (limiter.millisUntilNextToken() / 1000L + 1L) + "s");
                 return;
             }
-            EndpointConfig endpoint = chain.get(0);
-            String body = requestBody(endpoint, persona, history, userText);
-            if (body == null) {
-                reply.failed("the request could not be built");
+            // Try every configured endpoint in role order. A provider error on
+            // the first model should not make a healthy custom fallback appear
+            // unregistered or leave the player waiting for local fallback.
+            tryEndpoint(chain, 0, persona, history, userText, once, new ArrayList<>());
+        } catch (Throwable t) {
+            plugin.getLogger().warning("[NullArmy] chat request failed to start: " + Guard.describe(t));
+            once.failed("the AI request could not be started");
+        }
+    }
+
+    private void tryEndpoint(List<EndpointConfig> chain, int index, String persona,
+                             List<Turn> history, String userText, Reply reply, List<String> failures) {
+        if (index >= chain.size()) {
+            String reason = failures.isEmpty() ? "no enabled endpoint could be used"
+                    : "all configured endpoints failed (" + String.join("; ", failures) + ")";
+            fail(reply, reason);
+            return;
+        }
+        EndpointConfig endpoint = chain.get(index);
+        String body = requestBody(endpoint, persona, history, userText);
+        if (body == null) {
+            failures.add(endpoint.id() + ": request could not be built");
+            tryEndpoint(chain, index + 1, persona, history, userText, reply, failures);
+            return;
+        }
+        sendAttempt(chain, index, endpoint, body, 0, persona, history, userText, reply, failures);
+    }
+
+    /** Sends one request attempt, applying the endpoint's budget and bounded transient retries. */
+    private void sendAttempt(List<EndpointConfig> chain, int index, EndpointConfig endpoint, String body,
+                             int retriesUsed, String persona, List<Turn> history, String userText,
+                             Reply reply, List<String> failures) {
+        try {
+            RateLimiter endpointLimiter = endpointBudget(endpoint).limiter;
+            if (!endpointLimiter.tryAcquire()) {
+                failures.add(endpoint.id() + ": calls-per-minute limit reached");
+                fallbackToNext(chain, index, persona, history, userText, reply, failures);
                 return;
             }
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(endpoint.baseUrl()))
-                    .timeout(Duration.ofMillis(Math.max(1000L, endpoint.timeoutMillis())))
-                    .header("Content-Type", "application/json")
-                    .header("Accept", "application/json")
-                    .header("Authorization", "Bearer " + endpoint.resolveApiKey())
-                    .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
-                    .build();
 
-            http.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
-                    .whenComplete((response, error) -> {
-                        if (error != null) {
-                            fail(reply, "the endpoint could not be reached: " + brief(error));
-                            return;
-                        }
-                        if (response == null) {
-                            fail(reply, "the endpoint returned nothing");
-                            return;
-                        }
-                        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                            fail(reply, "the endpoint answered HTTP " + response.statusCode()
-                                    + ": " + clip(response.body(), 160));
-                            return;
-                        }
-                        String text = extract(response.body());
-                        if (text == null || text.trim().isEmpty()) {
-                            fail(reply, "the model returned no text");
-                            return;
-                        }
-                        String clean = clean(text);
-                        onMainThread(() -> {
-                            try {
-                                reply.ok(clean);
-                            } catch (Throwable t) {
-                                plugin.getLogger().warning("[NullArmy] chat reply handler failed: "
-                                        + Guard.describe(t));
-                            }
-                        });
-                    });
+            HttpRequest request = buildRequest(endpoint, body);
+            http.sendAsync(request, limitedBodyHandler(Math.max(1, endpoint.maxJsonBytes())))
+                    .whenComplete((response, error) -> handleAttemptResponse(chain, index, endpoint, body,
+                            retriesUsed, persona, history, userText, reply, failures, response, error));
         } catch (Throwable t) {
-            // A malformed endpoint URL lands here, for example.
-            plugin.getLogger().warning("[NullArmy] chat request failed to start: " + Guard.describe(t));
-            reply.failed(Guard.describe(t));
+            // Includes malformed custom URLs and local setup failures. Never log
+            // the raw URL: it may contain credentials in a query string.
+            failures.add(endpoint.id() + ": invalid request configuration");
+            fallbackToNext(chain, index, persona, history, userText, reply, failures);
         }
+    }
+
+    private void handleAttemptResponse(List<EndpointConfig> chain, int index, EndpointConfig endpoint, String body,
+                                       int retriesUsed, String persona, List<Turn> history, String userText,
+                                       Reply reply, List<String> failures, HttpResponse<String> response,
+                                       Throwable error) {
+        try {
+            if (error != null) {
+                Throwable root = rootCause(error);
+                if (root instanceof ResponseTooLargeException) {
+                    ResponseTooLargeException tooLarge = (ResponseTooLargeException) root;
+                    failures.add(endpoint.id() + ": response exceeded max-json-bytes ("
+                            + tooLarge.maxBytes + ")");
+                    fallbackToNext(chain, index, persona, history, userText, reply, failures);
+                    return;
+                }
+                if (retriesUsed < retryLimit(endpoint)) {
+                    retryLater(() -> sendAttempt(chain, index, endpoint, body, retriesUsed + 1,
+                            persona, history, userText, reply, failures), retriesUsed + 1);
+                    return;
+                }
+                failures.add(endpoint.id() + ": request failed (" + root.getClass().getSimpleName() + ")");
+                fallbackToNext(chain, index, persona, history, userText, reply, failures);
+                return;
+            }
+            if (response == null) {
+                failures.add(endpoint.id() + ": empty HTTP response");
+                fallbackToNext(chain, index, persona, history, userText, reply, failures);
+                return;
+            }
+            int status = response.statusCode();
+            if (status < 200 || status >= 300) {
+                if (retryableStatus(status) && retriesUsed < retryLimit(endpoint)) {
+                    retryLater(() -> sendAttempt(chain, index, endpoint, body, retriesUsed + 1,
+                            persona, history, userText, reply, failures), retriesUsed + 1);
+                    return;
+                }
+                failures.add(endpoint.id() + ": HTTP " + status);
+                fallbackToNext(chain, index, persona, history, userText, reply, failures);
+                return;
+            }
+            String text = extract(response.body());
+            if (text == null || text.trim().isEmpty()) {
+                failures.add(endpoint.id() + ": response did not contain chat text");
+                fallbackToNext(chain, index, persona, history, userText, reply, failures);
+                return;
+            }
+            reply.ok(clean(text));
+        } catch (Throwable t) {
+            plugin.getLogger().fine("[NullArmy] AI response processing failed for " + endpoint.id()
+                    + ": " + Guard.describe(t));
+            failures.add(endpoint.id() + ": response could not be processed");
+            fallbackToNext(chain, index, persona, history, userText, reply, failures);
+        }
+    }
+
+    /** Starts the next fallback without letting an exceptional config entry strand the callback. */
+    private void fallbackToNext(List<EndpointConfig> chain, int index, String persona,
+                                List<Turn> history, String userText, Reply reply, List<String> failures) {
+        try {
+            tryEndpoint(chain, index + 1, persona, history, userText, reply, failures);
+        } catch (Throwable t) {
+            plugin.getLogger().warning("[NullArmy] could not continue the AI endpoint fallback chain: "
+                    + Guard.describe(t));
+            fail(reply, "the configured AI endpoint chain could not be started");
+        }
+    }
+
+    /** Builds the exact JSON POST used by both model requests and connectivity probes. */
+    public static HttpRequest buildRequest(EndpointConfig endpoint, String body) {
+        if (endpoint == null) {
+            throw new IllegalArgumentException("endpoint must not be null");
+        }
+        return buildRequest(endpoint.chatCompletionsUri(), endpoint.resolveApiKey(),
+                endpoint.timeoutMillis(), body);
+    }
+
+    /** Shared URL/auth builder so diagnostics probes and chat use identical wire semantics. */
+    public static HttpRequest buildRequest(java.net.URI uri, String apiKey, long timeoutMillis, String body) {
+        if (uri == null || body == null) {
+            throw new IllegalArgumentException("request URI and body must not be null");
+        }
+        HttpRequest.Builder request = HttpRequest.newBuilder()
+                .uri(uri)
+                .timeout(Duration.ofMillis(Math.max(1L, Math.min(120_000L, timeoutMillis))))
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
+        if (apiKey != null && !apiKey.trim().isEmpty()) {
+            request.header("Authorization", "Bearer " + apiKey.trim());
+        }
+        return request.build();
+    }
+
+    private EndpointBudget endpointBudget(EndpointConfig endpoint) {
+        return endpointBudgets.compute(endpoint.id(), (id, current) ->
+                current == null || current.callsPerMinute != endpoint.callsPerMinute()
+                        ? new EndpointBudget(endpoint.callsPerMinute()) : current);
+    }
+
+    private static int retryLimit(EndpointConfig endpoint) {
+        return Math.min(MAX_ENDPOINT_RETRIES, Math.max(0, endpoint.maxRetries()));
+    }
+
+    private static boolean retryableStatus(int status) {
+        return status == 408 || status == 425 || status == 429 || status >= 500;
+    }
+
+    private static void retryLater(Runnable task, int retryNumber) {
+        long delayMillis = Math.min(2000L, 150L << Math.min(4, Math.max(0, retryNumber - 1)));
+        CompletableFuture.delayedExecutor(delayMillis, TimeUnit.MILLISECONDS).execute(task);
+    }
+
+    private static Throwable rootCause(Throwable error) {
+        Throwable current = error;
+        int depth = 0;
+        while (current.getCause() != null && current.getCause() != current && depth++ < 32) {
+            current = current.getCause();
+        }
+        return current;
+    }
+
+    /**
+     * Reads at most {@code maxBytes} from the provider. A standard {@code ofString}
+     * body handler would allocate an oversized response before rejecting it.
+     */
+    public static HttpResponse.BodyHandler<String> limitedBodyHandler(int maxBytes) {
+        final int byteLimit = Math.max(1, maxBytes);
+        return responseInfo -> new HttpResponse.BodySubscriber<String>() {
+            private final ByteArrayOutputStream bytes = new ByteArrayOutputStream(Math.min(byteLimit, 8192));
+            private final CompletableFuture<String> result = new CompletableFuture<>();
+            private Flow.Subscription subscription;
+
+            @Override
+            public CompletionStage<String> getBody() {
+                return result;
+            }
+
+            @Override
+            public void onSubscribe(Flow.Subscription subscription) {
+                if (this.subscription != null) {
+                    subscription.cancel();
+                    return;
+                }
+                this.subscription = subscription;
+                subscription.request(1);
+            }
+
+            @Override
+            public void onNext(List<ByteBuffer> buffers) {
+                try {
+                    for (ByteBuffer buffer : buffers) {
+                        int remaining = buffer.remaining();
+                        if (remaining > byteLimit - bytes.size()) {
+                            subscription.cancel();
+                            result.completeExceptionally(new ResponseTooLargeException(byteLimit));
+                            return;
+                        }
+                        byte[] chunk = new byte[remaining];
+                        buffer.get(chunk);
+                        bytes.write(chunk, 0, chunk.length);
+                    }
+                    subscription.request(1);
+                } catch (Throwable failure) {
+                    subscription.cancel();
+                    result.completeExceptionally(failure);
+                }
+            }
+
+            @Override
+            public void onError(Throwable failure) {
+                result.completeExceptionally(failure);
+            }
+
+            @Override
+            public void onComplete() {
+                result.complete(new String(bytes.toByteArray(), StandardCharsets.UTF_8));
+            }
+        };
     }
 
     /** Reports a failure from whichever thread the HTTP client finished on. */
     private void fail(Reply reply, String reason) {
         plugin.getLogger().warning("[NullArmy] AI chat unavailable: " + reason);
-        onMainThread(() -> {
-            try {
-                reply.failed(reason);
-            } catch (Throwable t) {
-                plugin.getLogger().warning("[NullArmy] chat failure handler failed: "
-                        + Guard.describe(t));
-            }
-        });
+        reply.failed(reason);
     }
 
     /** Hops to the server thread; falls back to the caller when the server is gone. */
@@ -359,11 +600,4 @@ public final class ChatBrain {
         return text.length() <= max ? text : text.substring(0, Math.max(0, max - 1)) + "\u2026";
     }
 
-    private static String brief(Throwable t) {
-        String message = t.getMessage();
-        if (message == null || message.isEmpty()) {
-            return t.getClass().getSimpleName();
-        }
-        return clip(message, 120);
-    }
 }

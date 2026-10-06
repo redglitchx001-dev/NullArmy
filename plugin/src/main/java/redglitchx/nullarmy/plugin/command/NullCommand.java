@@ -123,14 +123,14 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             new String[]{"heal", "nullarmy.admin", "Top your Nulls back to full health."},
             new String[]{"equip", "nullarmy.admin", "Hand your held item to your first Null."},
             new String[]{"drop", "nullarmy.admin", "Empty your Nulls' inventories into the world."},
-            new String[]{"portals", "nullarmy.admin", "Play the portal visual where you stand."},
+            new String[]{"portals [clear]", "nullarmy.admin", "Play portal effects or restore all temporary arrival frames."},
             new String[]{"clearskins", "nullarmy.admin", "Forget cached skins and resolve them again."},
             new String[]{"reload", "nullarmy.admin", "Re-read config.yml without a restart."},
             new String[]{"wand", "nullarmy.build", "Region-select tool for building (Phase 7)."},
             new String[]{"build <structure>", "nullarmy.build", "Bounded, inventory-funded building (Phase 7)."},
             new String[]{"chat <public|private|null|commander|off>", "nullarmy.chat",
                     "Choose public Commander replies, open a private channel, or turn chat off."},
-            new String[]{"ai", "nullarmy.admin", "Whether an AI model is configured and reachable."},
+            new String[]{"ai [build <goal>|stop|test [id]|endpoints]", "nullarmy.admin", "Local building plus AI endpoint diagnostics and connectivity test."},
             new String[]{"portal [player]", "nullarmy.admin", "Walk your Nulls through a portal to you or a player."},
             new String[]{"emote <wave|salute|nod|point|dance|sit>", "nullarmy.admin", "A visible human gesture from your Nulls."},
             new String[]{"greet [player]", "nullarmy.follow", "Your Nulls face and greet someone."},
@@ -232,6 +232,17 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             return out;
         }
         String sub = canonical(args[0]);
+        if (sub.equals("ai") && args.length == 2) {
+            return startingWith(Arrays.asList("build", "stop", "test", "endpoints"), args[1]);
+        }
+        if (sub.equals("ai") && args.length == 3 && args[1].equalsIgnoreCase("test")) {
+            List<String> ids = new ArrayList<>();
+            if (plugin.pluginConfig() != null) {
+                ids.addAll(plugin.pluginConfig().endpoints().keySet());
+                ids.addAll(plugin.pluginConfig().endpointProblems().keySet());
+            }
+            return startingWith(ids, args[2]);
+        }
         if (plugin.v3Commands() != null && plugin.v3Commands().handles(sub, args)
                 && !sub.equals("skin") && !sub.equals("reload") && !sub.equals("config") && !sub.equals("zone")) {
             return startingWith(plugin.v3Commands().complete(sub, args), args[args.length - 1]);
@@ -262,6 +273,8 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
                     return missionCompletion(args[1]);
                 case "confirm":
                     return startingWith(Arrays.asList("yes", "no"), args[1]);
+                case "portals":
+                    return startingWith(List.of("clear"), args[1]);
                 case "airdrop":
                 case "menu":
                     return Collections.emptyList();
@@ -340,7 +353,7 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             case "drop":
                 return drop(sender);
             case "portals":
-                return portals(sender);
+                return portals(sender, args);
             case "clearskins":
                 return clearSkins(sender);
             case "reload":
@@ -1413,14 +1426,26 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
         return null;
     }
 
-    private boolean portals(CommandSender sender) {
+    private boolean portals(CommandSender sender, String[] args) {
         if (!require(sender, "nullarmy.admin")) {
+            return true;
+        }
+        if (args.length >= 2) {
+            if (args[1].equalsIgnoreCase("clear")) {
+                int before = plugin.portals() == null ? 0 : plugin.portals().activeCount();
+                int cleared = plugin.portals() == null ? 0 : plugin.portals().restoreAll();
+                int remaining = plugin.portals() == null ? 0 : plugin.portals().activeCount();
+                sender.sendMessage(PREFIX + "Restored " + cleared + " of " + before
+                        + " active arrival portal(s); " + remaining + " still need restoration.");
+                return true;
+            }
+            sender.sendMessage(PREFIX + "Usage: /null portals [clear]");
             return true;
         }
         if (plugin.portals() != null) {
             sender.sendMessage(PREFIX + "Arrival portals: " + plugin.portals().describe());
         }
-        Player player = asPlayer(sender, "Only a player has a position for the portal.");
+        Player player = asPlayer(sender, "Only a player has a position for the portal effect.");
         if (player == null) {
             return true;
         }
@@ -1434,13 +1459,16 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             sender.sendMessage(PREFIX + "No adapter is loaded, so no effects can be played.");
             return true;
         }
-        int effects = Math.max(Caps.minPortalEffects(), config.caps().portalEffectsPerSummon());
+        boolean particles = config == null || config.portalParticlesEnabled();
+        int effects = particles ? Math.max(Caps.minPortalEffects(),
+                config == null ? Caps.minPortalEffects() : config.caps().portalEffectsPerSummon()) : 0;
         String world = loc.getWorld().getName();
         Vec3d at = new Vec3d(loc.getX(), loc.getY(), loc.getZ());
         boolean ok = Guard.attempt(plugin.getLogger(), "manual portal effects",
                 () -> adapter.playPortalEffects(world, at, effects));
         sender.sendMessage(PREFIX + (ok
-                ? "Played " + effects + " portal effects where you stand (cosmetic only)."
+                ? particles ? "Played " + effects + " portal particles where you stand (cosmetic only)."
+                        : "Portal particles are disabled; the optional portal sound played. Physical arrival frames are unchanged."
                 : "The portal effect failed - see the log."));
         return true;
     }
@@ -1552,17 +1580,31 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             return true;
         }
         ChatBrain brain = plugin.chat() == null ? null : plugin.chat().brain();
-        sender.sendMessage(PREFIX + "AI endpoints: " + config.endpoints().size()
-                + ", enabled: " + config.aiEnabled() + ", usable: " + config.aiUsable() + ".");
+        int enabledEndpoints = 0;
+        int usableEndpoints = 0;
+        for (redglitchx.nullarmy.core.agent.EndpointConfig endpoint : config.endpoints().values()) {
+            if (endpoint.enabled()) {
+                enabledEndpoints++;
+            }
+            if (endpoint.isUsable()) {
+                usableEndpoints++;
+            }
+        }
+        sender.sendMessage(PREFIX + "AI endpoints registered: " + config.endpoints().size()
+                + ", invalid/skipped: " + config.endpointProblems().size()
+                + ", enabled: " + enabledEndpoints + ", usable: " + usableEndpoints
+                + ", ai.enabled: " + config.aiEnabled() + ".");
         if (brain == null || !brain.available()) {
-            sender.sendMessage(PREFIX + "AI is not usable: "
+            sender.sendMessage(PREFIX + "ChatCommander is not usable: "
                     + (brain == null ? "the chat director is unavailable" : brain.unavailableReason()) + ".");
+            sender.sendMessage(PREFIX + "Run /null ai endpoints for registration, key and role-chain details.");
             sender.sendMessage(PREFIX + "The plugin is fully functional without it -"
-                    + " AI only adds conversation and the AI-only roles.");
+                    + " AI only adds conversation and typed squad advice.");
             describeCoordination(sender);
             return true;
         }
-        sender.sendMessage(PREFIX + "Chat model is ready for the ChatCommander role.");
+        sender.sendMessage(PREFIX + "ChatCommander has a valid endpoint and resolved key."
+                + " Run /null ai test [id] to check network reachability.");
         PlanOutcome outcome = aiOutcome();
         if (outcome != null) {
             sender.sendMessage(PREFIX + outcome.message);

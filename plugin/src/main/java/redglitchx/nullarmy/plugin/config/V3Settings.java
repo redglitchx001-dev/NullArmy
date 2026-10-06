@@ -39,6 +39,8 @@ public final class V3Settings {
     private final int airHeightMax;
     private final double floatingChance;
     private final boolean restoreAfterExit;
+    private final boolean portalPersistUntilClear;
+    private final boolean portalParticlesEnabled;
 
     // combat
     private final boolean combatEnabled;
@@ -109,6 +111,8 @@ public final class V3Settings {
     private final String builderEndpoint;
     private final String builderModel;
     private final String builderApiKey;
+    private final String builderApiKeyStatus;
+    private final String builderApiKeyProblem;
     private final int builderTimeoutMs;
     private final int builderMaxSteps;
     private final int builderPlaceRateTicks;
@@ -137,6 +141,8 @@ public final class V3Settings {
         this.airHeightMax = max;
         this.floatingChance = clampD(config.getDouble("portals.floating-chance", 0.35D), 0.0D, 1.0D);
         this.restoreAfterExit = config.getBoolean("portals.restore-after-exit", true);
+        this.portalPersistUntilClear = config.getBoolean("portals.persist-until-clear", false);
+        this.portalParticlesEnabled = config.getBoolean("visuals.portal-particles-enabled", true);
 
         this.combatEnabled = config.getBoolean("combat.enabled", true);
         this.playersCanHitNulls = config.getBoolean("combat.players-can-hit-nulls", true);
@@ -199,7 +205,10 @@ public final class V3Settings {
         this.builderEnabled = config.getBoolean("ai.builder.enabled", true);
         this.builderEndpoint = trimmed(config.getString("ai.builder.endpoint", ""));
         this.builderModel = trimmed(config.getString("ai.builder.model", ""));
-        this.builderApiKey = resolveKey(config);
+        ResolvedBuilderKey resolvedBuilderKey = resolveKey(config);
+        this.builderApiKey = resolvedBuilderKey.value;
+        this.builderApiKeyStatus = resolvedBuilderKey.status;
+        this.builderApiKeyProblem = resolvedBuilderKey.problem;
         this.builderTimeoutMs = clamp(config.getInt("ai.builder.timeout-ms", 20000), 500, 120000,
                 "ai.builder.timeout-ms", logger);
         this.builderMaxSteps = clamp(config.getInt("ai.builder.max-steps", 400), 1, 4000,
@@ -209,16 +218,62 @@ public final class V3Settings {
         this.builderGatherOutsideZone = config.getBoolean("ai.builder.gather-outside-zone", false);
     }
 
-    private static String resolveKey(FileConfiguration config) {
+    private static final class ResolvedBuilderKey {
+        private final String value;
+        private final String status;
+        private final String problem;
+
+        private ResolvedBuilderKey(String value, String status, String problem) {
+            this.value = value;
+            this.status = status;
+            this.problem = problem;
+        }
+    }
+
+    private static ResolvedBuilderKey resolveKey(FileConfiguration config) {
+        String unresolved = "";
         for (String path : new String[] {"ai.builder.api-key", "ai.api-key"}) {
             String raw = trimmed(config.getString(path, ""));
-            String value = fromEnvReference(raw);
+            if (raw.isEmpty()) {
+                continue;
+            }
+            if (!raw.startsWith("env:")) {
+                return new ResolvedBuilderKey(raw, "inline key set", "");
+            }
+            String name = raw.substring(4).trim();
+            if (!name.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+                if (unresolved.isEmpty()) {
+                    unresolved = "API-key environment variable name is invalid";
+                }
+                continue;
+            }
+            String value = environmentValue(name);
             if (!value.isEmpty()) {
-                return value;
+                return new ResolvedBuilderKey(value, "env:" + name + " resolved", "");
+            }
+            if (unresolved.isEmpty()) {
+                unresolved = "API-key environment variable '" + name + "' is missing or invalid";
             }
         }
-        String env = System.getenv(AI_KEY_ENV);
-        return env == null ? "" : env.trim();
+        String fallback = environmentValue(AI_KEY_ENV);
+        if (!fallback.isEmpty()) {
+            String status = "env:" + AI_KEY_ENV + " resolved"
+                    + (unresolved.isEmpty() ? "" : " (configured env key unavailable)");
+            return new ResolvedBuilderKey(fallback, status, "");
+        }
+        if (!unresolved.isEmpty()) {
+            return new ResolvedBuilderKey("", unresolved, unresolved);
+        }
+        return new ResolvedBuilderKey("", "no key configured (env:" + AI_KEY_ENV + " is optional)", "");
+    }
+
+    private static String environmentValue(String name) {
+        try {
+            String value = System.getenv(name);
+            return value == null ? "" : value.trim();
+        } catch (IllegalArgumentException | SecurityException unavailable) {
+            return "";
+        }
     }
 
     private static String resolveSecret(String raw) {
@@ -236,7 +291,7 @@ public final class V3Settings {
         try {
             String env = System.getenv(name);
             return env == null ? "" : env.trim();
-        } catch (IllegalArgumentException invalidName) {
+        } catch (IllegalArgumentException | SecurityException unavailable) {
             return "";
         }
     }
@@ -287,6 +342,8 @@ public final class V3Settings {
     public int airHeightMax() { return airHeightMax; }
     public double floatingChance() { return floatingChance; }
     public boolean restoreAfterExit() { return restoreAfterExit; }
+    public boolean portalPersistUntilClear() { return portalPersistUntilClear; }
+    public boolean portalParticlesEnabled() { return portalParticlesEnabled; }
 
     public boolean combatEnabled() { return combatEnabled; }
     public boolean playersCanHitNulls() { return playersCanHitNulls; }
@@ -378,17 +435,27 @@ public final class V3Settings {
     public String builderEndpoint() { return builderEndpoint; }
     public String builderModel() { return builderModel; }
     public String builderApiKey() { return builderApiKey; }
+    public String builderApiKeyStatus() { return builderApiKeyStatus; }
+    public String builderApiKeyProblem() { return builderApiKeyProblem; }
     public boolean builderHasKey() { return !builderApiKey.isEmpty(); }
     public int builderTimeoutMs() { return builderTimeoutMs; }
     public int builderMaxSteps() { return builderMaxSteps; }
     public int builderPlaceRateTicks() { return builderPlaceRateTicks; }
     public boolean builderGatherOutsideZone() { return builderGatherOutsideZone; }
 
+    /** Hides URL credentials and query values from command diagnostics. */
+    private static String safeEndpointForDisplay(String raw) {
+        return redglitchx.nullarmy.core.agent.EndpointConfig.safeEndpointForDisplay(raw);
+    }
+
     /** Effective values for {@code /null config}; secrets are masked. */
     public Map<String, Object> describe() {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("summon.zone-size", zoneSize);
         out.put("portals.lifetime-s", portalLifetimeTicks / 20);
+        out.put("portals.persist-until-clear", portalPersistUntilClear);
+        out.put("portals.restore-after-exit", restoreAfterExit);
+        out.put("visuals.portal-particles-enabled", portalParticlesEnabled);
         out.put("portals.air-height-min", airHeightMin);
         out.put("portals.air-height-max", airHeightMax);
         out.put("portals.floating-chance", floatingChance);
@@ -403,13 +470,16 @@ public final class V3Settings {
         out.put("formations.spacing", formationSpacing);
         out.put("skins.value", skinValue.isEmpty() ? "(unset)" : "(set, " + skinValue.length() + " chars)");
         out.put("skins.signature", skinSignature.isEmpty() ? "(unset)" : "(set)");
-        out.put("skins.proxy-url", skinProxyUrl.isEmpty() ? "(unset)" : skinProxyUrl);
+        out.put("skins.proxy-url", skinProxyUrl.isEmpty() ? "(unset)" : safeEndpointForDisplay(skinProxyUrl));
         out.put("skins.mineskin.api-key", skinMineSkinApiKey.isEmpty() ? "(unset)" : "(set, hidden)");
         out.put("ai.builder.enabled", builderEnabled);
         out.put("ai.builder.endpoint", builderEndpoint.isEmpty()
-                ? "(unset - deterministic local planner)" : builderEndpoint + " (connectivity test only)");
+                ? "(unset - deterministic local planner)" : safeEndpointForDisplay(builderEndpoint)
+                        + " (connectivity test only)");
         out.put("ai.builder.model", builderModel.isEmpty() ? "(unset)" : builderModel);
-        out.put("ai.builder.api-key", builderApiKey.isEmpty() ? "(unset)" : "(set, hidden)");
+        out.put("ai.builder.api-key", builderApiKey.isEmpty()
+                ? "(unset; " + builderApiKeyStatus + ")"
+                : "(set, hidden; " + builderApiKeyStatus + ")");
         out.put("ai.builder.timeout-ms", builderTimeoutMs);
         out.put("ai.builder.max-steps", builderMaxSteps);
         out.put("ai.builder.place-rate-ticks", builderPlaceRateTicks);

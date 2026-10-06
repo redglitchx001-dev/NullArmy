@@ -236,7 +236,7 @@ public final class Airdrop implements Reloadable {
             return;
         }
         String world = sky.getWorld().getName();
-        int effects = Math.max(Caps.minPortalEffects(), portalEffects());
+        int effects = portalEffects();
         for (int i = 0; i < GROUND_CLUSTERS; i++) {
             double offset = (i - 1) * 2.0;
             Vec3d point = new Vec3d(sky.getX() + offset, sky.getY(), sky.getZ() + offset);
@@ -251,7 +251,7 @@ public final class Airdrop implements Reloadable {
             return;
         }
         String world = feet.getWorld().getName();
-        int effects = Math.max(Caps.minPortalEffects(), portalEffects());
+        int effects = portalEffects();
         for (int i = 0; i < GROUND_CLUSTERS; i++) {
             double angle = (2.0 * Math.PI * i) / GROUND_CLUSTERS;
             Vec3d point = new Vec3d(feet.getX() + Math.cos(angle) * 2.0, feet.getY(),
@@ -263,7 +263,10 @@ public final class Airdrop implements Reloadable {
 
     private int portalEffects() {
         PluginConfig current = config;
-        return current == null ? 16 : current.airdropPortals();
+        if (current != null && !current.portalParticlesEnabled()) {
+            return 0;
+        }
+        return Math.max(Caps.minPortalEffects(), current == null ? 16 : current.airdropPortals());
     }
 
     /** Releases at most one TNT per tick per air drop. */

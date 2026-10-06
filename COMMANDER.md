@@ -3,12 +3,11 @@
 One named Null that spawns from a portal, wears one configured skin, carries a loadout you edit
 in a GUI, and fights with a real mace/elytra technique library.
 
-> ### ✅ Status: implemented and verified on a live Paper 1.21.11 server
-> CI run `37433416087` (commit `4d20296`) ends with `RESULT: PASS 120 passed, 0 failed` and
-> `RUNTIME SMOKE: PASS - verified on a live Paper server.` The Commander-specific checks are S-95
-> (kit, Elytra, white trim, loadout preserved), S-105 (sneak + horn recall), S-113 (live rename,
-> `NAME: MESSAGE` replies) and S-117 (the `/null tp` cannon includes the Commander when he belongs
-> to the owner who fired it). What still needs a real client is listed at the end of this file.
+> ### Historical verification: prior commit only
+> CI run `37433416087` (commit `4d20296`) reported `RESULT: PASS 120 passed, 0 failed` and a live
+> Paper 1.21.11 smoke pass. That evidence covers the older commit, not this session's working tree.
+> The current Commander flight-controller edits are not yet built or runtime-tested; the authoring
+> environment has no Java/JDK. S-95, S-105, S-113 and S-117 are historical checks from that run.
 
 ---
 
@@ -209,11 +208,22 @@ The GUI mirrors that layout, so what you see is what the Commander actually carr
 ## Combat: mace and elytra
 
 `PvpArsenal` contains **25 deterministic techniques** across mace, elytra and movement. The
-pure selector is covered by dependency-free core tests. In live combat, the Commander builds a
-situation from its inventory, target and fall state, then currently executes supported smash,
-Wind Burst, Density and elytra-dive mace choices through vanilla `Player#attack`. Shield-break,
-pearl, water-placement and flight-controller entries are still planning-library strategies, not
-implemented live actions.
+pure selector is covered by dependency-free core tests. The combat integration selects supported
+smash, Wind Burst, Density and elytra-dive mace choices through vanilla `Player#attack`. A separate
+`ElytraFlightController` now handles the narrow, Commander-only mid-range pursuit case (combat
+orders are capped at 32 blocks, and flight is considered from 18 blocks): it requires a usable
+real Elytra (worn or stored) and real firework rockets, temporarily equips it when necessary,
+attaches a real firework to the gliding Commander, applies vanilla-rate Elytra wear (including
+Unbreaking), and restores swapped gear when the pursuit ends or becomes invalid. Flight stops
+when the wings reach one remaining durability; broken wings are never consumed.
+Only an explicit combat pursuit can request this flight; ordinary Nulls, follow/formation travel,
+and idle behaviour do not. Wind Charges remain one-off impulses, never sustained flight.
+
+The flight controller includes guards and a self-test for its decision/gear-swap paths, but actual
+Paper gliding, rocket boost, durability, collision, landing, death, and disable behaviour still need
+build plus Paper/client runtime verification. Shield-break, pearl, water-placement and the advanced
+elytra techniques in `PvpArsenal` remain planning-only; the new controller does not implement all
+25 entries.
 
 ### Mace (12)
 
@@ -302,13 +312,13 @@ optional.
 
 ## Limits and verification
 
-- The current working tree is verified by the live Paper 1.21.11 smoke run recorded in
-  `STATUS.md` (CI `37433416087`, `RESULT: PASS 120 passed, 0 failed`). Checks that cannot be driven
-  headless print `BLOCKED:` and assert the closest measurable thing instead — S-44, S-69 and S-94
-  carry such a note.
-- The live Commander integration currently selects supported mace weapon choices only. Elytra
-  flight control, pearl movement, water placement, crossbow combos and other library entries are
-  not executed yet; they must not be presented as working tactics.
+- The historical Paper 1.21.11 smoke run recorded in `STATUS.md` (CI `37433416087`,
+  `RESULT: PASS 120 passed, 0 failed`) verified commit `4d20296`, not this working tree. The current
+  changes have not been built or smoke-tested because Java is unavailable in this environment.
+- The live combat integration selects supported mace weapon choices. The current working tree also
+  contains the limited explicit-pursuit Elytra controller described above, but its actual glide
+  path still needs runtime verification. Pearl movement, water placement, crossbow combos and the
+  other advanced library entries remain planning-only; do not present them as working tactics.
 - A real client should still verify the visible skin, chestplate trim, portal entrance and GUI
   appearance after a successful build. Skin tests using local stubs do not prove external MineSkin
   or Mojang availability.

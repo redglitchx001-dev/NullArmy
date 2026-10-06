@@ -299,12 +299,19 @@ public final class NullBrain implements Reloadable {
         Intent intent = null;
         boolean busy = false;
         if (plugin.builder() != null && plugin.builder().drives(body)) {
+            combat.stopFlight(body, handle);
             intent = plugin.builder().tickBody(body, mind, handle, world, pos, now);
             busy = true;
         }
-        if (!busy && combat.active(mind, handle)) {
-            intent = combat.tick(body, mind, handle, world, pos);
-            busy = true;
+        if (!busy) {
+            if (combat.active(mind, handle)) {
+                intent = combat.tick(body, mind, handle, world, pos);
+                busy = true;
+            } else {
+                // Orders can be cleared by a command or a dead/missing target
+                // between ticks. Restore temporary Commander gear promptly.
+                combat.stopFlight(body, handle);
+            }
         }
         if (mind.order != null && mind.order.verb == Mind.Verb.HUNT) {
             // L-07: the hunt ends when the target does - checked every tick,
@@ -1395,6 +1402,7 @@ public final class NullBrain implements Reloadable {
         for (NullBody body : targets) {
             Mind mind = mind(body);
             if (mind != null) {
+                combat.stopFlight(body, Bodies.player(body));
                 mind.order = null;
                 mind.holdCell = null;
                 mind.combatTarget = null;
@@ -1994,6 +2002,7 @@ public final class NullBrain implements Reloadable {
 
     /** Drops every mind (used when the plugin disables). */
     public void clear() {
+        combat.stopAllFlight();
         minds.clear();
     }
 

@@ -186,6 +186,11 @@ public final class V3Commands {
                 || k.equals("skins.value")) && value != null && !String.valueOf(value).isEmpty()) {
             return String.valueOf(value).startsWith("env:") ? value : "(set, hidden)";
         }
+        boolean endpointUrl = k.startsWith("ai.endpoints.") && k.endsWith(".endpoint");
+        if ((endpointUrl || k.equals("ai.builder.endpoint") || k.equals("skins.proxy-url"))
+                && value != null && !String.valueOf(value).isEmpty()) {
+            return redglitchx.nullarmy.core.agent.EndpointConfig.safeEndpointForDisplay(String.valueOf(value));
+        }
         return value;
     }
 
@@ -599,8 +604,10 @@ public final class V3Commands {
             return true;
         }
         String id = args.length >= 3 ? args[2] : "";
-        say(sender, "Testing" + (id.isEmpty() ? " the configured builder endpoint" : " endpoint '" + id + "'")
-                + "...");
+        say(sender, "Testing" + (id.isEmpty()
+                ? " the configured target (ai.builder.endpoint or ChatCommander chain)"
+                : " endpoint " + redglitchx.nullarmy.core.agent.EndpointConfig
+                        .safeEndpointForDisplay("id:" + id)) + "...");
         plugin.builder().testEndpoint(id, line -> say(sender, line));
         return true;
     }
@@ -886,7 +893,15 @@ public final class V3Commands {
             }
         }
         if (sub.equals("ai") && args.length == 2) {
-            return Arrays.asList("build", "stop");
+            return Arrays.asList("build", "stop", "test", "endpoints");
+        }
+        if (sub.equals("ai") && args.length == 3 && args[1].equalsIgnoreCase("test")) {
+            if (plugin.pluginConfig() == null) {
+                return Collections.emptyList();
+            }
+            List<String> ids = new ArrayList<>(plugin.pluginConfig().endpoints().keySet());
+            ids.addAll(plugin.pluginConfig().endpointProblems().keySet());
+            return ids;
         }
         if (sub.equals("loadout") && args.length == 2) {
             List<String> out = new ArrayList<>(Collections.singletonList("template"));

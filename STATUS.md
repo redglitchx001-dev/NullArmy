@@ -1,17 +1,13 @@
 # NullArmy — Status
 
-**Last updated:** 2026-10-06 · **Current state:** the follow-up corrections are **verified on a
-live Paper 1.21.11 server**. The code tree of this pass is commit `4d20296` on branch
-`arena/c18d2228-nullarmy` (CI run `37433416087`, check-run `112169357725`); the commits after it
-touch only these documents, and each of their CI runs was green as well (latest: run `37434523123`).
-`./gradlew clean build` (Java 21) ends with the `runtimeSmoke` task and reports
-**`RESULT: PASS 120 passed, 0 failed`**, then
-`RUNTIME SMOKE: PASS - verified on a live Paper server.` The five checks that were failing on `main`
-(S-78, S-85, S-87, S-88, S-102) pass, S-115 (loot pickup) passes again, and the `/null tp` cannon
-has its own runtime check, **S-117**. S-44, S-69 and S-94 still print an honest `BLOCKED:` note for
-the half that needs a live client, and in each case the closest measurable half is asserted and
-passes. Every claim below carries the check that measured it; nothing here is inferred from a
-compile.
+**Last updated:** 2026-10-06 · **Historical verification:** the prior Paper 1.21.11 smoke run for
+commit `4d20296` on `arena/c18d2228-nullarmy` (CI `37433416087`, check-run `112169357725`) reported
+`RESULT: PASS 120 passed, 0 failed`. Those results cover that earlier commit only, not the current
+session branch. The current working-tree endpoint, portal, and Commander flight changes have not
+been compiled or runtime-tested: this authoring environment has no Java/JDK executable, so there is
+no fresh build/test result. Treat the detailed tables below as historical evidence until the current
+branch is built and its self-tests are run. S-44, S-69 and S-94 in the older run print a `BLOCKED:`
+note for the half that needs a live client and assert the closest measurable half.
 
 Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit + architecture) ·
 [`TRACEABILITY.md`](TRACEABILITY.md) (471-item register) ·
