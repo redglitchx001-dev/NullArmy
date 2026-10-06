@@ -9,9 +9,9 @@ import java.util.Locale;
  *
  * <pre>
  *   h=4  O O O O      O = obsidian frame (14 blocks)
- *   h=3  O . . O      . = interior, 2 wide x 3 tall, left as AIR -
- *   h=2  O . . O          nothing in it is a portal block, so nothing that
- *   h=1  O . . O          enters it is ever teleported (one-way by design)
+ *   h=3  O P P O      P = real NETHER_PORTAL block (2 wide x 3 tall)
+ *   h=2  O P P O          travel events for this temporary doorway are cancelled
+ *   h=1  O P P O          so it is visible and physical, but one-way
  *   h=0  O O O O
  *        w=0 1 2 3
  * </pre>
@@ -22,7 +22,7 @@ import java.util.Locale;
  * doorway hangs {@code air-height-min..max} blocks above the ground below it;
  * Nulls step out and fall, taking real fall damage. A site is only used when
  * every frame and interior block is air beforehand: no terrain is ever cut
- * into.</p>
+ * into, and every changed block is restored when the doorway closes.</p>
  *
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
  */
@@ -99,7 +99,7 @@ public final class PortalFrame {
         return out;
     }
 
-    /** The 6 interior blocks (left as air). */
+    /** The 6 interior blocks filled with real NETHER_PORTAL data after validation. */
     public List<int[]> interiorCells() {
         List<int[]> out = new ArrayList<>();
         for (int h = 1; h <= INNER_HEIGHT; h++) {
@@ -256,7 +256,7 @@ public final class PortalFrame {
 
     /**
      * Problems with a doorway that has been built; empty when it is a complete,
-     * upright, one-way frame.
+     * upright obsidian frame with a real NETHER_PORTAL interior.
      */
     public List<String> builtProblems(Lookup world, int airMin, int airMax) {
         List<String> out = new ArrayList<>();
@@ -268,9 +268,9 @@ public final class PortalFrame {
         }
         for (int[] c : interiorCells()) {
             String type = world.type(c[0], c[1], c[2]);
-            if (!isAir(type)) {
+            if (!"NETHER_PORTAL".equals(type)) {
                 out.add("interior block at " + c[0] + "," + c[1] + "," + c[2] + " is " + type
-                        + " (must stay air)");
+                        + " (must be a real NETHER_PORTAL block)");
             }
         }
         if (kind == Kind.GROUND) {

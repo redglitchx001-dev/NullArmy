@@ -1,17 +1,18 @@
 # =====================================================================
 #  NullArmy configuration. Copyright (c) RedGlitchX. All rights reserved.
 #
-#  EVERY FEATURE IN THIS FILE IS SWITCHED ON, and the Null caps are 100,
-#  because that is what the owner asked for. Two settings are deliberately
-#  left OFF and are marked with  !! MAP PROTECTION !!  below:
+#  Non-destructive features are enabled where practical. Protection-sensitive
+#  and destructive settings remain OFF by default; do not treat a request to
+#  "make everything true" as permission to enable world damage blindly.
+#  The two switches marked  !! MAP PROTECTION !!  below are:
 #
-#     policy.griefing-enabled   - lets explosions destroy blocks
-#     wither-cannon.blocks-damage - lets the cannon's TNT destroy blocks
+#     policy.griefing-enabled   - permits configured Null block destruction
+#     wither-cannon.blocks-damage - permits the cannon explosion to break blocks
 #
-#  With those two off you still get the full show: the cannon fires a real
-#  TNT minecart, real TNT comes through the sky portals, the blasts happen
-#  with sound, light, particles and knockback - no block is ever destroyed.
-#  Turn them on only on a map you are willing to lose.
+#  With block damage off, the real charged Wither Skull explosion still occurs
+#  with its vanilla sound, particles, entity damage and knockback; only its
+#  block list is cleared. The cannon does not spawn TNT minecarts. Turn block
+#  damage on only on a map where that destructive behavior is intended.
 #
 #  UPDATES: when this build ships a setting your file does not have yet, it
 #  is APPENDED to the bottom of your config.yml (with a timestamped backup
@@ -82,18 +83,18 @@ portals:
   # HARD maximum doorways one summon may open. The plugin also refuses to go
   # above 16 whatever this says.
   max-per-summon: 4
-  # How many Nulls may share one doorway before they would step on each other.
-  max-per-portal: 4
+  # One or two Nulls emerge per doorway; spread larger squads across more doors.
+  max-per-portal: 2
   # How many doorways may be standing in the world at once.
   max-active: 32
   # How long a doorway stays before its blocks are put back (20 ticks = 1s).
   # Superseded by lifetime-s below when that key is present.
   lifetime-ticks: 600
-  # v3: a doorway is an upright, complete obsidian frame (4 wide, 5 tall) around
-  # a 2x3 opening that stays AIR - there are no portal blocks, so nothing that
-  # walks or is thrown into it is ever teleported. Nulls start inside the opening
-  # and step out. Seconds before the frame is removed and the blocks restored
-  # (it also closes as soon as the last Null has stepped clear, see below).
+  # A doorway is an upright, complete obsidian frame (4 wide, 5 tall) with six
+  # real NETHER_PORTAL blocks filling the 2x3 opening. Nulls start inside and
+  # physically walk out; portal-travel events from these owned blocks are
+  # cancelled. The frame and portal blocks are restored on timeout or when the
+  # last assigned Null has stepped clear (see below).
   lifetime-s: 30
   restore-after-exit: true
   # Share of doorways that hang in the air instead of standing on the ground.
@@ -169,10 +170,14 @@ loadout:
     - "10:NETHERITE_SHOVEL:1"
     - "11:POTION:1|potion=strong_strength"
     - "12:POTION:1|potion=strong_regeneration"
-    - "13:ENCHANTED_GOLDEN_APPLE:1"
+    - "13:ENCHANTED_GOLDEN_APPLE:4"
     - "14:DEEPSLATE:64"
     - "15:OBSIDIAN:16"
     - "16:TORCH:32"
+    - "17:MACE:1"
+    - "18:TOTEM_OF_UNDYING:2"
+    - "19:WIND_CHARGE:16"
+    - "20:FIREWORK_ROCKET:32"
     - "36:NETHERITE_BOOTS:1|protection=4,unbreaking=3,feather_falling=4"
     - "37:NETHERITE_LEGGINGS:1|protection=4,unbreaking=3"
     - "38:NETHERITE_CHESTPLATE:1|protection=4,unbreaking=3"
@@ -191,21 +196,19 @@ menu:
 #  square", "null attack Steve". Orders run through the same /null executor as
 #  typing them, so permissions, caps and policy gates are identical.
 #
-#  The Commander's lines are printed as:  [NullArmy] <its name>: <text>
-#  The prefix is the plugin's gradient brand; the name itself carries no
-#  colours and no symbols, exactly like a normal player's name.
+#  Public Commander replies are printed like a normal player line: Name: message.
+#  Command confirmations and private replies still use the plugin's own prefix.
 # ---------------------------------------------------------------------
 chat:
   enabled-by-default: true
   commander-only-conversation: true
   nulls-orders-only: true
-  commander-chat-prefix: true
   # v4: how a player gets the Commander's attention. With the default "@" the
   # Commander answers anyone who writes "@NullCommander ..." (or his own name at
   # the start of a line), while the wake words below still work for everybody.
   mention-prefix: "@"
-  # Units never speak. Deaths, arrivals, kit, missions and shutdown all go to
-  # the console and to /null status instead of chat.
+  # Unit status/arrival/kit/mission announcements stay out of public chat;
+  # vanilla Null death messages remain visible like any player's.
   silence-units: true
   wake-words:
     # Quoted: an unquoted `null` is YAML's null value, not the word.
@@ -222,10 +225,10 @@ chat:
     # Quoted on purpose: an unquoted `null` key is YAML's null value.
     "null": ""
     commander: ""
-  # v3: a line that starts with a wake word OR the Commander's plain name (any
-  # case) is a public conversation: the player's line stays in chat and the
-  # Commander answers in public chat. Order words are obeyed; Nulls gesture and
-  # never speak. Every other line is left alone.
+  # By default, a line that starts with a wake word or the Commander's name gets
+  # a public Commander reply formatted as Name: message. Players can switch their
+  # own channel with /null chat public|private|off. OFF still accepts recognized
+  # orders; PRIVATE consumes ordinary chat until the session ends.
   commander-public-replies: true
   commander-name-trigger: true
 
@@ -241,8 +244,6 @@ chat:
 nulls:
   show-in-tab-list: true
   plain-names: true
-  # v3 bodies. A Null that dies plays the death animation and drops nothing.
-  no-death-drops: true
   # Nulls pick up items they walk over (the builder relies on it).
   pickup-items: true
   # Nulls push and are pushed like players, and keep this far from each other.
@@ -250,8 +251,8 @@ nulls:
   separation-radius: 1.0
   # Every Null walks at its own pace: 90-110 % of a player's base speed.
   speed-variance: true
-  # Idle life: glance at players nearby, look around, crouch to rest after a while,
-  # eat a golden apple (or drink healing) below this share of health.
+  # Idle life: crouch to rest after a while and eat a golden apple (or drink
+  # healing) below this share of health. Idle glances and scans are disabled.
   idle-behaviour: true
   eat-below-health: 0.6
   rest-after-idle-s: 60
@@ -259,14 +260,13 @@ nulls:
 # ---------------------------------------------------------------------
 #  NAMES  (v4, P-03)
 #
-#  A Null's name used to be 16 random alphanumerics, which reads as unreadable
-#  hex gibberish (c1b12d32d3dc74c4) in the tab list, on the nameplate and in the
-#  server list. style: "words" gives every Null a readable themed handle such as
-#  Voidwalker, Null_07 or Grimjaw_12 - unique, at most 16 characters, never a
-#  UUID fragment. "codes" restores the old random strings.
+#  Every Null receives a unique random 16-character alphanumeric username.
+#  Names begin with a letter and include at least one digit. The legacy style
+#  key is retained for existing configs; its old "words" value no longer
+#  overrides the requested random-name behavior.
 # ---------------------------------------------------------------------
 names:
-  style: "words"
+  style: "codes"
 
 # ---------------------------------------------------------------------
 #  SUMMON ZONE  (v3)
@@ -285,9 +285,9 @@ summon:
 #  Nulls swing only with a full attack cooldown, crit by striking while falling,
 #  carry sprint knockback, strafe at 2-3 blocks, raise shields between swings,
 #  lead and arc their bow shots, and back off to eat below 30 % health.
-#  They fight what they are ordered to fight and, with retaliate, whoever hits
-#  them, a squad mate or their owner. initiate: false means they never start a
-#  fight on their own. Server PvP rules for real players are never overridden.
+#  They pursue and face targets only on explicit attack/hunt orders. Retaliation
+#  can defend at melee range, but never causes a Null to acquire or chase a
+#  target on its own. Server PvP rules for real players are never overridden.
 # ---------------------------------------------------------------------
 combat:
   enabled: true
@@ -310,7 +310,6 @@ combat:
   shields: true
   bows: true
   retaliate: true
-  initiate: false
   fall-damage: true
   # An axe on a raised shield disables it for this many ticks (30 = 1.5 s).
   shield-disable-ticks: 30
@@ -336,28 +335,14 @@ orders:
 #
 #  A Null used to vanish with its kit - armour, tools, blocks and all - which
 #  meant beating one paid nothing. With enabled: true a defeated Null drops what
-#  it carries on the ground, exactly like a player: armour, both hands and the
-#  contents of its inventory. chance is the share of the kit that drops (1.0 =
-#  everything). Real players' own drops stay vanilla and are never touched.
-#  A server that already set nulls.no-death-drops keeps that answer.
+#  it carries on the ground, exactly like a /kill victim: armour, both hands
+#  and the contents of its inventory. chance is the share of the kit that drops
+#  (1.0 = everything). Real players' own drops stay vanilla and are never touched.
+#  An explicit drops.enabled: false is the only way to suppress Null loot.
 # ---------------------------------------------------------------------
 drops:
   enabled: true
   chance: 1.0
-
-# ---------------------------------------------------------------------
-#  SERVER LIST  (v4, P-11)
-#
-#  The Nulls are real server-driven bodies, so the vanilla ping used to answer
-#  0/2026 while two hundred of them stood in front of the castle. show-army adds
-#  the live Null count to the player count in the multiplayer screen, the hover
-#  sample lists their names next to the real players, and format is the optional
-#  MOTD line ({nulls}, {players} and {total} are substituted).
-# ---------------------------------------------------------------------
-motd:
-  show-army: true
-  max-players: 2026
-  format: "NULL ARMY - {nulls} strong"
 
 # ---------------------------------------------------------------------
 #  BEHAVIOUR  (v4, L-01..L-08)  -  the Unstable-SMP NULL feeling
@@ -391,8 +376,6 @@ mechanics:
   # player), verifying the arrival spot as collision-safe ground first. This is
   # the one deliberate exception to the no-teleport rule.
   portal-travel: true
-  # Nulls occasionally look around on their own, and turn to face their owner.
-  idle-gestures: true
 
 # ---------------------------------------------------------------------
 #  MISSIONS  -  original NullArmy content
@@ -423,20 +406,19 @@ selftest:
 #  AI ENDPOINTS  —  add as many as you want
 # ---------------------------------------------------------------------
 ai:
-  # v3 AI builder: /null ai build <goal> (or "Commander, build a hut" in chat).
-  # endpoint is an OpenAI-compatible base URL, e.g. https://api.openai.com/v1 -
-  # /chat/completions is appended. The model must answer with strict JSON steps;
-  # a bad plan is retried once, then the offline planner (hut, bridge, wall,
-  # tower, platform) builds instead. Every block is placed by hand, one per swing.
+  # Deterministic local builder: /null ai build <goal> (or "Commander, build a hut"
+  # in chat) uses local plans for hut, bridge, wall, tower, platform, throne and
+  # gathering. AI is never asked to create or modify construction plans. Every
+  # block is placed by hand, one per swing, using the Nulls' own inventory.
   # The key can also come from the environment variable NULLARMY_AI_KEY, or use
   # "env:NAME" here. Never commit a key.
   api-key: ""
   builder:
     enabled: true
-    # v4 (P-07): ANY OpenAI-compatible base URL, or "id:<name>" to use one of
-    # the endpoints defined under ai.endpoints below with its own model, key and
-    # timeout. Empty = the offline planner. /null ai test [id] reports the
-    # endpoint's HTTP status and model; /null ai endpoints lists them.
+    # Optional endpoint used only by /null ai test [id] to check connectivity;
+    # construction never sends goals or plans to this endpoint. Accepts any
+    # OpenAI-compatible base URL or "id:<name>" from ai.endpoints. Empty is fine:
+    # deterministic local construction does not need an AI service.
     endpoint: ""
     api-key: ""
     model: ""
@@ -512,11 +494,12 @@ ai:
       enabled: false
 
   # ===================================================================
-  #  OPTIONAL - per-role routing. Valid role names: ChatCommander,
-  #  CombatTactician, BuilderAgent, PathfinderCore, ScoutObserver,
-  #  ThreatAnalyst, LogisticsQuartermaster, MedicTriage,
-  #  FormationTactician, RedstoneAnalyst, MiningForeman,
-  #  IdleBehaviourDirector, GuardianAuditor
+  #  OPTIONAL - per-role routing. Valid roles include ChatCommander,
+  #  CombatTactician, PathfinderCore, ScoutObserver, ThreatAnalyst,
+  #  LogisticsQuartermaster, MedicTriage, FormationTactician,
+  #  RedstoneAnalyst, MiningForeman, IdleBehaviourDirector,
+  #  GuardianAuditor. Legacy BuilderAgent accepts connectivity tests only;
+  #  build planning is deterministic and local.
   # ===================================================================
   # agents:
   #   CombatTactician:
@@ -539,15 +522,21 @@ skins:
   # Skin for the Commander. Empty = same as the Null skin above.
   commander: ""
 
-  # v3 priority chain: 1) value + signature pasted here, 2) proxy-url,
-  # 3) the Mojang account above, 4) a bundled skin.png (reported as unsigned -
-  # clients only display signed textures). /null skin shows what every Null wears
-  # and why; /null reload and /null clearskins re-apply the skin live.
+  # Skin priority: 1) signed value + signature pasted here; 2) the local PNG
+  # plugins/NullArmy/skins/null.png signed through MineSkin; 3) proxy-url; then
+  # 4) the Mojang account above. A custom PNG is shared with the Commander when
+  # both use the same skin account. Minecraft needs signed texture data; raw PNG
+  # bytes cannot be applied directly. /null reload re-signs changed PNGs and
+  # live-reapplies the resolved skin without a relog.
   value: ""
   signature: ""
+  # MineSkin API key from https://account.mineskin.org/keys. Prefer an environment
+  # variable so the key is not stored in this file, for example env:MINESKIN_API_KEY.
+  mineskin:
+    api-key: ""
   # Any URL answering {"value":"...","signature":"..."} (MineSkin and Mojang
-  # session shapes work too) or raw base64. Failures log the HTTP status and the
-  # first 80 characters of the answer.
+  # session shapes work too) or raw base64. Failures log the HTTP status and a
+  # short response preview.
   proxy-url: ""
   live-reapply: true
 

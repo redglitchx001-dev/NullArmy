@@ -8,7 +8,7 @@
 > the core rules**. Every item requires genuine inventory, legal perception, and authoritative server
 > validation. Items marked *(version-specific)* depend on content added in a particular 1.21 drop.
 
-**Status: all 250 items are `not started`.** None is implemented.
+**Historical planning status: all 250 items were marked `not started` when this addendum was drafted.** These labels predate later v3/v4 implementation and are not a current source audit. See `STATUS.md` and the warning in `TRACEABILITY.md`; per-item completion is not yet reconciled.
 
 ---
 
@@ -282,7 +282,9 @@
 
 ---
 
-## Summary
+## Historical Status Summary — stale
+
+The status cells below preserve the original planning snapshot only. Their `not started` values do not reflect later code; do not use `0 implemented` as a current count.
 
 | Group | Items | Range | Status |
 | --- | ---: | :---: | :---: |
@@ -293,7 +295,7 @@
 | **J. Survival, crafting, economy & SMP life** | 50 | 357–406 | all `not started` |
 | **K. Mining, building, redstone & automation** | 40 | 407–446 | all `not started` |
 | **L. Stealth, perception, scouting & lifelike behaviour** | 25 | 447–471 | all `not started` |
-| **Total** | **471** | 1–471 | **0 implemented** |
+| **Total** | **471** | 1–471 | **historical: 0 implemented** |
 
 Items marked *(1.21.9)* depend on **The Copper Age**; items marked *(1.21.11)* depend on
 **Mounts of Mayhem**. Both are inside the declared target range, but **1.21.11 is the newest

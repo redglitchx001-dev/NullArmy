@@ -3,9 +3,10 @@ package redglitchx.nullarmy.core.agent;
 /**
  * The catalogue of AI agent roles NullArmy can bind to an endpoint.
  *
- * <p>Spec 7 defines four roles (ChatCommander, CombatTactician, BuilderAgent,
- * PathfinderCore). This enum extends that catalogue. Every role obeys the same
- * hard rule: an agent <b>advises</b>, the local validator <b>decides</b>.</p>
+ * <p>Spec 7 defines chat, combat, building and navigation roles. Owner corrections
+ * make building deterministic/local, so {@code BuilderAgent} is retained only
+ * as a legacy connectivity-test key and is never sent a build-planning request.
+ * For active roles, an agent <b>advises</b> and the local validator <b>decides</b>.</p>
  *
  * <p>There is deliberately <b>no moderation role</b>. Spec 8: "Do not let an
  * external endpoint ban, kick, mute, op, execute commands for, or moderate a
@@ -24,9 +25,9 @@ public enum AgentRole {
             "Recommends a high-level tactical intent from a strict enum.",
             "deal damage, move an NPC, bypass the local combat validator"),
 
-    BUILDER("BuilderAgent", OutputType.BLOCK_PLAN,
-            "Returns a bounded block-plan JSON using an allowed palette.",
-            "place blocks, skip inventory/support/protection/cost checks"),
+    BUILDER("BuilderAgent", OutputType.TEXT,
+            "Legacy compatibility key for connectivity tests only; build plans are deterministic and local.",
+            "design or execute builds, or return an action-bearing block plan"),
 
     PATHFINDER("PathfinderCore", OutputType.ROUTE,
             "Suggests a destination or route preference from a sanitized snapshot.",
@@ -74,7 +75,7 @@ public enum AgentRole {
         TEXT,
         /** One value from a closed enum (hold, approach, flank, retreat, ...). */
         INTENT,
-        /** Bounded block-plan JSON with a fixed palette and dimensions. */
+        /** Reserved schema type; no active AI role may return a build plan. */
         BLOCK_PLAN,
         /** A destination or route preference. */
         ROUTE,

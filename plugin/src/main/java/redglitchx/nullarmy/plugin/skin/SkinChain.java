@@ -2,6 +2,7 @@ package redglitchx.nullarmy.plugin.skin;
 
 import org.bukkit.Bukkit;
 
+import redglitchx.nullarmy.core.json.Json;
 import redglitchx.nullarmy.core.skin.SkinPayload;
 import redglitchx.nullarmy.nms.NullBody;
 import redglitchx.nullarmy.plugin.NullArmyPlugin;
@@ -10,17 +11,27 @@ import redglitchx.nullarmy.plugin.config.Reloadable;
 import redglitchx.nullarmy.plugin.config.V3Settings;
 import redglitchx.nullarmy.plugin.util.Guard;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Which skin the Nulls wear, in a fixed order of trust.
@@ -28,15 +39,14 @@ import java.util.Map;
  * <ol>
  *   <li>{@code skins.value} + {@code skins.signature} from config.yml - an owner
  *       who pasted a signed texture gets exactly that, with no network;</li>
+ *   <li>{@code plugins/NullArmy/skins/null.png}, uploaded to MineSkin v2 and
+ *       cached as a signed texture (requires {@code skins.mineskin.api-key});</li>
  *   <li>{@code skins.proxy-url} - any service that returns
  *       {@code {"value","signature"}} JSON (MineSkin and Mojang shapes too) or raw
  *       base64; a failure logs the HTTP status and the first 80 characters of the
  *       body so the owner can see what the proxy said;</li>
  *   <li>Mojang by account name ({@code skins.nulls} / {@code skins.commander}),
- *       through the existing cache and resolver;</li>
- *   <li>a bundled {@code skin.png} - reported honestly: a PNG cannot be shown by
- *       clients until it is signed, so the Nulls keep the default skin and
- *       {@code /null skin} says why.</li>
+ *       through the existing cache and resolver.</li>
  * </ol>
  *
  * <p>The chain runs off the main thread. When it settles, every live Null and
@@ -47,6 +57,13 @@ import java.util.Map;
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
  */
 public final class SkinChain implements Reloadable {
+
+    private static final URI MINESKIN_QUEUE_URI = URI.create("https://api.mineskin.org/v2/queue");
+    private static final String MINESKIN_BASE_URL = "https://api.mineskin.org";
+    private static final String MINESKIN_USER_AGENT = "NullArmy/0.1.0 (Paper plugin; skin signing)";
+    private static final int MAX_CUSTOM_PNG_BYTES = 2 * 1024 * 1024;
+    private static final int MAX_MINESKIN_POLLS = 60;
+    private static final int MAX_MINESKIN_RESPONSE_CHARS = 256 * 1024;
 
     /** One resolved skin and where it came from. */
     public static final class Resolution {
@@ -73,6 +90,8 @@ public final class SkinChain implements Reloadable {
 
     private final NullArmyPlugin plugin;
     private final HttpClient http;
+    /** MineSkin requests do not follow redirects, preventing the bearer key from ever being forwarded. */
+    private final HttpClient mineSkinHttp;
     private volatile Resolution nulls = new Resolution(null, "not resolved yet", Collections.emptyList());
     private volatile Resolution commander = new Resolution(null, "not resolved yet", Collections.emptyList());
     private final Map<String, String> applied = Collections.synchronizedMap(new LinkedHashMap<>());
@@ -82,6 +101,14 @@ public final class SkinChain implements Reloadable {
         this.plugin = plugin;
         this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
                 .followRedirects(HttpClient.Redirect.NORMAL).build();
+        this.mineSkinHttp = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
+                .followRedirects(HttpClient.Redirect.NEVER).build();
+        try {
+            Files.createDirectories(plugin.getDataFolder().toPath().resolve("skins"));
+        } catch (IOException | SecurityException failure) {
+            plugin.getLogger().warning("[NullArmy] could not prepare plugins/NullArmy/skins ("
+                    + failure.getClass().getSimpleName() + "); custom PNG skins may be unavailable.");
+        }
     }
 
     @Override
@@ -109,7 +136,7 @@ public final class SkinChain implements Reloadable {
         try {
             Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
                 Resolution forNulls = resolve(false);
-                Resolution forCommander = resolve(true);
+                Resolution forCommander = commanderSharesNullSkin() ? forNulls : resolve(true);
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     nulls = forNulls;
                     commander = forCommander;
@@ -150,7 +177,23 @@ public final class SkinChain implements Reloadable {
         } else {
             attempts.add("config value+signature: not set");
         }
-        // 2. Proxy.
+        // 2. A local PNG must be signed before Minecraft clients can use it.
+        if (forCommander && !commanderSharesNullSkin()) {
+            attempts.add("skins/null.png: skipped because the Commander has a separate skin account");
+        } else {
+            SkinPayload customPng = signCustomPng(v3);
+            if (customPng != null) {
+                if (customPng.complete()) {
+                    attempts.add("skins/null.png via MineSkin: signed texture used");
+                    return new Resolution(new SkinData(customPng.value(), customPng.signature(),
+                            SkinData.Source.MINESKIN), "MineSkin signed plugins/NullArmy/skins/null.png", attempts);
+                }
+                attempts.add("skins/null.png via MineSkin: " + customPng.error());
+            } else {
+                attempts.add("skins/null.png: not present");
+            }
+        }
+        // 3. Proxy.
         if (v3 != null && !v3.skinProxyUrl().isEmpty()) {
             SkinPayload payload = fetchProxy(v3.skinProxyUrl());
             if (payload.complete()) {
@@ -162,7 +205,7 @@ public final class SkinChain implements Reloadable {
         } else {
             attempts.add("proxy: not set");
         }
-        // 3. Mojang by name.
+        // 4. Mojang by name.
         String name = account(forCommander);
         if (name != null && !name.isEmpty() && plugin.skins() != null) {
             SkinData cached = plugin.skins().resolveCached(name);
@@ -184,14 +227,291 @@ public final class SkinChain implements Reloadable {
         } else {
             attempts.add("Mojang account: not set");
         }
-        // 4. Bundled skin.png - honest about what it can and cannot do.
-        File png = new File(plugin.getDataFolder(), "skin.png");
-        boolean bundled = png.isFile() || plugin.getResource("skin.png") != null;
-        attempts.add(bundled ? "skin.png: present, but unsigned - clients will not display it; use"
-                + " skins.proxy-url (a signing service) or paste skins.value + skins.signature"
-                : "skin.png: none");
-        return new Resolution(null, bundled ? "skin.png (unsigned, not displayable) - default skin shown"
+        // 5. Legacy root-level skin.png is not signed, so Minecraft cannot display it.
+        File legacyPng = new File(plugin.getDataFolder(), "skin.png");
+        boolean legacyPngPresent = legacyPng.isFile() || plugin.getResource("skin.png") != null;
+        attempts.add(legacyPngPresent ? "legacy skin.png: present but unsigned; use skins/null.png with"
+                + " skins.mineskin.api-key, skins.proxy-url, or a signed skins.value + skins.signature"
+                : "legacy skin.png: none");
+        return new Resolution(null, legacyPngPresent ? "legacy skin.png (unsigned, not displayable) - default skin shown"
                 : "nothing resolved - default skin shown", attempts);
+    }
+
+    private boolean commanderSharesNullSkin() {
+        PluginConfig config = plugin.pluginConfig();
+        return config == null || config.commanderSkinName().equalsIgnoreCase(config.nullSkinName());
+    }
+
+    /**
+     * Signs the administrator-provided PNG and reuses a disk cache until its
+     * content changes. A null result means no custom file is present.
+     */
+    private synchronized SkinPayload signCustomPng(V3Settings v3) {
+        Path image = plugin.getDataFolder().toPath().resolve("skins").resolve("null.png");
+        if (!Files.exists(image)) {
+            return null;
+        }
+        if (!Files.isRegularFile(image)) {
+            return SkinPayload.failure("skins/null.png is not a regular file");
+        }
+
+        final byte[] png;
+        try {
+            long size = Files.size(image);
+            if (size < 8 || size > MAX_CUSTOM_PNG_BYTES) {
+                return SkinPayload.failure("skins/null.png must be a PNG no larger than 2 MiB");
+            }
+            png = Files.readAllBytes(image);
+        } catch (IOException | SecurityException failure) {
+            return SkinPayload.failure("could not read skins/null.png (" + failure.getClass().getSimpleName() + ")");
+        }
+        if (!hasPngSignature(png)) {
+            return SkinPayload.failure("skins/null.png does not have a PNG file signature");
+        }
+
+        final String digest;
+        try {
+            digest = sha256(png);
+        } catch (NoSuchAlgorithmException impossible) {
+            return SkinPayload.failure("SHA-256 is unavailable on this Java runtime");
+        }
+        SkinPayload cached = readMineSkinCache(digest);
+        if (cached != null && cached.complete()) {
+            return cached;
+        }
+
+        String apiKey = v3 == null ? "" : v3.skinMineSkinApiKey();
+        if (apiKey == null || apiKey.isEmpty()) {
+            return SkinPayload.failure("MineSkin API key is not available; set skins.mineskin.api-key"
+                    + " (an env:NAME reference is supported)");
+        }
+        if (apiKey.length() > 4096 || apiKey.indexOf('\r') >= 0 || apiKey.indexOf('\n') >= 0) {
+            return SkinPayload.failure("MineSkin API key is not a valid HTTP header value");
+        }
+
+        SkinPayload signed = uploadToMineSkin(png, apiKey);
+        if (signed.complete()) {
+            writeMineSkinCache(digest, signed);
+        }
+        return signed;
+    }
+
+    private SkinPayload uploadToMineSkin(byte[] png, String apiKey) {
+        String boundary = "----NullArmy" + UUID.randomUUID().toString().replace("-", "");
+        byte[] body = mineSkinMultipart(png, boundary);
+        try {
+            HttpRequest request = HttpRequest.newBuilder(MINESKIN_QUEUE_URI)
+                    .timeout(Duration.ofSeconds(15))
+                    .header("Authorization", "Bearer " + apiKey)
+                    .header("User-Agent", mineSkinUserAgent())
+                    .header("Accept", "application/json")
+                    .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                    .build();
+            HttpResponse<String> response = mineSkinHttp.send(request,
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            String responseBody = response.body() == null ? "" : response.body();
+            if (responseBody.length() > MAX_MINESKIN_RESPONSE_CHARS) {
+                return SkinPayload.failure("MineSkin returned an oversized response");
+            }
+            if (response.statusCode() != 200 && response.statusCode() != 202) {
+                return SkinPayload.failure("MineSkin queue returned HTTP " + response.statusCode());
+            }
+
+            SkinPayload immediate = SkinPayload.parse(responseBody);
+            if (immediate.complete()) {
+                return immediate;
+            }
+            String jobId = mineSkinJobId(responseBody);
+            if (jobId == null) {
+                return SkinPayload.failure("MineSkin queue response had no signed texture or job id");
+            }
+            return pollMineSkinJob(jobId, apiKey);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return SkinPayload.failure("MineSkin request was interrupted");
+        } catch (Exception failure) {
+            // Never include request details here: the Authorization header is a secret.
+            return SkinPayload.failure("MineSkin request failed (" + failure.getClass().getSimpleName() + ")");
+        }
+    }
+
+    private SkinPayload pollMineSkinJob(String jobId, String apiKey) throws IOException, InterruptedException {
+        if (!jobId.matches("[A-Za-z0-9._~-]{1,128}")) {
+            return SkinPayload.failure("MineSkin returned an invalid job id");
+        }
+        URI statusUri = URI.create(MINESKIN_BASE_URL + "/v2/queue/" + jobId);
+        long deadline = System.nanoTime() + Duration.ofSeconds(90).toNanos();
+        long lastPollNanos = 0L;
+        for (int poll = 0; poll < MAX_MINESKIN_POLLS && System.nanoTime() < deadline; poll++) {
+            if (lastPollNanos != 0L) {
+                long remaining = Duration.ofSeconds(1).toNanos() - (System.nanoTime() - lastPollNanos);
+                if (remaining > 0L) {
+                    java.util.concurrent.TimeUnit.NANOSECONDS.sleep(remaining);
+                }
+            }
+            if (System.nanoTime() >= deadline) {
+                break;
+            }
+            lastPollNanos = System.nanoTime();
+            HttpRequest request = HttpRequest.newBuilder(statusUri)
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Authorization", "Bearer " + apiKey)
+                    .header("User-Agent", mineSkinUserAgent())
+                    .header("Accept", "application/json")
+                    .GET().build();
+            HttpResponse<String> response = mineSkinHttp.send(request,
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            String body = response.body() == null ? "" : response.body();
+            if (body.length() > MAX_MINESKIN_RESPONSE_CHARS) {
+                return SkinPayload.failure("MineSkin returned an oversized job response");
+            }
+            if (response.statusCode() != 200) {
+                return SkinPayload.failure("MineSkin job status returned HTTP " + response.statusCode());
+            }
+            SkinPayload signed = SkinPayload.parse(body);
+            if (signed.complete()) {
+                return signed;
+            }
+            String status = mineSkinJobStatus(body);
+            if ("failed".equals(status)) {
+                return SkinPayload.failure("MineSkin could not sign skins/null.png");
+            }
+            if ("completed".equals(status)) {
+                return SkinPayload.failure("MineSkin completed without signed texture data");
+            }
+            if (status == null || !("waiting".equals(status) || "active".equals(status)
+                    || "unknown".equals(status))) {
+                return SkinPayload.failure("MineSkin returned an unrecognized job status");
+            }
+        }
+        return SkinPayload.failure("MineSkin signing timed out while waiting for the queue");
+    }
+
+    private String mineSkinUserAgent() {
+        String version = plugin.getDescription().getVersion();
+        if (version == null || version.trim().isEmpty()) {
+            version = "unknown";
+        }
+        version = version.replaceAll("[^A-Za-z0-9._+-]", "_");
+        return "NullArmy/" + version + " (Paper plugin; skin signing)";
+    }
+
+    private static byte[] mineSkinMultipart(byte[] png, String boundary) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(png.length + 512);
+        writeUtf8(out, "--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"file\"; filename=\"null.png\"\r\n"
+                + "Content-Type: image/png\r\n\r\n");
+        out.write(png, 0, png.length);
+        writeUtf8(out, "\r\n--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"name\"\r\n\r\n"
+                + "NullArmy Null\r\n--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"visibility\"\r\n\r\n"
+                + "unlisted\r\n--" + boundary + "--\r\n");
+        return out.toByteArray();
+    }
+
+    private static void writeUtf8(ByteArrayOutputStream out, String text) {
+        byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+        out.write(bytes, 0, bytes.length);
+    }
+
+    private static boolean hasPngSignature(byte[] bytes) {
+        byte[] signature = new byte[] {(byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a};
+        if (bytes == null || bytes.length < signature.length) {
+            return false;
+        }
+        for (int i = 0; i < signature.length; i++) {
+            if (bytes[i] != signature[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static String sha256(byte[] bytes) throws NoSuchAlgorithmException {
+        byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
+        char[] hex = "0123456789abcdef".toCharArray();
+        char[] result = new char[digest.length * 2];
+        for (int i = 0; i < digest.length; i++) {
+            int value = digest[i] & 0xff;
+            result[i * 2] = hex[value >>> 4];
+            result[i * 2 + 1] = hex[value & 0x0f];
+        }
+        return new String(result);
+    }
+
+    private SkinPayload readMineSkinCache(String digest) {
+        Path cache = mineSkinCachePath();
+        try {
+            if (!Files.isRegularFile(cache) || Files.size(cache) > MAX_MINESKIN_RESPONSE_CHARS) {
+                return null;
+            }
+            List<String> lines = Files.readAllLines(cache, StandardCharsets.UTF_8);
+            if (lines.size() < 3 || !digest.equals(lines.get(0).trim())) {
+                return null;
+            }
+            SkinPayload payload = SkinPayload.of(lines.get(1).trim(), lines.get(2).trim());
+            return payload.complete() ? payload : null;
+        } catch (IOException | SecurityException ignored) {
+            return null;
+        }
+    }
+
+    private void writeMineSkinCache(String digest, SkinPayload payload) {
+        Path cache = mineSkinCachePath();
+        Path temporary = cache.resolveSibling(cache.getFileName() + ".tmp");
+        try {
+            Files.createDirectories(cache.getParent());
+            Files.write(temporary, List.of(digest, payload.value(), payload.signature()), StandardCharsets.UTF_8);
+            try {
+                Files.move(temporary, cache, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException unsupported) {
+                Files.move(temporary, cache, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException | SecurityException failure) {
+            plugin.getLogger().fine("[NullArmy] could not persist the MineSkin result ("
+                    + failure.getClass().getSimpleName() + ")");
+            try {
+                Files.deleteIfExists(temporary);
+            } catch (IOException ignored) {
+                // The cache is only an optimization; a stale temp file is harmless.
+            }
+        }
+    }
+
+    private Path mineSkinCachePath() {
+        return plugin.getDataFolder().toPath().resolve("skins").resolve("null.mineskin.skin");
+    }
+
+    private static String mineSkinJobId(String body) {
+        Map<String, Object> job = mineSkinJob(body);
+        Object id = job == null ? null : job.get("id");
+        return id instanceof String ? (String) id : null;
+    }
+
+    private static String mineSkinJobStatus(String body) {
+        Map<String, Object> job = mineSkinJob(body);
+        Object status = job == null ? null : job.get("status");
+        return status instanceof String ? (String) status : null;
+    }
+
+    private static Map<String, Object> mineSkinJob(String body) {
+        try {
+            if (body == null || body.length() > MAX_MINESKIN_RESPONSE_CHARS) {
+                return null;
+            }
+            Map<String, Object> root = Json.asObject(Json.parse(body, MAX_MINESKIN_RESPONSE_CHARS));
+            Object job = root.get("job");
+            if (job instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> result = (Map<String, Object>) job;
+                return result;
+            }
+        } catch (RuntimeException ignored) {
+            // The caller will report a generic missing/invalid MineSkin response.
+        }
+        return null;
     }
 
     private String account(boolean forCommander) {

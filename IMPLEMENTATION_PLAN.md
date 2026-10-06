@@ -1,10 +1,15 @@
 # NullArmy — Implementation Plan
 
-**Phase 0 deliverable · Repository & feasibility audit**
-**Date:** 2026-10-03 · **Status:** Phase 0 complete — awaiting `CONTINUE`
+**Historical Phase 0 deliverable · Repository & feasibility audit**
+**Date:** 2026-10-03 · **Status:** historical audit; this is not the current repository inventory
 **Source spec:** [`NullArmy_Master_Prompt.md`](NullArmy_Master_Prompt.md)
 
-> Produced per §11 Phase 0: *"Inspect repository/build/server target and current files. Produce an architecture diagram in text, module/file plan, exact version compatibility table, NMS/packet feasibility notes, and list of vanilla impossibilities/approximations. Resolve all ambiguous commands and config defaults in the documented assumptions. Do not hide a blocker behind a stub."*
+> This audit predates the current multi-module source tree and later v3/v4 implementation. Its
+> repository-count, architecture, and test-infrastructure findings below are historical snapshots,
+> not current facts. The current working tree has substantial Java source and tests, but its latest
+> edits remain unverified because Java is unavailable. See `STATUS.md` for the current branch
+> snapshot. The active owner corrections in `NullArmy_Master_Prompt.md` supersede conflicting
+> assumptions here (notably portals, gaze, custom skin upload, chat, and AI building).
 
 ---
 
@@ -49,6 +54,10 @@ Per §"YOUR ROLE AND DELIVERABLE" — *"If there is no repository, propose a com
 | `git` | ✅ Available | in use |
 | Disk free | 20 GB | sufficient |
 | Memory | 3.9 GB total | adequate for Gradle |
+
+> This tool table is also historical (measured 2026-10-03). The current checkout includes a Gradle
+> wrapper, but `./gradlew test` still cannot start because no `java` executable or `JAVA_HOME` is
+> available in the workspace.
 
 ### 1.3 Network reachability (measured)
 
@@ -208,7 +217,7 @@ conn.send(new ClientboundSetEntityDataPacket(npc.getId(), null));
   ASYNC (never touches world state):
     ┌───────────────────────────────────────────────┐
     │ Agent endpoints (ChatCommander, CombatTactician,
-    │ BuilderAgent, PathfinderCore)                 │
+    │ PathfinderCore; BuilderAgent connectivity only) │
     │  • circuit breaker, timeouts, strict schemas  │
     │  • ADVISE ONLY — results revalidated on main  │
     └───────────────────────────────────────────────┘
@@ -308,7 +317,7 @@ Per §1.5 — *"Do not silently simulate impossible mechanics."* Status vocabula
 | 4 | Armor removal → invisibility | `blocked by vanilla` | Reduces glint **and** protection; real potion required for invisibility |
 | 5 | Wind Charge → sustained flight | `blocked by vanilla` | One-shot impulse; real Elytra + rockets for gliding |
 | 6 | Packet-only fake player in combat/collision/inventory | `blocked by vanilla` | Server-authoritative entity for world effects; packets cosmetic only |
-| 7 | Summon portals teleport | `blocked by vanilla` | Particles/sound only; Nulls physically walk out |
+| 7 | Temporary summon doorway | `version-specific / implemented in 1.21.11 source` | Owner-approved real temporary obsidian/`NETHER_PORTAL` doorway; Nulls walk through, blocks restore, and custom portal travel is cancelled. No teleport or dimension travel. |
 | 8 | Potion combining / fusion | `blocked by vanilla` | Legal brewing + tactical sequencing |
 | 9 | Java sword blocking (legacy block-hit) | `blocked by vanilla` | Java has no sword blocking; shields only |
 | 10 | Bypass bedrock / unbreakables | `blocked by vanilla` | Recognise and stop |

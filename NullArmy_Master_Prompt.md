@@ -7,6 +7,25 @@
 
 ---
 
+## ACTIVE OWNER CORRECTIONS — 2026-10-06
+
+These direct owner decisions supersede conflicting older wording below and in the expansion catalogue:
+
+- **Building is deterministic and local.** AI must not design, approve, place, or otherwise be responsible for building. Local planners and server-side validation own construction. Configurable endpoints may serve other explicitly AI-enabled abilities/roles.
+- **No ambient head motion.** Remove random glances/scans and head-only yaw. Only intentional `mind.attention` and explicit combat/formation looks may turn a Null; head and body turn together.
+- **Pursuit is order-gated.** Nulls run toward enemies only on an explicit attack/shoot/hunt order. Retaliation may defend at melee range but does not acquire, face, or close toward a distant attacker.
+- **Temporary real summon doorways are required.** Where safe, build a temporary obsidian frame with a real `NETHER_PORTAL` opening; Nulls physically walk through/out of it and the modified blocks are restored. Limit a doorway to one or two Nulls (hard maximum 2). This supersedes the cosmetic-only portal wording below. It does not authorize Nether/End travel or teleporting during summoning.
+- **Dedicated `/null tp` exception:** this exact command gives the owner a nearly-broken fishing rod. When the hook sticks in a block and is reeled in, one real Ender Pearl per live Null (and the owner's Commander, if present) is launched as a falling projectile from varied heights and spaced positions over the target area. Each Null must spend its own pearl; no ammunition is fabricated, the target must be in a loaded safe area in the same world, and ordinary movement/summoning remain physical. This is not a general teleport API or AI action.
+- **Chat modes:** support per-player `/null chat public|private|off` (and the Commander channel), with public replies formatted exactly `NAME: MESSAGE`.
+- **Skin registration:** support `plugins/NullArmy/skins/null.png` by signing through MineSkin or consuming an already-signed texture pair. Unsigned PNG bytes are not a Minecraft skin. `env:NAME` API-key references are supported; resolved secrets must never be logged or exposed.
+- **Kit and safety:** the Commander receives the shared Null kit plus Elytra; ordinary Nulls get the same kit without Elytra. No armor trims except a white trim on the Commander's chestplate. The Commander remains damageable. `/kill <NullName>` must work, Null deaths use vanilla drops and kill/death messages, and Totem pops plus shutdown remain silent.
+- **Do not alter server-list values.** Leave the server MOTD, displayed player counts, max players, and sample untouched. `/null reload` must actually reapply plugin configuration.
+- **Names:** generate random usernames from letters and digits, within the target version's legal profile-name constraints.
+- Keep ordinary vanilla actions, explosions, and Wind Charges functional; do not globally cancel them to fake behavior. Explicit safety policies, owner/team protection, and destructive-operation configuration still apply. Ambiguous requests such as “make everything true” are not permission to enable protection-sensitive/destructive options blindly.
+- The owner requested implementation of all `.txt` and `.md` inputs, including the 471-mechanic catalogue. Work incrementally, flag unresolved conflicts, and never claim the full catalogue is complete based on a partial pass.
+
+---
+
 ## YOUR ROLE AND DELIVERABLE
 
 You are a senior Java, Paper/NMS, networking, gameplay-AI, and Minecraft systems engineer. Design and implement **NullArmy**, a high-quality, configurable SMP plugin that creates physically simulated, player-like Null NPCs. The Nulls should behave like coordinated, skilled survival players—not invulnerable mobs, magical units, or client-side illusions.
@@ -34,7 +53,7 @@ Every Null action must correspond to an action a real survival-mode Java player 
 - No magical teleporting, invisible movement, wall phasing, instant construction, giant fusions, fabricated loot, free ammunition, infinite durability, or AI-generated items.
 - The NPC inventory is authoritative. Every consumed, fired, placed, dropped, traded, repaired, or picked-up item changes that inventory by the correct amount. Maintain an auditable item ledger for transfers and consumption.
 - A loadout GUI is a **loadout blueprint**, not an item duplicator. Gear must come from items donated by the summoner, collected from legitimate drops, crafted from genuinely acquired resources, traded for, or withdrawn from explicitly configured storage.
-- No Ender Pearl, chorus-fruit, command, plugin shortcut, or portal effect may be used to evade the no-teleport rule. Do not use Nether/End portals for Null travel unless the owner explicitly changes this rule in a future version.
+- No Ender Pearl, chorus-fruit, command, plugin shortcut, or portal effect may be used for automatic movement, path recovery, or summoning teleportation. The one explicit Ender Pearl exception is the permission-gated `/null tp` fishing-rod cannon above: it consumes one real pearl per live Null and uses a same-world loaded safe landing area. Do not use Nether/End portals for Null travel unless separately authorized by the owner.
 - Potions, enchantments, and status effects are allowed only when the Null has the required real vanilla item and the effect is legal under the server version and game rules.
 - External agents may propose intent; only local, deterministic, server-side validation may authorize and execute it.
 
@@ -58,7 +77,7 @@ Do not silently simulate impossible mechanics. Explain the limitation and provid
 - Removing armor does not make a player invisible. It may reduce armor appearance/glint but also removes protection. Never grant invisibility from armor removal.
 - Wind Charges can create a genuine impulse but do not provide sustained flight. Sustained gliding requires equipped Elytra and legitimate firework rockets, with durability, launch, collision, and landing handled normally.
 - A packet-only fake player cannot reliably participate in authoritative server combat, collision, block placement, inventory, or world physics. Use a server-authoritative NMS-backed gameplay entity for actions that affect the world; use packets for appearance, player profile/list presentation, animation, and other cosmetic details. If a target version makes a required behavior impossible, document it rather than shipping a visual-only fake that appears functional.
-- Summon “portals” are cosmetic particle/sound/visual effects only. They must not teleport entities, create portal blocks, or bypass physical movement.
+- **Owner override:** summon effects may be paired with a temporary, real obsidian/`NETHER_PORTAL` doorway at a verified safe site. The Null must walk through it, every changed block must be restored, and portal travel to another dimension remains disabled. If a safe doorway cannot be built, use verified safe ground and report the fallback; never teleport.
 - “Potion combining” means legal brewing and tactical sequencing of separate potions. Do not invent a potion-mixing action that vanilla does not have.
 
 ---
@@ -83,13 +102,13 @@ Do not silently simulate impossible mechanics. Explain the limitation and provid
 - Summon through either a real **Goat Horn** configured/named as `Call Horn`, or a real **Totem of Undying** configured/named/tagged as `Totem Of Null`. These are vanilla items; creating or tagging a usable summon item must be an explicit owner/admin action or documented recipe/configuration, never a spontaneous grant.
 - After a valid trigger, ask the authorized summoner for the desired Null count in chat. Bind the pending request to that player, expire it after a configurable timeout, validate the answer, provide cancel/help behavior, and prevent chat from another player from answering it.
 - Require at least two Nulls if the squad must have two commanders. Apply a configurable hard cap and resource/performance budget; reject excessive counts clearly instead of partially spawning a surprise army.
-- Show **at least 15 visual portal effects per summon event** when the visual setting is enabled. These are effects only. The requested number of real Nulls physically walks out from safe spawn points; surplus effects may close empty. Never create extra NPCs to satisfy the visual count. Each actual NPC must start in a collision-safe location and walk normally.
+- Show **at least 15 portal effects per summon event** when visuals are enabled. At verified safe sites, pair effects with temporary real obsidian/`NETHER_PORTAL` doorways; assign at most two Nulls to each, and have them physically walk through/out before restoring the doorway blocks. Never create extra NPCs to satisfy a visual count. A Null that cannot use a safe doorway starts at verified open ground with effects and an honest fallback report; no teleport or Nether/End travel.
 - Verify world permission, loaded/safe ground, nearby hazards, owner limits, and spawn spacing before committing. If safe locations are unavailable, do not spawn through walls or teleport; explain the failure.
 
 ### Identity and visuals
 
-- Give every Null a pure black player skin using a configured valid skin texture/profile or a documented bundled/owner-supplied skin asset. Do not promise a pure black skin if the target client/profile mechanism cannot render it; report the exact setup required. Do not change real players’ skins.
-- Assign a unique random alphanumeric profile/display name similar to `uH3WR2v0ti0uTHJ`. Respect the target version’s username/profile length and character constraints; avoid duplicates across online and persisted NPCs.
+- Give every Null the configured owner-chosen skin, including the custom asset at `plugins/NullArmy/skins/null.png` when provided. A custom PNG must be signed through MineSkin or supplied as a valid signed texture pair; unsigned bytes are insufficient. Support `env:NAME` for the MineSkin API key and never expose the resolved secret. Do not change real players’ skins.
+- Assign a unique random username from letters and digits, respecting the target version’s legal profile-name length and character constraints (include at least one digit); avoid duplicates across online and persisted NPCs.
 - Designate exactly two Nulls as Commanders whenever a squad of two or more is created. Store those roles; do not randomly reassign them on every tick or restart. Define orderly commander succession if one is permanently lost.
 - Give Nulls realistic health, armor, inventory, equipment, hitboxes, animations, sounds, and damage behavior. No hidden invulnerability or fake health.
 
@@ -102,7 +121,7 @@ Implement permission-checked commands, tab completion where appropriate, clear f
 Required user-facing controls:
 
 - `/null gui` — open an inventory/loadout planning GUI. It selects equipment priorities and quantities but never duplicates displayed items. Provide an explicit supply source and show deficits.
-- `/null chat [on|off]` — enable/disable Null chat and ChatCommander output.
+- `/null chat [public|private|off]` — select per-player Commander reply visibility/conversation mode; public replies must be `NAME: MESSAGE`.
 - `/null attack <player>` — set a physical pursuit/combat objective. The target is not instantly damaged or moved.
 - `/null attackx <player>` — adaptive extreme-combat profile: faster tactical reassessment, more coordination, careful resource use, and stronger counterplay; **no cheats, impossible reaction time, hidden information, extra damage, or free items**.
 - `/null follow me` — follow the issuing owner using a formation and personal-space rules; never teleport to catch up.
@@ -116,7 +135,7 @@ Support formations: **line, encircle, square, and shield-wall/Turtle**. Add conf
 
 - Trigger with `Null build a <structure>` or an equivalent authorized command.
 - Check the plugin-owned `/schematics` folder first. Support a documented, bounded plugin JSON format and, only if safely implemented without WorldEdit, an optional vanilla structure format. Never require WorldEdit.
-- If no matching schematic exists, BuilderAgent may propose a strict JSON block plan. Validate dimensions, palette, block states, rotations, material costs, support rules, world bounds, protection, and every placement locally before approval.
+- If no matching schematic exists, a deterministic local planner may propose a strict JSON block plan. AI endpoints must not design or build. Validate dimensions, palette, block states, rotations, material costs, support rules, world bounds, protection, and every placement locally before execution.
 - Nulls physically walk to each location, select the correct block, orient it, swing/use their arm, place it through authoritative vanilla-like placement rules, consume the real block, and wait for the action/cooldown. No instant paste, mass `setType` construction, or invisible worker.
 - Use teams to carry and place genuinely available materials. If supplies run out, pause, request supply, or gather/craft only through legal actions. Preserve player builds unless the owner has explicitly enabled the relevant destructive permission.
 
@@ -150,7 +169,7 @@ Use a deterministic, inspectable local state machine/utility planner as the fina
 
 ### Natural behavior
 
-Nulls must not stand motionless without reason. Add bounded, non-spammy idle behaviors: look around, adjust facing, briefly crouch, inspect visible surroundings, jump only when safe/useful, regroup, and use agreed shift patterns to signal nearby allies. Never generate endless shift-spam, collision-causing jumps, pointless item swings, or chat spam. Do not let “lifelike” randomness override danger checks or commanded objectives.
+Nulls need not stand motionless without reason. Add bounded, non-spammy idle behaviors such as rest, regrouping, checking carried gear, and agreed short signals. Do not add random ambient glances or head-only turns. Only intentional `mind.attention` and explicit combat/formation looks may change facing, with head and body turning together. Never generate endless shift-spam, collision-causing jumps, pointless item swings, or chat spam; commanded objectives and danger checks take priority.
 
 ---
 
@@ -393,9 +412,9 @@ Treat the following as a **feature catalogue**, not permission to violate the co
 216. **Terrain ambush:** Use a ridge, doorway, foliage, or corner for a coordinated attack while maintaining collision-safe positions and an escape route.
 217. **Watch rotation:** Assign scouts to take short visible patrol turns and report actual observations to the squad.
 218. **Shift-signal vocabulary:** Use a small configurable set of crouch patterns for nearby allies; rate-limit it and do not make it a hidden remote-control bypass.
-219. **Natural gaze and posture:** Vary head turns, stance, and short idle actions with bounded randomness while keeping the active objective and hazard checks intact.
+219. **Intentional gaze and posture:** Turn head and body together only for explicit attention, combat, or formation cues; do not add independent or random head turns. Bounded stance/posture changes may continue only when safe.
 220. **Chat psychology:** ChatCommander may send concise, configurable role-play, warnings, feints, or coordination lines; it cannot issue server commands, impersonate staff, expose secrets, or spam.
-221. **Organic idle loop:** When no task exists, choose a safe, low-cost activity—look around, regroup, check gear, watch a route, or rest—rather than freezing or performing repetitive, disruptive animations.
+221. **Organic idle loop:** When no task exists, choose a safe, low-cost activity—regroup, check carried gear, hold a route, signal nearby allies, or rest—rather than freezing or performing repetitive, disruptive animations. No ambient gaze sweeps.
 
 ---
 
@@ -411,7 +430,7 @@ Implement four isolated OpenAI-compatible agent roles. All network work must be 
 
 - **ChatCommander:** Produces short chat text only. It cannot issue commands, change targets, alter inventories, ban players, or authorize actions.
 - **CombatTactician:** Recommends a high-level tactical intent from a strict enum (for example: hold, approach, flank, retreat, shield, ranged volley, resupply, regroup). It cannot directly deal damage or bypass the local combat validator.
-- **BuilderAgent:** Returns a bounded block-plan JSON object using an allowed palette and finite dimensions. The local builder checks inventory, support, placement, protections, cost, and path before execution.
+- **BuilderAgent (legacy compatibility key):** Connectivity testing only. Do not send it build goals or consume AI-generated build plans. The deterministic local planner and server-side validator are solely responsible for construction.
 - **PathfinderCore:** May suggest a destination/route preference from a sanitized snapshot. Local NMS navigation and collision checks remain authoritative; the endpoint cannot move the NPC or supply hidden-world data.
 
 ### Endpoint safety and robustness
@@ -461,7 +480,7 @@ Create automated tests for pure logic and a reproducible Paper-server test check
 5. Skin/name/profile limits and collision-safe spawn points are handled correctly.
 6. `/null gui` never duplicates inventory; all loadout deficits are visible.
 7. Every placed block, fired arrow/rocket, used potion, dropped stack, repair, trade, and pickup has correct item accounting across save/restart.
-8. No NPC teleports, clips into another NPC, phases through a block, moves beyond legal acceleration, or force-loads a chunk.
+8. No unintended NPC teleports, clips, phasing, illegal acceleration, or forced chunks. Ordinary movement, AI, path recovery, and summoning remain non-teleporting; the explicit `/null tp` exception uses a real, consumed pearl per Null and only a loaded safe landing area.
 9. Formation changes work at doors, stairs, bridges, boats, combat crowds, and mixed terrain without stacking.
 10. Combat respects cooldown, line of sight, shields, ammunition, effects, durability, allies, and PvP/world rules.
 11. Water/cobweb/hay/slime/powder-snow clutches are attempted only with a real item and legal timing; failed clutches still have normal consequences.
@@ -469,6 +488,7 @@ Create automated tests for pure logic and a reproducible Paper-server test check
 13. TNT does not break obsidian in the simulation; obsidian mining uses valid pickaxe/time; bedrock is never bypassed.
 14. Wither skulls are never thrown; Wither spawning is off by default and requires actual ingredients/permission/confirmation.
 15. Trap/redstone reasoning uses only visible information; no hidden blocks or player inventory are exposed to the AI.
+16. `/null tp` gives a tagged, nearly-broken rod; only its ground-hook event triggers one projectile per live Null; each pearl is consumed, positions and heights vary, unsafe/unloaded/cross-world targets are refused, and ordinary rods/AI cannot trigger it.
 16. Endpoint timeout, malformed JSON, prompt injection, rate limit, DNS/TLS failure, and endpoint outage leave the server responsive and use local fallback behavior.
 17. Restart, chunk unload, owner disconnect, NPC death, dropped gear, and plugin disable do not duplicate items or orphan tasks.
 18. Load testing at the documented NPC cap meets the published tick/CPU/packet budget; include measurements rather than “zero lag” claims.
@@ -514,7 +534,7 @@ Do not attempt to generate the entire plugin in one enormous, unreviewable respo
 
 ### Phase 7 — Builder, mining, redstone, and destructive systems
 
-- Add the `/schematics` parser, constrained BuilderAgent JSON schema, per-block physical placement, mining, traps, redstone, TNT/cannon options, and strict griefing protections. Keep Wither spawning and large explosives off until their confirmation/permission tests pass.
+- Add the `/schematics` parser, deterministic local plan schema and generator, per-block physical placement, mining, traps, redstone, TNT/cannon options, and strict griefing protections. Keep Wither spawning and large explosives off until their confirmation/permission tests pass. Never use an AI endpoint to design or execute a build.
 
 ### Phase 8 — External AI agents
 
@@ -532,7 +552,7 @@ For every phase, state: (a) files changed, (b) behavior now working, (c) exact b
 
 ## 12. DEFINITION OF DONE
 
-NullArmy is done only when the declared feature set is traceable, item conservation is proven, authoritative movement/combat/building works on each advertised version, the no-teleport/no-clipping invariants pass tests, endpoint failure is harmless, destructive features are opt-in and protected, resource limits are documented, and the project builds from a clean checkout with no undeclared runtime dependencies.
+NullArmy is done only when the declared feature set is traceable, item conservation is proven, authoritative movement/combat/building works on each advertised version, ordinary movement remains non-teleporting, the documented Ender Pearl/portal exceptions and no-clipping invariants pass tests, endpoint failure is harmless, destructive features are opt-in and protected, resource limits are documented, and the project builds from a clean checkout with no undeclared runtime dependencies.
 
 When vanilla physics, a Paper/NMS version, or packet behavior makes a requested feature impossible, explain exactly why, mark it `blocked by vanilla` or `version-specific`, and offer the nearest honest alternative. **Never fake success.**
 

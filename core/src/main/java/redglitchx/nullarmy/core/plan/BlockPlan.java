@@ -8,7 +8,7 @@ import java.util.List;
 /**
  * A bounded, validated block placement plan.
  *
- * <p>Produced either by the {@code /schematics} folder or by BuilderAgent.
+ * <p>Produced either by the {@code /schematics} folder or by the deterministic local planner.
  * Spec 4: "Validate dimensions, palette, block states, rotations, material
  * costs, support rules, world bounds, protection, and every placement locally
  * before approval."</p>

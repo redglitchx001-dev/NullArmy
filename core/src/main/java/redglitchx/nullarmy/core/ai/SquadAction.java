@@ -29,7 +29,7 @@ public final class SquadAction {
         COME("come", false, false),
         /** Hold position and watch. */
         GUARD("guard", false, false),
-        /** Take a formation. Argument: line|square|encircle|turtle. */
+        /** Take a formation. Argument is one of FormationMatrix.kinds(). */
         FORMATION("formation", false, false),
         /** Change how the squad fights. Argument: aggressive|balanced|defensive. */
         TACTICS("tactics", false, false),

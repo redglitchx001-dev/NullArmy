@@ -17,8 +17,6 @@ import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 
-import redglitchx.nullarmy.core.construct.BuildPlanParser;
-import redglitchx.nullarmy.core.construct.BuildPlanValidator;
 import redglitchx.nullarmy.core.construct.BuildStep;
 import redglitchx.nullarmy.core.construct.FallbackPlanner;
 import redglitchx.nullarmy.core.json.Json;
@@ -43,27 +41,20 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
 
 /**
- * The AI builder: a goal in words becomes blocks placed by hand.
+ * A deterministic local builder: a goal becomes blocks placed by hand without AI.
  *
  * <h2>Planning</h2>
- * <p>With {@code ai.builder.endpoint} set, the goal, the zone, the Nulls' names
- * and what they carry go to an OpenAI-compatible {@code /chat/completions}
- * endpoint, which must answer with strict JSON steps
- * ({@code {null, action: MOVE|BREAK|PLACE|PICKUP|WAIT, x, y, z, block?}},
- * coordinates relative to the zone origin). The answer is parsed and validated
- * ({@link BuildPlanValidator}); a bad plan goes back once with the reasons, and a
- * second bad plan - or no endpoint, a timeout, an HTTP error - hands over to the
- * offline {@link FallbackPlanner} (hut, bridge, wall, tower, platform).</p>
+ * <p>{@link FallbackPlanner} creates a repeatable local plan (hut, bridge, wall,
+ * tower, platform, throne, or gather) from the goal, zone, and available
+ * inventory. AI endpoints are never asked to produce construction plans.</p>
  *
  * <h2>Building</h2>
  * <p>Every step is physical. A Null walks within reach, looks at the block,
@@ -292,9 +283,10 @@ public final class BuilderService implements Reloadable {
     /** {@code /null ai endpoints}: every configured endpoint and what resolves. */
     public String describeEndpoints() {
         StringBuilder out = new StringBuilder();
-        out.append("builder endpoint: ");
+        out.append("build planner: deterministic local (AI is never asked to build)\n");
+        out.append("AI endpoint test: ");
         String configured = v3 == null ? "" : v3.builderEndpoint();
-        out.append(configured.isEmpty() ? "(none - the offline planner is used)" : configured);
+        out.append(configured.isEmpty() ? "(none - local construction still works)" : configured);
         Endpoint resolved = resolveEndpoint();
         out.append("\n  resolved: ").append(resolved.usable() ? resolved.url() : "(nothing to resolve)")
                 .append(" model ").append(resolved.model().isEmpty() ? "(default)" : resolved.model());
@@ -325,7 +317,11 @@ public final class BuilderService implements Reloadable {
         }
     }
 
-    /** As {@link #start}, with an explicit endpoint (the self test's local stub). */
+    /**
+     * Starts a deterministic local build. The endpoint parameters are retained
+     * for source compatibility with older callers, but are intentionally never
+     * used to create or modify a build plan.
+     */
     public String start(UUID owner, String world, Vec3d standAt, float yaw, String goal, Consumer<String> report,
                         String endpointOverride, String modelOverride, String keyOverride) {
         if (v3 != null && !v3.builderEnabled()) {
@@ -339,50 +335,20 @@ public final class BuilderService implements Reloadable {
             return "say what to build, e.g. /null ai build a small hut";
         }
         stop(owner, "replaced by a new build");
-        ZoneService.Record zone = plugin.zones() == null ? null
-                : plugin.zones().existing(owner);
+        ZoneService.Record zone = plugin.zones() == null ? null : plugin.zones().existing(owner);
         if (zone == null || !zone.world().equals(world) || !zone.zone().contains(standAt.x(), standAt.z())) {
             zone = plugin.zones().open(owner, world, standAt);
         }
-        final ZoneService.Record useZone = zone;
         int facing = facingOf(yaw);
-        int[] anchor = relative(useZone, standAt);
-        Endpoint resolved = endpointOverride != null ? new Endpoint(endpointOverride, modelOverride, keyOverride, "")
-                : resolveEndpoint();
-        String endpoint = resolved.url();
-        String model = resolved.model();
-        String key = resolved.key();
+        int[] anchor = relative(zone, standAt);
         Map<String, Integer> stock = stock(bodies);
-        if (endpoint.isEmpty()) {
-            Job job = fallback(owner, world, useZone, goal, anchor, facing, stock, "no ai.builder.endpoint configured");
-            return job == null ? "the offline planner does not know how to build \"" + goal
-                    + "\" (it knows hut, bridge, wall, tower, platform)" : "building " + job.describe();
+        lastAiStatus = "build plan not sent to AI; using deterministic local planner";
+        Job job = fallback(owner, world, zone, goal, anchor, facing, stock, "deterministic local planner");
+        if (job == null) {
+            return "the deterministic local planner does not know how to build \"" + goal
+                    + "\" (it knows hut, bridge, wall, tower, platform, throne)";
         }
-        String system = systemPrompt(useZone, v3 == null ? 400 : v3.builderMaxSteps());
-        String user = userPrompt(goal, bodies, stock, anchor, facing);
-        requestPlan(endpoint, model, key, system, user, null, plan -> {
-            List<String> problems = plan.ok() ? validate(plan.steps(), useZone, bodies) : List.of(plan.error());
-            if (problems.isEmpty()) {
-                Job job = launch(owner, world, useZone, goal, plan.steps(), "ai " + (model.isEmpty() ? "model" : model));
-                report.accept("the AI planned " + plan.steps().size() + " steps; building " + job.describe());
-                return;
-            }
-            String retryNote = "Your previous plan was rejected: " + String.join("; ", problems)
-                    + ". Return ONLY corrected JSON in the same format.";
-            requestPlan(endpoint, model, key, system, user, retryNote, second -> {
-                List<String> again = second.ok() ? validate(second.steps(), useZone, bodies) : List.of(second.error());
-                if (again.isEmpty()) {
-                    Job job = launch(owner, world, useZone, goal, second.steps(), "ai " + model + " (2nd try)");
-                    report.accept("the AI's second plan passed; building " + job.describe());
-                    return;
-                }
-                Job job = fallback(owner, world, useZone, goal, anchor, facing, stock,
-                        "the AI plan was rejected twice (" + again.get(0) + ")");
-                report.accept(job == null ? "the AI plan was rejected twice and the offline planner does not know \""
-                        + goal + "\"" : "the AI plan was rejected twice; the offline planner builds " + job.describe());
-            });
-        });
-        return "asking the AI for a plan (" + endpoint + ") - the Nulls start as soon as it answers";
+        return "building " + job.describe() + " with deterministic local logic; no AI request was made";
     }
 
     private Job fallback(UUID owner, String world, ZoneService.Record zone, String goal, int[] anchor, int facing,
@@ -624,7 +590,6 @@ public final class BuilderService implements Reloadable {
             walk = NullBrain.Intent.stop();
         }
         walk.look = centre;
-        walk.lookHeadOnly = true;
         return walk;
     }
 
@@ -665,7 +630,6 @@ public final class BuilderService implements Reloadable {
         }
         NullBrain.Intent intent = NullBrain.Intent.stop();
         intent.look = new Vec3d(bx + 0.5D, by + 0.5D, bz + 0.5D);
-        intent.lookHeadOnly = false;
         intent.sneak = pos.y() > by + 0.5D; // at an edge, sneak like a player bridging
         int rate = v3 == null ? 10 : v3.builderPlaceRateTicks();
         if (now - job.lastPlaceTick < rate || now - exec.stepStart < 2) {
@@ -737,7 +701,6 @@ public final class BuilderService implements Reloadable {
         holdBestTool(handle, block);
         NullBrain.Intent intent = NullBrain.Intent.stop();
         intent.look = new Vec3d(bx + 0.5D, by + 0.5D, bz + 0.5D);
-        intent.lookHeadOnly = false;
         float speed = 0.0F;
         try {
             speed = block.getBreakSpeed(handle);
@@ -914,122 +877,6 @@ public final class BuilderService implements Reloadable {
             job.skips.add(step + ": " + why);
         }
         plugin.getLogger().fine("[NullArmy] build step skipped: " + step + " - " + why);
-    }
-
-    // ---------------------------------------------------------------- planning
-
-    private List<String> validate(List<BuildStep> steps, ZoneService.Record zone, List<NullBody> bodies) {
-        Set<String> names = new HashSet<>();
-        for (NullBody body : bodies) {
-            names.add(body.profileName());
-        }
-        int half = (int) Math.floor(zone.zone().half());
-        return BuildPlanValidator.validate(steps, half, -16, 32, v3 == null ? 400 : v3.builderMaxSteps(), names,
-                name -> {
-                    Material m = Material.matchMaterial(name);
-                    return m != null && m.isBlock() && m.isItem() && !m.isAir();
-                });
-    }
-
-    /** POSTs to /chat/completions; the callback runs on the main thread. */
-    private void requestPlan(String endpoint, String model, String key, String system, String user, String retryNote,
-                             Consumer<BuildPlanParser.Result> callback) {
-        try {
-            String url = endpoint.endsWith("/chat/completions") ? endpoint
-                    : endpoint.replaceAll("/+$", "") + "/chat/completions";
-            List<Object> messages = new ArrayList<>();
-            messages.add(message("system", system));
-            messages.add(message("user", user));
-            if (retryNote != null) {
-                messages.add(message("user", retryNote));
-            }
-            Map<String, Object> body = new LinkedHashMap<>();
-            body.put("model", model.isEmpty() ? "default" : model);
-            body.put("temperature", 0.2D);
-            body.put("messages", messages);
-            HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url))
-                    .timeout(Duration.ofMillis(v3 == null ? 20000 : v3.builderTimeoutMs()))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(Json.write(body)));
-            if (key != null && !key.isEmpty()) {
-                request.header("Authorization", "Bearer " + key);
-            }
-            http.sendAsync(request.build(), HttpResponse.BodyHandlers.ofString()).whenComplete((response, error) -> {
-                BuildPlanParser.Result result;
-                if (error != null) {
-                    lastAiStatus = "request failed: " + error.getClass().getSimpleName();
-                    result = failure("the AI request failed: " + Guard.describe(error));
-                } else if (response.statusCode() / 100 != 2) {
-                    lastAiStatus = "HTTP " + response.statusCode();
-                    result = failure("the AI endpoint answered HTTP " + response.statusCode() + ": "
-                            + redglitchx.nullarmy.core.skin.SkinPayload.preview(response.body(), 80));
-                } else {
-                    lastAiStatus = "HTTP " + response.statusCode();
-                    result = BuildPlanParser.parse(contentOf(response.body()), v3 == null ? 400 : v3.builderMaxSteps());
-                }
-                final BuildPlanParser.Result done = result;
-                Bukkit.getScheduler().runTask(plugin, () -> Guard.attempt(plugin.getLogger(),
-                        "handling the AI plan", () -> callback.accept(done)));
-            });
-        } catch (Throwable t) {
-            lastAiStatus = "request not sent: " + Guard.describe(t);
-            callback.accept(failure("the AI request could not be sent: " + Guard.describe(t)));
-        }
-    }
-
-    private static BuildPlanParser.Result failure(String why) {
-        return BuildPlanParser.failure(why);
-    }
-
-    private static Map<String, Object> message(String role, String content) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("role", role);
-        m.put("content", content);
-        return m;
-    }
-
-    /** choices[0].message.content of an OpenAI-style reply (or the body itself). */
-    static String contentOf(String body) {
-        try {
-            Map<String, Object> root = Json.asObject(Json.parse(body, 1024 * 1024));
-            Object choices = root.get("choices");
-            if (choices instanceof List && !((List<?>) choices).isEmpty()) {
-                Object first = ((List<?>) choices).get(0);
-                if (first instanceof Map) {
-                    Object message = ((Map<?, ?>) first).get("message");
-                    if (message instanceof Map && ((Map<?, ?>) message).get("content") instanceof String) {
-                        return (String) ((Map<?, ?>) message).get("content");
-                    }
-                }
-            }
-        } catch (Throwable ignored) {
-            // not an OpenAI envelope: maybe the plan itself
-        }
-        return body;
-    }
-
-    private static String systemPrompt(ZoneService.Record zone, int maxSteps) {
-        int half = (int) Math.floor(zone.zone().half());
-        return "You plan Minecraft builds for a squad of NPC players who place blocks by hand. "
-                + "Answer with ONLY a JSON object: {\"steps\":[{\"null\":\"<name or any>\",\"action\":\"MOVE|BREAK|"
-                + "PLACE|PICKUP|WAIT\",\"x\":int,\"y\":int,\"z\":int,\"block\":\"<MATERIAL for PLACE>\"}]}. "
-                + "Coordinates are block offsets from the zone origin (0,0,0 is the block the owner stood on; "
-                + "y=0 is their feet level, y=-1 the ground). Stay within |x|,|z| <= " + half + " and -16 <= y <= 32. "
-                + "Order PLACE steps bottom-up so every block touches one placed before it or the ground. "
-                + "Insert MOVE steps so a builder stands within 4 blocks of each block it places. "
-                + "Use only blocks the squad carries. At most " + maxSteps + " steps. No prose.";
-    }
-
-    private static String userPrompt(String goal, List<NullBody> bodies, Map<String, Integer> stock, int[] anchor,
-                                     int facing) {
-        List<String> names = new ArrayList<>();
-        for (NullBody body : bodies) {
-            names.add(body.profileName());
-        }
-        String[] dirs = {"+z (south)", "-x (west)", "-z (north)", "+x (east)"};
-        return "Goal: " + goal + ". Builders: " + names + ". Blocks carried: " + stock + ". The owner stands at "
-                + anchor[0] + "," + anchor[1] + "," + anchor[2] + " facing " + dirs[Math.floorMod(facing, 4)]
-                + "; build in front of them.";
     }
 
     // ----------------------------------------------------------------- helpers

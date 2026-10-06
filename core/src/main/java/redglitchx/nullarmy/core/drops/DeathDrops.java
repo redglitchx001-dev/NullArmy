@@ -52,15 +52,8 @@ public final class DeathDrops {
         return r < c;
     }
 
-    /**
-     * True when the plugin is allowed to drop anything at all.
-     *
-     * <p>The legacy {@code nulls.no-death-drops} key is the exact inverse of
-     * {@code drops.enabled}; an existing config that set it to true keeps
-     * winning, so an upgrade never starts littering the ground on a server whose
-     * owner already said no.</p>
-     */
-    public static boolean enabled(boolean dropsEnabled, boolean legacyNoDrops) {
-        return dropsEnabled && !legacyNoDrops;
+    /** True when the current {@code drops.enabled} setting allows loot to drop. */
+    public static boolean enabled(boolean dropsEnabled) {
+        return dropsEnabled;
     }
 }

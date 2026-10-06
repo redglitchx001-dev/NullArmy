@@ -28,7 +28,9 @@ public final class SkinData {
         /** Pasted into config.yml as skins.value + skins.signature. */
         CONFIG,
         /** Returned by skins.proxy-url. */
-        PROXY
+        PROXY,
+        /** Signed by MineSkin from the local skins/null.png image. */
+        MINESKIN
     }
 
     private final String value;

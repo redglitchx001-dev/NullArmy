@@ -17,10 +17,10 @@ import java.util.logging.Logger;
 /**
  * Every setting added in v3, read once per (re)load.
  *
- * <p>New booleans default to {@code true}; the only exceptions are the ones that
- * would let the plugin change the world or start fights on its own:
- * {@code ai.builder.gather-outside-zone} and {@code combat.initiate}. Numbers
- * are clamped to safe ranges with a console note, never rejected.</p>
+ * <p>New booleans default to {@code true}, except settings that could expand
+ * world changes beyond the owner's zone. Combat pursuit is never autonomous;
+ * attack and hunt orders are required. Numbers are clamped to safe ranges with
+ * a console note, never rejected.</p>
  *
  * <p>The AI key is read from {@code ai.builder.api-key}, then {@code ai.api-key},
  * then the environment variable {@code NULLARMY_AI_KEY}; {@code env:NAME} in any
@@ -48,12 +48,10 @@ public final class V3Settings {
     private final boolean shields;
     private final boolean bows;
     private final boolean retaliate;
-    private final boolean initiate;
     private final boolean fallDamage;
     private final int shieldDisableTicks;
 
     // bodies
-    private final boolean noDeathDrops;
     private final boolean pickupItems;
     private final boolean collisions;
     private final double separationRadius;
@@ -69,6 +67,8 @@ public final class V3Settings {
     private final String skinValue;
     private final String skinSignature;
     private final String skinProxyUrl;
+    /** Resolved MineSkin key; never include it in diagnostics or logs. */
+    private final String skinMineSkinApiKey;
     private final boolean skinLiveReapply;
 
     // chat
@@ -78,7 +78,7 @@ public final class V3Settings {
     private final boolean silenceUnits;
     private final List<String> protectedNames;
 
-    // v4: names, combat feel, drops, server list, behaviour
+    // v4: names, combat feel, drops, behaviour
     private final String namesStyle;
     private final double meleeReach;
     private final float attackThreshold;
@@ -96,9 +96,6 @@ public final class V3Settings {
     /** Self test override for {@code behaviour.camp-life} (L-04). */
     private volatile Boolean campLifeOverride;
     private final double dropsChance;
-    private final boolean motdShowArmy;
-    private final int motdMaxPlayers;
-    private final String motdFormat;
     private final boolean marchCadence;
     private final boolean autoBridge;
     private final boolean campLife;
@@ -148,12 +145,10 @@ public final class V3Settings {
         this.shields = config.getBoolean("combat.shields", true);
         this.bows = config.getBoolean("combat.bows", true);
         this.retaliate = config.getBoolean("combat.retaliate", true);
-        this.initiate = config.getBoolean("combat.initiate", false);
         this.fallDamage = config.getBoolean("combat.fall-damage", true);
         this.shieldDisableTicks = clamp(config.getInt("combat.shield-disable-ticks", 30), 0, 200,
                 "combat.shield-disable-ticks", logger);
 
-        this.noDeathDrops = config.getBoolean("nulls.no-death-drops", true);
         this.pickupItems = config.getBoolean("nulls.pickup-items", true);
         this.collisions = config.getBoolean("nulls.collisions", true);
         this.separationRadius = clampD(config.getDouble("nulls.separation-radius", 1.0D), 0.6D, 3.0D);
@@ -169,6 +164,7 @@ public final class V3Settings {
         this.skinValue = trimmed(config.getString("skins.value", ""));
         this.skinSignature = trimmed(config.getString("skins.signature", ""));
         this.skinProxyUrl = trimmed(config.getString("skins.proxy-url", ""));
+        this.skinMineSkinApiKey = resolveSecret(config.getString("skins.mineskin.api-key", ""));
         this.skinLiveReapply = config.getBoolean("skins.live-reapply", true);
 
         this.commanderPublicReplies = config.getBoolean("chat.commander-public-replies", true);
@@ -177,8 +173,10 @@ public final class V3Settings {
         this.silenceUnits = config.getBoolean("chat.silence-units", true);
         this.protectedNames = readProtected(config);
 
-        String style = trimmed(config.getString("names.style", "words")).toLowerCase(Locale.ROOT);
-        this.namesStyle = "codes".equals(style) ? "codes" : "words";
+        // The user-requested default is a random alphanumeric handle. Legacy
+        // config files may still say "words"; it is accepted as an inert old
+        // value but never switches live Nulls back to themed names.
+        this.namesStyle = "codes";
         this.meleeReach = clampD(config.getDouble("combat.melee-reach", 3.0D), 0.5D, 3.0D);
         this.attackThreshold = (float) clampD(config.getDouble("combat.attack-threshold", 0.55D), 0.1D, 1.0D);
         this.critEverySwings = clamp(config.getInt("combat.crit-every-swings", 2), 1, 5,
@@ -186,11 +184,6 @@ public final class V3Settings {
         this.aimSkill = clampD(config.getDouble("combat.aim-skill", 0.65D), 0.0D, 1.0D);
         this.dropsEnabled = config.getBoolean("drops.enabled", true);
         this.dropsChance = clampD(config.getDouble("drops.chance", 1.0D), 0.0D, 1.0D);
-        this.motdShowArmy = config.getBoolean("motd.show-army", true);
-        this.motdMaxPlayers = clamp(config.getInt("motd.max-players", 2026), 1, 100000,
-                "motd.max-players", logger);
-        String format = config.getString("motd.format", "NULL ARMY - {nulls} strong");
-        this.motdFormat = format == null ? "" : format;
         this.marchCadence = config.getBoolean("behaviour.march-cadence", true);
         this.autoBridge = config.getBoolean("behaviour.auto-bridge", true);
         this.campLife = config.getBoolean("behaviour.camp-life", true);
@@ -228,12 +221,24 @@ public final class V3Settings {
         return env == null ? "" : env.trim();
     }
 
+    private static String resolveSecret(String raw) {
+        return fromEnvReference(trimmed(raw));
+    }
+
     private static String fromEnvReference(String raw) {
-        if (raw.startsWith("env:")) {
-            String env = System.getenv(raw.substring(4).trim());
-            return env == null ? "" : env.trim();
+        if (!raw.startsWith("env:")) {
+            return raw;
         }
-        return raw;
+        String name = raw.substring(4).trim();
+        if (!name.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+            return "";
+        }
+        try {
+            String env = System.getenv(name);
+            return env == null ? "" : env.trim();
+        } catch (IllegalArgumentException invalidName) {
+            return "";
+        }
     }
 
     private static String trimmed(String s) {
@@ -304,11 +309,9 @@ public final class V3Settings {
 
     /** Self test: forces retaliation on or off without touching the config. */
     public void setRetaliateOverride(Boolean override) { this.retaliateOverride = override; }
-    public boolean initiate() { return initiate; }
     public boolean fallDamage() { return fallDamage; }
     public int shieldDisableTicks() { return shieldDisableTicks; }
 
-    public boolean noDeathDrops() { return noDeathDrops; }
     public boolean pickupItems() { return pickupItems; }
     public boolean collisions() { return collisions; }
     public double separationRadius() { return separationRadius; }
@@ -323,6 +326,8 @@ public final class V3Settings {
     public String skinValue() { return skinValue; }
     public String skinSignature() { return skinSignature; }
     public String skinProxyUrl() { return skinProxyUrl; }
+    /** Resolved key for MineSkin uploads; never log or expose this value. */
+    public String skinMineSkinApiKey() { return skinMineSkinApiKey; }
     public boolean skinLiveReapply() { return skinLiveReapply; }
 
     public boolean commanderPublicReplies() { return commanderPublicReplies; }
@@ -361,9 +366,6 @@ public final class V3Settings {
     /** Self test: forces {@code behaviour.camp-life} without touching config.yml. */
     public void setCampLifeOverride(Boolean override) { this.campLifeOverride = override; }
     public double dropsChance() { return dropsChance; }
-    public boolean motdShowArmy() { return motdShowArmy; }
-    public int motdMaxPlayers() { return motdMaxPlayers; }
-    public String motdFormat() { return motdFormat; }
     public boolean marchCadence() { return marchCadence; }
     public boolean autoBridge() { return autoBridge; }
     public boolean campLife() { return campLifeOverride == null ? campLife : campLifeOverride; }
@@ -396,16 +398,16 @@ public final class V3Settings {
         out.put("combat.shields", shields);
         out.put("combat.bows", bows);
         out.put("combat.retaliate", retaliate);
-        out.put("combat.initiate", initiate);
         out.put("combat.fall-damage", fallDamage);
-        out.put("nulls.no-death-drops", noDeathDrops);
         out.put("nulls.separation-radius", separationRadius);
         out.put("formations.spacing", formationSpacing);
         out.put("skins.value", skinValue.isEmpty() ? "(unset)" : "(set, " + skinValue.length() + " chars)");
         out.put("skins.signature", skinSignature.isEmpty() ? "(unset)" : "(set)");
         out.put("skins.proxy-url", skinProxyUrl.isEmpty() ? "(unset)" : skinProxyUrl);
+        out.put("skins.mineskin.api-key", skinMineSkinApiKey.isEmpty() ? "(unset)" : "(set, hidden)");
         out.put("ai.builder.enabled", builderEnabled);
-        out.put("ai.builder.endpoint", builderEndpoint.isEmpty() ? "(unset - offline planner)" : builderEndpoint);
+        out.put("ai.builder.endpoint", builderEndpoint.isEmpty()
+                ? "(unset - deterministic local planner)" : builderEndpoint + " (connectivity test only)");
         out.put("ai.builder.model", builderModel.isEmpty() ? "(unset)" : builderModel);
         out.put("ai.builder.api-key", builderApiKey.isEmpty() ? "(unset)" : "(set, hidden)");
         out.put("ai.builder.timeout-ms", builderTimeoutMs);
@@ -421,9 +423,6 @@ public final class V3Settings {
         out.put("policy.protected", protectedNames.isEmpty() ? "(none)" : String.join(", ", protectedNames));
         out.put("drops.enabled", dropsEnabled);
         out.put("drops.chance", dropsChance);
-        out.put("motd.show-army", motdShowArmy);
-        out.put("motd.max-players", motdMaxPlayers);
-        out.put("motd.format", motdFormat.isEmpty() ? "(unset)" : motdFormat);
         out.put("behaviour.march-cadence", marchCadence);
         out.put("behaviour.auto-bridge", autoBridge);
         out.put("behaviour.camp-life", campLife);

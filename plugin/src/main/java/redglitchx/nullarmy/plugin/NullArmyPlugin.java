@@ -12,6 +12,7 @@ import redglitchx.nullarmy.plugin.ai.SquadCoordinator;
 import redglitchx.nullarmy.plugin.commander.CommanderManager;
 import redglitchx.nullarmy.plugin.chat.ChatBrain;
 import redglitchx.nullarmy.plugin.chat.ChatDirector;
+import redglitchx.nullarmy.plugin.body.NullKillBridge;
 import redglitchx.nullarmy.plugin.command.NullCommand;
 import redglitchx.nullarmy.plugin.config.ConfigBootstrap;
 import redglitchx.nullarmy.plugin.config.ConfigMigration;
@@ -26,7 +27,7 @@ import redglitchx.nullarmy.plugin.shutdown.ShutdownDirector;
 import redglitchx.nullarmy.plugin.skin.SkinResolver;
 import redglitchx.nullarmy.plugin.spectacle.Airdrop;
 import redglitchx.nullarmy.plugin.spectacle.EntityRegistry;
-import redglitchx.nullarmy.plugin.ping.ArmyPingListener;
+import redglitchx.nullarmy.plugin.spectacle.TeleportCannon;
 import redglitchx.nullarmy.plugin.spectacle.WitherCannon;
 import redglitchx.nullarmy.plugin.totem.TotemWatcher;
 import redglitchx.nullarmy.plugin.util.Guard;
@@ -86,8 +87,8 @@ public final class NullArmyPlugin extends JavaPlugin {
     private CommanderManager commander;
     private EntityRegistry entityRegistry;
     private WitherCannon witherCannon;
-    private ArmyPingListener armyPing;
     private Airdrop airdrop;
+    private TeleportCannon teleportCannon;
     private NullCommand command;
     private MenuManager menuManager;
     private ChatDirector chatDirector;
@@ -211,8 +212,8 @@ public final class NullArmyPlugin extends JavaPlugin {
                 () -> adapter.applyBodySettings(pluginConfig.v3().bodySettings()));
         this.entityRegistry = new EntityRegistry(this);
         this.witherCannon = new WitherCannon(this, entityRegistry);
-        this.armyPing = new ArmyPingListener(this);
         this.airdrop = new Airdrop(this, entityRegistry);
+        this.teleportCannon = new TeleportCannon(this);
 
         this.command = new NullCommand(this, squads, pluginConfig);
         this.menuManager = new MenuManager(this, command);
@@ -243,13 +244,13 @@ public final class NullArmyPlugin extends JavaPlugin {
         // After SummonFlow: a player answering "How many Nulls should come?"
         // must never have that answer read as conversation.
         registerListener(chatDirector, "chat interface");
-        registerListener(lifecycle, "Null lifecycle (deaths, hits, silence)");
+        registerListener(lifecycle, "Null lifecycle (deaths, hits, drops)");
+        registerListener(new NullKillBridge(this), "vanilla /kill Null targets");
         registerListener(loadouts, "loadout editor");
         // The cannon's own guard: the aiming rod locks a target, and a barrage
         // can never turn on the hand that fired it.
         registerListener(witherCannon.guard(), "wither cannon guard");
-        // P-11: the army shows up in the server list - real players plus Nulls.
-        registerListener(armyPing, "army server list ping");
+        registerListener(teleportCannon, "Ender Pearl teleport cannon");
 
         // 5. Commands. A missing command is a warning, not a crash: the rest of
         //    the plugin is still useful through the tick loop and the menu.
@@ -655,9 +656,8 @@ public final class NullArmyPlugin extends JavaPlugin {
     public EntityRegistry registry() { return entityRegistry; }
     public WitherCannon witherCannon() { return witherCannon; }
 
-    /** P-11: the server-list ping listener. */
-    public ArmyPingListener armyPing() { return armyPing; }
     public Airdrop airdrop() { return airdrop; }
+    public TeleportCannon teleportCannon() { return teleportCannon; }
     public NullCommand command() { return command; }
     public MenuManager menu() { return menuManager; }
 

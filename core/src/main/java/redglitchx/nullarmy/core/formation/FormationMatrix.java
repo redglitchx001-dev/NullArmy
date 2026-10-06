@@ -28,7 +28,7 @@ public final class FormationMatrix {
     public static final double MIN_SPACING = 1.1D;
 
     private static final List<String> KINDS = Collections.unmodifiableList(Arrays.asList(
-            "line", "rank", "column", "square", "wedge", "phalanx", "arrow", "encircle", "turtle"));
+            "line", "wall", "rank", "column", "square", "wedge", "phalanx", "arrow", "encircle", "turtle"));
 
     private FormationMatrix() {
     }
@@ -101,6 +101,7 @@ public final class FormationMatrix {
             case "turtle":
                 ring(out, n, ringRadius(n, s));
                 break;
+            case "wall":
             case "line":
             default:
                 for (int i = 0; i < n; i++) {

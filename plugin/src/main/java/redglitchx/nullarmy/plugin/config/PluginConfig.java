@@ -78,7 +78,6 @@ public final class PluginConfig {
     private final int airdropHeight;
 
     private final boolean portalTravelEnabled;
-    private final boolean idleGesturesEnabled;
     private final int chatCommandsPerMinute;
     private final List<String> chatWakeWords;
     private final int chatMaxReplyChars;
@@ -113,7 +112,6 @@ public final class PluginConfig {
     // ---------------------------------------------------------------- chat
     private final boolean commanderOnlyConversation;
     private final boolean nullsOrdersOnly;
-    private final boolean commanderChatPrefix;
 
     // --------------------------------------------------------------- nulls
     private final boolean nullsInTabList;
@@ -242,7 +240,6 @@ public final class PluginConfig {
 
         // ------------------------------------------------------------ mechanics
         this.portalTravelEnabled = config.getBoolean("mechanics.portal-travel", true);
-        this.idleGesturesEnabled = config.getBoolean("mechanics.idle-gestures", true);
 
         // ------------------------------------------------------------ chat + AI chat
         this.chatCommandsPerMinute = clamp(config.getInt("chat.commands-per-minute", 20),
@@ -262,8 +259,8 @@ public final class PluginConfig {
         this.portalsMaxPerSummon = clamp(config.getInt("portals.max-per-summon", 4),
                 1, redglitchx.nullarmy.core.portal.PortalPlan.HARD_PORTAL_CEILING,
                 "portals.max-per-summon", logger);
-        this.portalsMaxPerPortal = clamp(config.getInt("portals.max-per-portal", 4),
-                1, 16, "portals.max-per-portal", logger);
+        this.portalsMaxPerPortal = clamp(config.getInt("portals.max-per-portal", 2),
+                1, 2, "portals.max-per-portal", logger);
         this.portalsMaxActive = clamp(config.getInt("portals.max-active", 32),
                 1, 512, "portals.max-active", logger);
         this.portalsLifetimeTicks = clamp((int) config.getLong("portals.lifetime-ticks", 600L),
@@ -293,7 +290,6 @@ public final class PluginConfig {
         this.commanderOnlyConversation =
                 config.getBoolean("chat.commander-only-conversation", true);
         this.nullsOrdersOnly = config.getBoolean("chat.nulls-orders-only", true);
-        this.commanderChatPrefix = config.getBoolean("chat.commander-chat-prefix", true);
 
         // --------------------------------------------------------------- nulls
         this.nullsInTabList = config.getBoolean("nulls.show-in-tab-list", true);
@@ -495,8 +491,6 @@ public final class PluginConfig {
     /** Ordinary Nulls answer orders only, never chat. */
     public boolean nullsOrdersOnly() { return nullsOrdersOnly; }
 
-    /** The Commander's chat lines carry the gradient brand prefix and its name. */
-    public boolean commanderChatPrefix() { return commanderChatPrefix; }
 
     // --------------------------------------------------------------- nulls API
 
@@ -637,9 +631,6 @@ public final class PluginConfig {
      * and every Null will refuse to make the crossing.</p>
      */
     public boolean portalTravelEnabled() { return portalTravelEnabled; }
-
-    /** Whether Nulls occasionally look around on their own. Pure realism. */
-    public boolean idleGesturesEnabled() { return idleGesturesEnabled; }
 
     /** Orders a single player may give per minute through chat. */
     public int chatCommandsPerMinute() { return chatCommandsPerMinute; }

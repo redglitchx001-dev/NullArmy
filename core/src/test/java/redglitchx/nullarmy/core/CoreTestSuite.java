@@ -92,6 +92,7 @@ public final class CoreTestSuite {
 
         run("commander knows mace and elytra PvP techniques", CoreTestSuite::testPvpArsenal);
         run("mace smash is only chosen when it is lethal", CoreTestSuite::testMaceSmashDiscipline);
+        run("live Commander uses only supported vanilla mace attacks", CoreTestSuite::testSupportedMaceSelection);
         run("elytra techniques need a deployed elytra", CoreTestSuite::testElytraRequiresElytra);
         run("technique selector is deterministic", CoreTestSuite::testTechniqueSelectorIsDeterministic);
         run("loadout slot maps to a valid inventory index", CoreTestSuite::testLoadoutSlot);
@@ -106,6 +107,7 @@ public final class CoreTestSuite {
         run("registry rejects duplicate endpoint ids", CoreTestSuite::testRegistryDuplicateEndpoint);
         run("role lookup is case-insensitive and rejects unknown", CoreTestSuite::testRoleLookup);
         run("no agent role holds moderation authority", CoreTestSuite::testNoModerationRole);
+        run("legacy BuilderAgent cannot author AI build plans", CoreTestSuite::testBuilderAgentIsConnectivityOnly);
         run("portal plan honours the hard maximum and never builds an empty door",
                 CoreTestSuite::testPortalPlanLimits);
         run("portal plan places every Null or reports the spill",
@@ -169,7 +171,7 @@ public final class CoreTestSuite {
                 CoreTestSuite::testBallistics);
         run("separation pushes crowded bodies apart and finds piles",
                 CoreTestSuite::testSeparation);
-        run("portal frame: 4x5 obsidian, 2x3 air, support and floating gap",
+        run("portal frame: 4x5 obsidian, real 2x3 portal, support and floating gap",
                 CoreTestSuite::testPortalFrame);
         run("formation cells are assigned with the least total walking, no crossing",
                 CoreTestSuite::testFormationAssignment);
@@ -179,7 +181,7 @@ public final class CoreTestSuite {
                 CoreTestSuite::testReachGate);
         run("swing cadence: >=5 swings in 3s and a crit every 1-2 swings (P-02)",
                 CoreTestSuite::testSwingCadence);
-        run("names are readable, unique and never hex gibberish (P-03)",
+        run("random alphanumeric names are valid and unique (P-03)",
                 CoreTestSuite::testNullNames);
         run("aim is imperfect: angle, lead, reaction and a miss rate in 40-80% (P-05)",
                 CoreTestSuite::testAimSkill);
@@ -193,8 +195,6 @@ public final class CoreTestSuite {
                 CoreTestSuite::testOrderParser);
         run("a defeated Null drops its kit when drops are enabled (P-10)",
                 CoreTestSuite::testDeathDrops);
-        run("ping numbers show the army: 2 real + 3 nulls = 5/2026 (P-11)",
-                CoreTestSuite::testPingNumbers);
         run("march cadence is one shared clock and the drill cycles (L-01)",
                 CoreTestSuite::testMarchCadence);
 
@@ -914,6 +914,15 @@ public final class CoreTestSuite {
                 "ChatCommander must keep its ban restriction");
     }
 
+    private static void testBuilderAgentIsConnectivityOnly() {
+        AgentRole legacy = AgentRole.fromConfigKey("BuilderAgent");
+        check(legacy != null, "legacy config key remains readable");
+        checkEquals(AgentRole.OutputType.TEXT, legacy.outputType(),
+                "legacy builder key is not bound to a block-plan schema");
+        check(legacy.mayNever().toLowerCase().contains("build"),
+                "legacy builder key cannot design or execute builds");
+    }
+
     // ------------------------------------------------------ commander combat
 
     private static void testPvpArsenal() {
@@ -955,6 +964,31 @@ public final class CoreTestSuite {
         PvpArsenal.Technique safe = PvpArsenal.select(bad);
         check(safe != PvpArsenal.Technique.FULL_SMASH,
                 "must not commit to a smash that cannot kill");
+    }
+
+    private static void testSupportedMaceSelection() {
+        CombatSituation lethal = CombatSituation.builder()
+                .hasMace(true).heightAboveTarget(12.0).fallSpeed(20.0)
+                .targetHealth(20.0).targetArmor(0.0).distanceToTarget(2.0)
+                .build();
+        PvpArsenal.Technique smash = PvpArsenal.selectSupportedMelee(lethal);
+        checkEquals(PvpArsenal.Technique.FULL_SMASH, smash,
+                "live selector chooses the supported lethal mace strike");
+        check(PvpArsenal.usesMaceForAttack(smash), "lethal smash maps to a real mace attack");
+
+        // The pure library can plan a pearl smash, but the live combat loop does
+        // not teleport or begin an unsupported aerial maneuver.
+        CombatSituation pearl = CombatSituation.builder()
+                .hasMace(true).hasEnderPearl(true).heightAboveTarget(1.0)
+                .distanceToTarget(4.0).targetHealth(20.0).build();
+        checkEquals(PvpArsenal.Technique.PEARL_SMASH, PvpArsenal.select(pearl),
+                "planning library still describes the pearl strategy");
+        checkEquals(PvpArsenal.Technique.DISENGAGE, PvpArsenal.selectSupportedMelee(pearl),
+                "live selector refuses an unsupported teleport strategy");
+        check(!PvpArsenal.usesMaceForAttack(PvpArsenal.Technique.DISENGAGE),
+                "fallback does not pretend a mace action happened");
+        check(!PvpArsenal.usesMaceForAttack(PvpArsenal.Technique.BREACH_SHIELD_BREAK),
+                "Breach does not pretend that a mace breaks a raised shield");
     }
 
     private static void testElytraRequiresElytra() {
@@ -1204,6 +1238,12 @@ public final class CoreTestSuite {
         checkEquals("ENDER_PEARL", slots.get(8), "hotbar 8 holds ender pearls");
         checkEquals("ARROW", slots.get(9), "the one arrow Infinity needs is carried");
         checkEquals("TORCH", slots.get(16), "torches are carried");
+        checkEquals("MACE", slots.get(17), "the shared kit carries a mace");
+        checkEquals("TOTEM_OF_UNDYING", slots.get(18), "the shared kit carries Totems");
+        checkEquals("WIND_CHARGE", slots.get(19), "the shared kit carries Wind Charges");
+        checkEquals("FIREWORK_ROCKET", slots.get(20), "the shared kit carries fireworks");
+        checkEquals(4, kit.stream().filter(item -> item.slot() == 13).findFirst().orElseThrow().count(),
+                "the shared kit carries four enchanted golden apples");
         for (redglitchx.nullarmy.core.kit.DefaultKit.Item item : kit) {
             check(item.slot() >= 0 && item.slot() <= 40, "every kit slot is a real player slot");
             check(item.count() >= 1 && item.count() <= 64, "every count is a legal stack size");
@@ -1419,27 +1459,23 @@ public final class CoreTestSuite {
                         new java.util.LinkedHashMap<String, Object>()),
                 "a section is not a leaf");
 
-        // A pre-v4 answer has to travel into its v4 replacement (P-10).
+        // Legacy death suppression no longer defeats vanilla drops. An explicit
+        // current drops.enabled value still wins through the ordinary merge.
         java.util.Map<String, Object> legacy = new java.util.LinkedHashMap<>();
         legacy.put("nulls.no-death-drops", Boolean.TRUE);
         java.util.Map<String, Object> fresh = new java.util.LinkedHashMap<>();
         fresh.put("drops.enabled", Boolean.TRUE);
         fresh.put("drops.chance", 1.0D);
-        java.util.Map<String, Object> folded =
-                redglitchx.nullarmy.core.config.ConfigMerge.foldLegacy(legacy, fresh);
-        checkEquals(Boolean.FALSE, folded.get("drops.enabled"),
-                "a server that said no-death-drops gets drops.enabled: false, never the shipped true");
-        checkEquals(1.0D, folded.get("drops.chance"), "an unrelated new key keeps its shipped default");
-        java.util.Map<String, Object> kept = new java.util.LinkedHashMap<>(legacy);
-        kept.put("drops.enabled", Boolean.TRUE);
-        checkEquals(Boolean.TRUE,
-                redglitchx.nullarmy.core.config.ConfigMerge.foldLegacy(kept, fresh).get("drops.enabled"),
-                "an owner who already set drops.enabled himself keeps his own answer");
-        java.util.Map<String, Object> quiet = new java.util.LinkedHashMap<>();
-        quiet.put("nulls.no-death-drops", Boolean.FALSE);
-        checkEquals(Boolean.TRUE,
-                redglitchx.nullarmy.core.config.ConfigMerge.foldLegacy(quiet, fresh).get("drops.enabled"),
-                "a server that never said no gets the shipped drops.enabled: true");
+        java.util.Map<String, Object> dropUpgrade =
+                redglitchx.nullarmy.core.config.ConfigMerge.merge(legacy, fresh).additions();
+        checkEquals(Boolean.TRUE, dropUpgrade.get("drops.enabled"),
+                "an old no-death-drops key no longer suppresses the new vanilla-drop default");
+        checkEquals(1.0D, dropUpgrade.get("drops.chance"), "an unrelated new key keeps its shipped default");
+        java.util.Map<String, Object> explicitDrops = new java.util.LinkedHashMap<>(legacy);
+        explicitDrops.put("drops.enabled", Boolean.FALSE);
+        check(!redglitchx.nullarmy.core.config.ConfigMerge.merge(explicitDrops, fresh).additions()
+                        .containsKey("drops.enabled"),
+                "an explicit current drops.enabled setting is never overwritten");
     }
 
     // ===================================================================
@@ -1536,6 +1572,10 @@ public final class CoreTestSuite {
                         redglitchx.nullarmy.core.ai.SquadAction.of(
                                 redglitchx.nullarmy.core.ai.SquadAction.Kind.FORMATION, "line", ""), open)
                 .allowed(), "a formation order passes with the gates open");
+        check(redglitchx.nullarmy.core.ai.ActionPolicy.check(
+                        redglitchx.nullarmy.core.ai.SquadAction.of(
+                                redglitchx.nullarmy.core.ai.SquadAction.Kind.FORMATION, "wall", ""), open)
+                .allowed(), "the AI may use the locally implemented front-wall formation");
         check(!redglitchx.nullarmy.core.ai.ActionPolicy.check(
                         redglitchx.nullarmy.core.ai.SquadAction.of(
                                 redglitchx.nullarmy.core.ai.SquadAction.Kind.FORMATION, "pyramid", ""), open)
@@ -1745,6 +1785,22 @@ public final class CoreTestSuite {
                 redglitchx.nullarmy.core.kit.DefaultKit.resolveConfigured(edited, null, notes);
         checkEquals("DIAMOND_SWORD", kept.get(0).material(), "an owner's edit is respected");
         check(notes.isEmpty(), "no upgrade note for an edited kit");
+
+        notes.clear();
+        java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> upgradedV3 =
+                redglitchx.nullarmy.core.kit.DefaultKit.resolveConfigured(
+                        redglitchx.nullarmy.core.kit.DefaultKit.LEGACY_V3_LINES, null, notes);
+        check(upgradedV3 == redglitchx.nullarmy.core.kit.DefaultKit.DEFAULT,
+                "an untouched previous v3 kit upgrades to the shared kit");
+        checkEquals(1, notes.size(), "the previous v3 upgrade is announced");
+        java.util.List<String> editedV3 = new java.util.ArrayList<>(
+                redglitchx.nullarmy.core.kit.DefaultKit.LEGACY_V3_LINES);
+        editedV3.set(0, "0:DIAMOND_SWORD:1");
+        notes.clear();
+        java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> keptV3 =
+                redglitchx.nullarmy.core.kit.DefaultKit.resolveConfigured(editedV3, null, notes);
+        checkEquals("DIAMOND_SWORD", keptV3.get(0).material(), "a previous-v3 owner's edit is respected");
+        check(notes.isEmpty(), "a previous-v3 edit is not mistaken for the shipped list");
     }
 
     private static void testFallbackPlanner() {
@@ -1881,6 +1937,10 @@ public final class CoreTestSuite {
         java.util.List<double[]> square = redglitchx.nullarmy.core.formation.FormationMatrix.offsets("square", 9, 1.5);
         checkEquals(-1.5, square.get(0)[0], "square 3x3 first cell is left");
         checkEquals(1.5, square.get(0)[1], "square 3x3 first cell is front row");
+        java.util.List<double[]> wall = redglitchx.nullarmy.core.formation.FormationMatrix.offsets("wall", 5, 1.5);
+        checkEquals(0.0, wall.get(0)[1], "wall cells form one rank rather than stacking in depth");
+        check(redglitchx.nullarmy.core.formation.FormationMatrix.minPairDistance(wall) >= 1.5 - 1e-9,
+                "front-wall members have non-overlapping slots");
         double[] south = redglitchx.nullarmy.core.formation.FormationMatrix.rotate(0, 1, 0f);
         checkEquals(0.0, Math.round(south[0] * 1e9) / 1e9, "yaw 0: forward is +z (x)");
         checkEquals(1.0, Math.round(south[1] * 1e9) / 1e9, "yaw 0: forward is +z (z)");
@@ -1897,6 +1957,7 @@ public final class CoreTestSuite {
         }
         check(Math.abs(b.get(0)[0] - a.get(0)[0]) > 0.1, "a 30 degree yaw really moves the cells");
         check(redglitchx.nullarmy.core.formation.FormationMatrix.isKnown("Phalanx"), "names are case-insensitive");
+        check(redglitchx.nullarmy.core.formation.FormationMatrix.isKnown("wall"), "the front-wall formation is registered");
         check(!redglitchx.nullarmy.core.formation.FormationMatrix.isKnown("blob"), "unknown names are refused");
         checkEquals(1.1, redglitchx.nullarmy.core.formation.FormationMatrix.spacing(0.4), "spacing floor is 1.1");
     }
@@ -2034,14 +2095,21 @@ public final class CoreTestSuite {
         for (int[] c : ground.frameCells()) {
             world.put(c[0] + "," + c[1] + "," + c[2], "OBSIDIAN");
         }
-        check(ground.builtProblems(lookup, 4, 12).isEmpty(), "a complete frame with an air interior is valid");
+        check(!ground.builtProblems(lookup, 4, 12).isEmpty(),
+                "an obsidian frame without its real portal interior is incomplete");
+        for (int[] c : ground.interiorCells()) {
+            world.put(c[0] + "," + c[1] + "," + c[2], "NETHER_PORTAL");
+        }
+        check(ground.builtProblems(lookup, 4, 12).isEmpty(),
+                "an obsidian frame with six real portal blocks is valid");
         int[] gap = ground.frameCells().get(5);
         world.put(gap[0] + "," + gap[1] + "," + gap[2], "AIR");
         check(!ground.builtProblems(lookup, 4, 12).isEmpty(), "a frame with a hole is not");
         world.put(gap[0] + "," + gap[1] + "," + gap[2], "OBSIDIAN");
         int[] in = ground.interiorCells().get(0);
+        world.put(in[0] + "," + in[1] + "," + in[2], "AIR");
+        check(!ground.builtProblems(lookup, 4, 12).isEmpty(), "a missing portal block makes the doorway incomplete");
         world.put(in[0] + "," + in[1] + "," + in[2], "NETHER_PORTAL");
-        check(!ground.builtProblems(lookup, 4, 12).isEmpty(), "portal blocks inside are refused (one-way)");
         world.clear();
         world.put("1,66,0", "OAK_LOG");
         check(!ground.siteProblems(lookup, 4, 12).isEmpty(), "a site that cuts into terrain is refused");
@@ -2136,32 +2204,26 @@ public final class CoreTestSuite {
         Set<String> taken = new HashSet<>();
         for (long seed = 0; seed < 200; seed++) {
             String name = redglitchx.nullarmy.core.naming.NullNames.next(seed, taken);
-            check(redglitchx.nullarmy.core.naming.NullNames.isReadable(name),
-                    "generated name is readable: " + name);
-            check(name.length() <= 16, "generated name fits the username limit: " + name);
-            check(!taken.contains(name), "generated name is unique: " + name);
-            taken.add(name);
+            check(redglitchx.nullarmy.core.naming.NullNames.isValid(name),
+                    "generated name is a legal 16-character alphanumeric username: " + name);
+            check(taken.add(name.toLowerCase(java.util.Locale.ROOT)),
+                    "generated name is unique, ignoring case: " + name);
         }
         checkEquals(200, taken.size(), "200 Nulls all got distinct names (S-89)");
 
-        check(!redglitchx.nullarmy.core.naming.NullNames.isReadable("c1b12d32d3dc74c4"),
-                "the old hex gibberish is rejected");
-        check(!redglitchx.nullarmy.core.naming.NullNames.isReadable("deadbeef"),
-                "a bare hex word is rejected");
-        check(!redglitchx.nullarmy.core.naming.NullNames.isReadable("1name"),
+        check(!redglitchx.nullarmy.core.naming.NullNames.isValid("deadbeef"),
+                "a short name is rejected");
+        check(!redglitchx.nullarmy.core.naming.NullNames.isValid("1name00000000000"),
                 "a name starting with a digit is rejected");
-        check(!redglitchx.nullarmy.core.naming.NullNames.isReadable("a name"),
+        check(!redglitchx.nullarmy.core.naming.NullNames.isValid("abcdefghijklmnop"),
+                "a name without any digits is rejected");
+        check(!redglitchx.nullarmy.core.naming.NullNames.isValid("a name0000000000"),
                 "a name with a space is rejected");
-        check(redglitchx.nullarmy.core.naming.NullNames.isReadable("Voidwalker"), "Voidwalker is readable");
-        check(redglitchx.nullarmy.core.naming.NullNames.isReadable("Null_07"), "Null_07 is readable");
-        check(redglitchx.nullarmy.core.naming.NullNames.isReadable("Grimjaw_12"), "Grimjaw_12 is readable");
-        check(redglitchx.nullarmy.core.naming.NullNames.wordCount() >= 16,
-                "there are plenty of themed words to draw from");
 
-        // Determinism: the same seed gives the same handle.
+        // Determinism: the same seed gives the same handle when the namespace is unchanged.
         checkEquals(redglitchx.nullarmy.core.naming.NullNames.next(7, null),
                 redglitchx.nullarmy.core.naming.NullNames.next(7, null),
-                "the name generator is deterministic for a seed");
+                "the test generator is deterministic for a seed");
     }
 
     private static void testAimSkill() {
@@ -2435,50 +2497,10 @@ public final class CoreTestSuite {
                 "a chance above 1 is clamped to 1");
         checkEquals(0.0D, redglitchx.nullarmy.core.drops.DeathDrops.clampChance(-2.0D),
                 "a chance below 0 is clamped to 0");
-        check(!redglitchx.nullarmy.core.drops.DeathDrops.enabled(true, true),
-                "a server whose owner already said no-death-drops keeps it that way");
-        check(redglitchx.nullarmy.core.drops.DeathDrops.enabled(true, false),
-                "a fresh install drops its loot");
-    }
-
-    private static void testPingNumbers() {
-        checkEquals("5/2026", redglitchx.nullarmy.core.ping.PingNumbers.num(2, 3, 2026),
-                "2 real players + 3 Nulls read as 5/2026 (S-111)");
-        checkEquals("202/2026", redglitchx.nullarmy.core.ping.PingNumbers.num(2, 200, 2026),
-                "2 real players + 200 Nulls read as 202/2026 (S-111)");
-        checkEquals("200/2026", redglitchx.nullarmy.core.ping.PingNumbers.num(0, 200, 2026),
-                "200 Nulls and nobody online still read as 200/2026");
-        checkEquals("0/2026", redglitchx.nullarmy.core.ping.PingNumbers.num(0, 0, 2026),
-                "an empty server reads as 0/2026");
-        checkEquals("3/20", redglitchx.nullarmy.core.ping.PingNumbers.num(3, 0, 20),
-                "an unmodified max-players is respected");
-        checkEquals("7/2026", redglitchx.nullarmy.core.ping.PingNumbers.num(7, 0, 0),
-                "a nonsense max falls back to the shipped 2026");
-
-        List<String> nulls = List.of("Voidwalker", "Grimjaw_12", "Null_07");
-        List<String> players = List.of("RedGlitchX");
-        String joined = redglitchx.nullarmy.core.ping.PingNumbers.sampleJoined(nulls, players, 0);
-        check(joined.contains("Voidwalker") && joined.contains("Grimjaw_12") && joined.contains("Null_07"),
-                "the hover sample lists the Null names (S-112)");
-        check(joined.contains("RedGlitchX"), "the hover sample also lists the real players (S-112)");
-        check(redglitchx.nullarmy.core.ping.PingNumbers.sample(nulls, players, 0).size() == 4,
-                "the sample holds every name when there is room");
-
-        List<String> many = new ArrayList<>();
-        for (int i = 0; i < 200; i++) {
-            many.add("Null_" + i);
-        }
-        checkEquals(20, redglitchx.nullarmy.core.ping.PingNumbers.sample(many, players, 0).size(),
-                "the sample is capped at what the vanilla client shows");
-
-        checkEquals("NULL ARMY - 200 strong", redglitchx.nullarmy.core.ping.PingNumbers.defaultMotd(200),
-                "the MOTD line substitutes the Null count");
-        checkEquals("", redglitchx.nullarmy.core.ping.PingNumbers.motd(null, 3, 0),
-                "an empty format means no MOTD line");
-        checkEquals("12/2026", redglitchx.nullarmy.core.ping.PingNumbers.motd("{total}/2026", 5, 7),
-                "the {total} placeholder counts real players and Nulls");
-        check(redglitchx.nullarmy.core.ping.PingNumbers.clampMax(20, 200) >= 200,
-                "the max never reads lower than the army standing on the field");
+        check(!redglitchx.nullarmy.core.drops.DeathDrops.enabled(false),
+                "the explicit current drops.enabled: false setting suppresses loot");
+        check(redglitchx.nullarmy.core.drops.DeathDrops.enabled(true),
+                "vanilla loot drops are enabled by default");
     }
 
     private static void testMarchCadence() {

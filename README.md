@@ -11,11 +11,11 @@
 
 # NullArmy
 
-**An early-stage Paper plugin for experimenting with physically simulated, player-like Null NPCs. The advertised gameplay is not yet complete or verified.**
+**An early-stage Paper plugin for physically simulated, player-like Null NPCs. Significant mechanics are implemented, but the full 471-item catalogue is not complete; the latest working-tree changes have not been rebuilt or verified.**
 
 <br>
 
-![Status](https://img.shields.io/badge/status-specification%20%2F%20pre--alpha-blue)
+![Status](https://img.shields.io/badge/status-implementation%20in%20progress%20%2F%20pre--alpha-blue)
 ![Runtime Dependencies](https://img.shields.io/badge/runtime_dependencies-0-brightgreen)
 ![Minecraft](https://img.shields.io/badge/minecraft-1.21.x%20%E2%86%92%201.21.11-3a7d3a?logo=minecraft&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Paper%201.21.11-ff6b00)
@@ -27,11 +27,14 @@
 
 ---
 
-## Verified on a live Paper 1.21.11 server
+## Verification history and current state
 
-`./gradlew build` ends with `runtimeSmoke`: a headless Paper 1.21.11 server starts with the built
-jar, runs `/null selftest` from the console, and the build fails unless every check passed and the
-server log is clean. The last run reported **`RESULT: PASS 26 passed, 0 failed`**, covering:
+Earlier repository snapshots passed core tests and Paper 1.21.11 `runtimeSmoke` checks (the most
+recent historical result is recorded in [`STATUS.md`](STATUS.md)). Those runs predate the current
+follow-up edits. This working tree has no Java runtime in `PATH`; its changes have **not** been
+rebuilt or run, so historical checks are not a pass for the current diff.
+
+The previous headless smoke run covered:
 
 - one Null and a squad of five are created, alive, with a non-null packet listener, and present in
   `ChunkMap.entityMap` — the server-side half of being visible;
@@ -55,9 +58,9 @@ aims it, and a chunk unload/reload cycle.
 | | |
 | --- | --- |
 | **Summoning** | Call Horn named `Null` (real Call goat-horn sound) → "How many Nulls should come?" → a random 1…`portals.max-per-summon` real doorways open near you and the Nulls walk out of them. |
-| **Portals** | Temporary obsidian + `NETHER_PORTAL` doorways, built only where every block is already air, restored after `portals.lifetime-ticks`, never used for Nether travel. |
-| **Equipment** | Iron chestplate, shield offhand, and a hotbar of sword, bow, arrows, golden apples, cooked food, pickaxe, ender pearls, water bucket and torches — verified on the NMS body, never duplicated, and the Commander keeps an owner-edited loadout. |
-| **Names** | Every Null gets its own random alphanumeric profile name (≤16 chars). The configured skin account supplies the texture only. Commander and Nulls appear in the tab list with plain names. |
+| **Portals** | Temporary obsidian frames with real `NETHER_PORTAL` blocks, built only where the site is clear, with one or two Nulls per doorway (`max-per-portal` is capped at 2); Nulls walk out and blocks are restored without Nether travel. |
+| **Equipment** | A shared soldier kit with enchanted netherite armor and weapons, bow/arrows, potions, food, building materials, mace, totems, Wind Charges and rockets. The Commander gets the same kit plus an Elytra and a white chestplate trim; regular Nulls get neither Elytra nor trims. Owner-edited Commander loadouts are preserved. |
+| **Names** | Every Null gets a unique random 16-character alphanumeric profile name, beginning with a letter and containing at least one digit. A configured skin account, signed texture pair, or custom `plugins/NullArmy/skins/null.png` supplies the texture only. Commander and Nulls appear in the tab list with plain names. |
 | **Totem Of Null** | Named exactly `The Totem Of Null`, real Curse of Vanishing, recognised by persistent data. When it pops or is truly destroyed the whole army goes out one at a time, Commander last. |
 | **Chat** | Talk to the Commander only; Nulls take orders. `null guard`, `null follow`, `null formation square`, `null attack Steve` — dispatched through the same validated executor as `/null …`. |
 | **AI** | The Commander sees its squad (health, positions, roles, kit, objective, what the cannon and air drop may do) and answers with one typed, allowlisted action that is re-checked against permissions, caps and policy before it runs. Cannon, air drop and dismiss always need `/null confirm`. With no endpoint configured a deterministic local coordinator runs and `/null ai` says so. |
@@ -66,16 +69,16 @@ aims it, and a chunk unload/reload cycle.
 
 ## What is NullArmy?
 
-You blow a **Call Horn** (or trigger a **Totem Of Null**). The plugin asks how many. Fifteen-plus portal effects flare open across the ground — and out of them *walk* Nulls: black-skinned, random-named, inventory-carrying entities that behave like a coordinated squad of skilled survival players.
+You blow a **Call Horn** (or trigger a **Totem Of Null**). The plugin asks how many. Fifteen-plus portal effects flare across the ground; at safe sites, temporary obsidian frames with real `NETHER_PORTAL` openings appear, and Nulls physically walk through and out. The doorway blocks are restored after use. If a safe doorway cannot be built, Nulls emerge on verified open ground with effects and an honest fallback report—never by teleporting or travelling to the Nether. They use the configured black/custom skin when a signed texture is available (otherwise vanilla's default Steve/Alex skin), and have random names and real inventories. They behave like a coordinated survival squad.
 
 They are **not** invulnerable mobs. They are **not** client-side illusions. Every Null:
 
-- walks everywhere — **no teleporting, ever**, under any circumstance
+- walks for ordinary movement; `/null tp` is a separate, owner-triggered Ender Pearl ability, and it does not change how Nulls are summoned
 - owns a real inventory, and every arrow fired, block placed, potion drunk, and tool swung is subtracted from it
 - takes real damage, gets hungry, burns, drowns, freezes, and dies permanently
 - respects attack cooldowns, shields, line of sight, enchantment rules, and block hardness
 - keeps personal space — Nulls queue at doorways instead of stacking inside each other
-- can be built to do 471 specific, individually testable vanilla things (see [the catalogue](#the-471))
+- is being developed against a 471-item vanilla-mechanics catalogue; that catalogue is a roadmap, not a claim that every item is implemented (see [the catalogue](#the-471))
 
 The design philosophy is blunt: **if a real survival player can't do it, a Null can't do it either.** When a requested idea is impossible in vanilla, NullArmy says so out loud and implements the nearest honest alternative. It never fakes success.
 
@@ -105,51 +108,55 @@ The design philosophy is blunt: **if a real survival player can't do it, a Null 
 
 ## Project Status
 
-**Read this before you get excited.** NullArmy is currently a **specification, not a plugin.**
+**Read this before you get excited.** NullArmy is an **implementation in progress**, not a finished or
+release-verified plugin.
 
 | | |
 | --- | --- |
-| **Source code** | **33 Java files, 4,423 lines** across 4 Gradle modules |
+| **Source code** | 121 Java source files (including tests) across 4 Gradle modules |
 | **Build system** | Gradle (Kotlin DSL), multi-module |
-| **Compiled?** | ❌ **Never.** No JDK or dev bundle available in the authoring environment |
-| **Lines of Java syntax-verified** | 4,423 / 4,423 (parser check only — not a compile) |
-| **Mechanics implemented (of 471)** | **0** — nothing counts as implemented until it is tested on a declared version |
-| **Current state** | Phase 0 complete · Phase 1 + partial Phase 2/3 **source authored but unverified** |
+| **Build history** | Earlier snapshots built and passed recorded tests; this working-tree diff has not been rebuilt |
+| **Tests** | The prior snapshot recorded 118 checks and a Paper smoke run; current tests are blocked because Java is unavailable |
+| **Mechanics** | Many behaviors are implemented; no up-to-date completion count for all 471 catalogue rows is asserted |
+| **Current state** | Follow-up bug fixes and mechanics are in progress; see [`STATUS.md`](STATUS.md) |
 | **Docs** | Master prompt + [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) · [`STATUS.md`](STATUS.md) · [`TRACEABILITY.md`](TRACEABILITY.md) · [`BUILD.md`](BUILD.md) |
 
-This README is the **public contract**: it describes what NullArmy will be, the invariants it will never break, and the bar it must clear before anything gets called "done." It is written from the master prompt so that the goalposts are visible before a single class is compiled.
+This README describes the project's invariants, currently implemented behaviors, and the broader
+471-mechanic target. It is not a claim that the catalogue is complete. Current code status and
+historical verification are distinguished explicitly; **nothing in the current diff is labelled
+verified until it is rebuilt and tested.**
 
-Everything below is a **commitment**, not a boast. As phases land, the traceability tables get filled in — and per the project's own rules, anything not yet implemented stays marked as such. **Nothing gets labelled "complete" that isn't.**
+### Project documentation
 
-### Phase 0 documents
-
-The audit is done. These are its outputs:
+These documents are the feature sources, status records, and build references. They do not all have
+the same revision date; where claims conflict, `STATUS.md` is the current implementation snapshot
+and the explicit user constraints remain the authority for this work:
 
 | Document | Contents |
 | --- | --- |
 | [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | Environment audit, exact version compatibility table, NMS/packet feasibility notes, architecture diagram, module plan, ADRs, vanilla-impossibility register, documented assumptions, risk register |
-| [`STATUS.md`](STATUS.md) | Phase state, core-feature traceability, acceptance-criteria scoreboard, Phase 0 handoff |
-| [`TRACEABILITY.md`](TRACEABILITY.md) | All **471** mechanics (221 original + 250 added), extracted from the spec — every item marked `not started` |
+| [`STATUS.md`](STATUS.md) | Historical checks, current branch changes, and verification blockers |
+| [`important.txt`](important.txt) | Quick owner setup notes for skins, chat, portals, AI boundaries, and safety defaults |
+| [`TRACEABILITY.md`](TRACEABILITY.md) | All **471** mechanics (221 original + 250 added); its Phase 0 `not started` labels are explicitly marked stale pending per-item audit |
 | [`BUILD.md`](BUILD.md) | Exact build and verification commands, and what is/isn't proven |
 | [`ENDPOINTS.md`](ENDPOINTS.md) | How to add as many AI models as you want: endpoint, model-id, api-key, no limits |
 | [`COMMANDER.md`](COMMANDER.md) | The Null Commander: portal spawn, one shared skin, loadout GUI, mace + elytra PvP library |
 | [`BUILD_TUTORIAL.md`](BUILD_TUTORIAL.md) | Step-by-step: from a fresh machine to a running `NullArmy.jar` |
 | [`RELEASING.md`](RELEASING.md) | How to publish: versioning, CI workflow, checksums, GitHub releases, licence choice |
 
-> **Release warning:** the only adapter in this checkout targets Paper 1.21.11, which is end-of-life, and the code has not been verified on a live server. This sandbox has no JDK or access to the Paper Maven repository, so use the checked-in Gradle wrapper and GitHub Actions build for compilation. A green CI job is not a stable-release approval.
+> **Release warning:** the only adapter in this checkout targets Paper 1.21.11. Earlier snapshots have recorded build and Paper smoke-test results, but the current working-tree edits have not been verified on a live server. This sandbox has no Java runtime, so use the checked-in Gradle wrapper and GitHub Actions build for compilation. A green CI job is not a stable-release approval.
 
 ### ⚠️ Verification status of the code
 
-Source has been written for the build skeleton, the version adapter SPI, the 1.21.11 adapter, the plugin bootstrap, and the core logic (item ledger, boids, pathfinding, planner, block-plan validator, JSON codec, circuit breaker).
-
-| Proven | Not proven |
+| Historical evidence | Current working-tree status |
 | --- | --- |
-| All 33 files are syntactically valid Java | ❌ Compilation / type-checking |
-| Package layout matches directories | ❌ NMS signatures (every one is a **hypothesis**) |
-| No self-recursive methods | ❌ Gradle dependency resolution |
-| `core` is dependency-free pure Java | ❌ Any runtime behaviour at all |
+| Prior CI/build and Paper 1.21.11 smoke checks are recorded in `STATUS.md` | The current edits have not been compiled or executed |
+| Core and runtime self-tests exist, including coverage for packet-listener readiness | `./gradlew test` cannot start here: no `java` executable / `JAVA_HOME` |
+| The version-specific adapter has been exercised in earlier snapshots | This does not verify the current diff or any future Paper version |
+| Skin-chain tests use local stubs for deterministic cases | External MineSkin/Mojang access and visual rendering need a real server/client |
 
-**The NMS adapter has never touched a Minecraft server.** Treat it as a starting point to verify, not as working code. [`BUILD.md`](BUILD.md) lists the five checks (V-01…V-05) that settle it.
+Use [`BUILD.md`](BUILD.md) for the build and verification workflow; use `STATUS.md` for the
+specific historical results and the current blockers.
 
 ---
 
@@ -207,11 +214,11 @@ The most important table in this document. These are ideas that sound great and 
 | **Removing armor makes you invisible** | ❌ | Reduces visible armor/glint and *also removes protection*. Invisibility requires an actual owned invisibility potion, with all its normal telltales (particles, held items, armor). |
 | **Wind Charges = flight** | ❌ | A Wind Charge gives a genuine one-off impulse. Sustained gliding requires a real equipped Elytra plus real firework rockets, with durability, launch, collision, and landing handled normally. |
 | **Packet-only fake player** | ❌ | A packet-only entity can't reliably fight, collide, place blocks, hold an inventory, or obey world physics. NullArmy uses a **server-authoritative NMS-backed entity** for anything that affects the world; packets are for appearance, profile/list presentation, and animation only. |
-| **Summon portals teleport** | ❌ | Purely cosmetic particles/sound. Requested Nulls physically *walk out* from safe spawn points; surplus effects close empty. Never extra NPCs to satisfy the visual count. |
+| **Temporary summon portal doorways** | ✅ | Wherever a safe site exists, Nulls physically walk through temporary obsidian/`NETHER_PORTAL` doorways; modified blocks are restored after use and custom portal travel is cancelled. There is no teleport. If no safe doorway site exists, a Null emerges at verified open ground with effects and the fallback is reported. |
 | **Potion combining / mixing** | ❌ | Vanilla has no potion-mixing action. Legal brewing and tactical *sequencing* of separate potions only. |
-| **Ender pearls / chorus fruit to reposition** | ❌ | A Null never teleports. Not by pearl, not by fruit, not by command, not by portal, not to "fix" a stuck path. |
+| **Ender pearls / chorus fruit to reposition** | ⚠️ | The explicit owner-only `/null tp` cannon is the sole Ender Pearl exception: each live Null must spend its own real pearl, and a vanilla projectile falls into a same-world, loaded, collision-safe area. No pearls are created, no AI/path recovery can teleport, and chorus fruit is not used. |
 
-> **Because a Null cannot teleport, it can get genuinely stuck.** That's accepted. A stuck Null diagnoses, replans, and escalates — it does not vanish and reappear.
+> **Ordinary movement never teleports.** A Null can still get genuinely stuck; it diagnoses, replans, and escalates rather than vanishing and reappearing. The `/null tp` Ender Pearl cannon is a separate, explicit owner command—not path recovery.
 
 ---
 
@@ -223,14 +230,18 @@ Two ways, and neither needs a slash:
   `chat.wake-words` in `config.yml`) and the rest is treated as a subcommand:
   `null attack Steve`, `null kill Steve`, `null ban Steve`, `null eliminate Steve`, `null come`,
   `null stop`, `null heal`, `null menu`, `null follow me`, `null go away`. Natural phrases and
-  synonyms are mapped, the order goes through the **same** executor as typing `/null` (so
-  permissions, caps and policy gates are identical), and the line is removed from public chat.
-  Each player gets 20 orders a minute by default (`chat.commands-per-minute`).
-- **Conversation.** `/null chat commander` (or `/null chat null`) opens a private channel: your
-  next messages go to that character alone and it answers in its own voice, with a rolling
-  context of the last few turns. Say `exit`, or `/null chat off`, to end it.
+  synonyms are mapped and the order goes through the **same** executor as typing `/null` (so
+  permissions, caps and policy gates are identical). PUBLIC mode leaves recognized chat orders
+  visible; OFF mode executes them silently and leaves unrelated chat alone. An open private
+  conversation consumes normal chat until you say `exit`; use slash commands while it is open.
+  Each player gets 20 chat orders a minute by default (`chat.commands-per-minute`).
+- **Conversation.** `/null chat public` enables public Commander replies to messages addressed
+  by name or wake word, formatted `Name: message`. `/null chat private` (or `/null chat commander`)
+  opens a private Commander channel; your next messages go only to him, with a rolling context.
+  `/null chat null` opens a Null session only when `chat.commander-only-conversation: false`.
+  `/null chat off` disables conversation routing for you; army orders still work.
 
-Conversation needs a model. **The plugin never requires one** - with `ai.enabled: false` the
+Conversation can use a model. **The plugin never requires one** - with `ai.enabled: false` the
 characters still answer a few lines locally("Commander on deck") and `/null ai` states plainly
 why the rest is unavailable. To switch a model on, add an endpoint under `ai.endpoints` and point
 `ai.default-endpoint` at it; the ChatCommander role uses the same config, key resolution, timeout
@@ -243,14 +254,14 @@ capped (`chat.max-reply-chars`) so a model can never inject formatting into chat
 2. **Ask.** The plugin prompts the *authorized summoner* for the desired Null count in chat. The pending request is bound to that player, expires after a configurable timeout, validates the answer, supports cancel/help, and **ignores chat from any other player**.
 3. **Enforce.** Minimum two Nulls if the squad needs two commanders. A configurable hard cap and resource/performance budget apply. Excessive counts are rejected with a clear message — **never** a partial surprise army.
 4. **Verify.** World permission, loaded/safe ground, nearby hazards, owner limits, and spawn spacing are checked before anything commits. If no safe location exists, NullArmy explains the failure rather than spawning through a wall.
-5. **Emerge.** **≥15 visual portal effects** fire (when visuals are enabled) — effects only. The actual Nulls walk out from collision-safe spawn points.
+5. **Emerge.** **≥15 visual portal effects** fire when enabled. Where safe, temporary obsidian/`NETHER_PORTAL` doorways are built and Nulls physically walk through and out; changed blocks are restored. If a safe doorway is unavailable, they emerge on verified open ground with an honest fallback report. No teleport or Nether/End travel is used for summoning.
 
 ### Identity
 
 | Property | Behaviour |
 | --- | --- |
 | **Skin** | Pure black player skin from a configured valid texture/profile or a documented bundled/owner-supplied asset. If the target client/profile mechanism can't render it, NullArmy says exactly what setup is required rather than promising it. Real players' skins are never touched. |
-| **Name** | Unique random alphanumeric profile/display name, e.g. `uH3WR2v0ti0uTHJ`. Respects the target version's username/profile length and character constraints; no duplicates across online *and* persisted NPCs. |
+| **Name** | Unique random 16-character alphanumeric profile/display name, beginning with a letter and containing at least one digit (for example, `a1B2c3D4e5F6g7H8`). Duplicate checks include the live Nulls and Commander. |
 | **Commanders** | Exactly **two** designated Commanders for any squad of two or more. Roles are stored — not randomly reassigned each tick or restart — with orderly succession if one is permanently lost. |
 | **Body** | Realistic health, armor, inventory, equipment, hitboxes, animations, sounds, and damage. No hidden invulnerability, no fake health. |
 
@@ -266,16 +277,17 @@ All commands are permission-checked with tab completion, clear feedback, and aud
 | `/null horn` | `nullarmy.summon` | Gives you a real Goat Horn named **Null**, set to the vanilla **Call** instrument, enchanted (Unbreaking I) with `HIDE_ENCHANTS` for the glint, and tagged with persistent data. Right-click plays the Call horn sound and asks *"How many Nulls should come?"* in chat. |
 | `/null totem` | `nullarmy.summon` | The **Totem Of Null**: a real Totem of Undying made the same way, with the same chat-count flow. |
 | `/null reload` | `nullarmy.admin` | Re-reads `config.yml` without a restart, re-arms the NMS spawn breaker and tells every subsystem to re-read its settings. A missing `config.yml` is recreated; an existing one is **never** overwritten. |
-| `/null come` (aliases `/null tp`, `/null bring`) | `nullarmy.follow` | Walks your squad to your position. **Not a teleport** — spec 5 forbids teleporting Nulls, including as recovery. |
+| `/null come` (alias `/null bring`) | `nullarmy.follow` | Walks your squad to your position; ordinary movement stays physical and never teleports. |
+| `/null tp` | `nullarmy.admin` | Gives a one-use, nearly-broken fishing rod. When the hook sticks in a block and you reel it in, each live Null (and your Commander, if present) spends one real Ender Pearl; vanilla pearls fall from varied heights and spaced positions into a loaded, collision-safe area. Same-world only; no free ammunition or summon teleporting. |
 | `/null guard` | `nullarmy.follow` | Holds position and watches. |
-| `/null formation <line\|square\|encircle\|turtle>` | `nullarmy.follow` | Arranges the squad around you in the chosen formation. |
+| `/null formation <line\\|wall\\|rank\\|column\\|square\\|wedge\\|phalanx\\|arrow\\|encircle\\|turtle>` | `nullarmy.follow` | Uses fixed, non-overlapping cells. `wall` places a wide walking rank in front of the owner; other styles include column, wedge, phalanx and encircle. |
 | `/null list` · `/null info <id\|name>` | `nullarmy.admin` | Every live Null with health and position; then one Null in detail. |
 | `/null heal` · `/null equip` · `/null drop` | `nullarmy.admin` | Top the squad up; hand your held item to your first Null (the item **leaves your hand**, so this cannot duplicate); empty the squad's inventories into the world as real drops. |
 | `/null portals` · `/null clearskins` | `nullarmy.admin` | Play the portal visual where you stand (cosmetic only); forget cached skins and resolve them again. |
 | `/null version` · `/null help` · `/null debug` | — / — / `nullarmy.admin` | Plugin, adapter and server version; the full command list; guard state, subsystem failures and tracked entities. |
-| `/null withercannon` (alias `/null cannon`) | `nullarmy.admin` | **Opt-in.** Fires a TNT minecart that arcs into the sky, opens portals at the apex and drops TNT. Off unless `wither-cannon.enabled` **and** `policy.explosives-enabled` **and** `policy.wither-enabled` are all true and you hold the configured permission. Block damage needs a fourth opt-in (`policy.griefing-enabled` **and** `wither-cannon.blocks-damage`); without it the blasts are visual only. |
+| `/null withercannon` (alias `/null cannon`) | `nullarmy.admin` | **Opt-in.** Fires a TNT minecart that arcs into the sky, opens portals at the apex and drops TNT. Off unless `wither-cannon.enabled` **and** `policy.explosives-enabled` **and** `policy.wither-enabled` are all true and you hold the configured permission. Block damage needs a fourth opt-in (`policy.griefing-enabled` **and** `wither-cannon.blocks-damage`); without it, explosion and entity effects still occur but blocks are protected. |
 | `/null airdrop [count]` | `nullarmy.admin` | **Opt-in.** Sky portals open above you and ground portals around you, TNT drops from the sky, and the squad arrives. With `airdrop.drop-nulls-from-sky: true` the Nulls fall under real gravity and **do** take fall damage; with it false they emerge on ground the adapter verified as safe. |
-| `/null chat [null\|commander\|off\|status]` | `nullarmy.chat` | Opens a **private channel** with a Null or the Commander. Your next messages go only to that character and it answers in its own voice. With no model configured it still answers a few lines locally, and `/null ai` tells you exactly which of the two is happening. |
+| `/null chat <public\|private\|null\|commander\|off\|status>` | `nullarmy.chat` | Choose public Commander replies (`Name: message`), open a private channel, or turn conversation routing off. Orders continue to work in every mode. |
 | `/null ai` | `nullarmy.admin` | Whether a model is configured, enabled and actually reachable - and, when it is not, the reason in one line. |
 | `/null portal [player]` | `nullarmy.admin` | Your Nulls walk **through a portal** to you, or to a named player: effects at both ends, the arrival spot verified collision-safe first, nobody arrives mid-fall. The one deliberate, opt-in exception to the no-teleport rule (`mechanics.portal-travel`). |
 | `/null tactics <aggressive\|balanced\|defensive>` | `nullarmy.attack` | Changes the standoff a squad actually keeps: 1.2 / 2.0 / 4.5 blocks. Not cosmetic - the steering uses it. |
@@ -303,7 +315,7 @@ Configurable spacing, orientation, leader/commander anchors, terrain-aware offse
 Triggered by `Null build a <structure>` or an equivalent authorized command.
 
 1. Check the plugin-owned `/schematics` folder first — a documented, bounded plugin JSON format, plus an optional vanilla structure format if it can be done safely without WorldEdit. **WorldEdit is never required.**
-2. If no schematic matches, **BuilderAgent** may propose a strict JSON block plan. Dimensions, palette, block states, rotations, material costs, support rules, world bounds, protection, and **every single placement** are validated locally before approval.
+2. If no schematic matches, a deterministic local planner proposes a strict JSON block plan. No AI endpoint is responsible for designing or building. Dimensions, palette, block states, rotations, material costs, support rules, world bounds, protection, and **every single placement** are validated locally before execution.
 3. Nulls then **physically walk** to each location, select the correct block, orient it, swing, place it through authoritative vanilla-like placement rules, consume the real block, and wait out the cooldown.
 
 No instant paste. No mass `setType`. No invisible worker. If supplies run out, they pause, request supply, or gather/craft through legal actions only. Player builds are preserved unless the owner explicitly enables the relevant destructive permission.
@@ -321,7 +333,7 @@ The spec catalogues **471 vanilla mechanics** across twelve groups: the original
 | **C. Mobility & traversal** | 45 | 66–110 | Incremental A*, local steering, Boids neighbourhood, hard NPC separation, chunk-aware routes, legal step-up, jump timing, edge sensing, stairs, ladders, vines/scaffolding, **real** bridging/scaffolding (one block at a time, never an instant bridge), doors, fence gates, trapdoors, low-ceiling posture, gap-jump evaluation, controlled drops, route mining, hazard costs, fall prediction, **water/cobweb/hay/slime/powder-snow clutches**, Wind-charge impulse, swimming, water currents, bubble columns, boats, chest boats, ice boating, minecarts, rail construction, horses, saddles/armor, camels, striders, Elytra, rocket-assisted glide, flight and landing planning |
 | **D. Survival, inventory & SMP life** | 50 | 111–160 | Hunger monitoring, food selection, raw-vs-cooked, real cooking, health triage, potion inventory, real brewing, self/splash/ally potion timing, debuff safety, effect sequencing, fire resistance, water breathing, milk removal, drowning/freezing/fire/lava responses, water supply, light awareness, torch placement, shelter seeking, beds, armor choice/wear, shield and tool wear, repairing, enchantments, offhand policy, inventory sorting, **stack conservation**, loot pickup and priorities, dead-ally recovery, arrow/potion sharing, equipment handoff, commander resupply, summoner delivery, storage use, trapped-container caution, villager trading, crop planting/harvesting, fishing, wolf taming, animal care, breeding |
 | **E. Mining, construction, redstone & traps** | 40 | 161–200 | Correct mining tool, obsidian mining, bedrock/unbreakables (**never** bypassed), visible-resource mining (**no x-ray ore search**), staircase mining, tunneling, gravity-block awareness, torch markers, placement physics, material cost planning, temporary scaffold, defensive walls, trenches, water control, lava casting, Frost Walker, firebreaks, TNT placement/ignition, cannon assembly/calibration, misfire handling, blast-resistance awareness, Wither gates, skull-item correctness, **visible-only** redstone reconnaissance, tripwire disarming, shears, pressure plates, buttons/levers, redstone-dust tracing, repeater timing, comparator logic, observer awareness, piston hazards, dispensers/droppers, hopper logistics, doors, breach choices |
-| **F. Stealth, deception & lifelike behaviour** | 21 | 201–221 | Crouch approach, tall-grass concealment, darkness discipline, armor-removal tradeoff, potion invisibility, honest identity tells (**no packet hacks to hide name tags or particles**), sound discipline, line-of-sight breaking, cover scouting, light discipline, armor-stand decoys, banner/sign signaling, campfire smoke, feigned retreat, bait discipline, terrain ambush, watch rotation, shift-signal vocabulary, natural gaze/posture, chat psychology, organic idle loop |
+| **F. Stealth, deception & lifelike behaviour** | 21 | 201–221 | Crouch approach, tall-grass concealment, darkness discipline, armor-removal tradeoff, potion invisibility, honest identity tells (**no packet hacks to hide name tags or particles**), sound discipline, line-of-sight breaking, cover scouting, light discipline, armor-stand decoys, banner/sign signaling, campfire smoke, feigned retreat, bait discipline, terrain ambush, watch rotation, shift-signal vocabulary, intentional attention/posture (head and body together), chat psychology, organic idle loop |
 | **G. Advanced combat, damage & equipment depth** | 50 | 222–271 | Enchantment matchups (Smite/Bane/Impaling/Density/Breach), armour-value targeting, Thorns recoil, curse handling, Spectral Arrow marking, Lingering clouds, Slow Falling, Turtle Master, **Spears + Lunge (1.21.11)**, Warden withdrawal, hostile-projectile dodging |
 | **H. Squad command, coordination & logistics** | 40 | 272–311 | Bounding overwatch, sentry rotation, chokepoint control, buddy pairs, medic/ammo/engineer roles, fall-back staging, time-of-day & weather planning, cargo triage, dead-drop caching, pursuit abort |
 | **I. Mounts, traversal & mobility** | 45 | 312–356 | **Nautilus + Zombie Nautilus + Nautilus Armour (1.21.11)**, **Zombie Horse & Camel Husk (1.21.11)**, mounted water crossing, Soul Speed, Swift Sneak, honey-block sliding, ice friction, kelp elevators, rail switching, minecart spacing |
@@ -331,7 +343,9 @@ The spec catalogues **471 vanilla mechanics** across twelve groups: the original
 
 ### Idle behaviour
 
-Nulls never stand motionless without reason — but "lifelike" randomness never overrides danger checks or commanded objectives. Bounded, non-spammy idle behaviours: look around, adjust facing, briefly crouch, inspect surroundings, jump only when safe and useful, regroup, signal nearby allies.
+Nulls may rest, regroup, signal nearby allies or perform another explicit, safe task, but they do not
+make random ambient glances or turn their heads independently. Only intentional `mind.attention`
+and explicit combat/formation looks may change facing, with head and body yaw kept together.
 
 No endless shift-spam. No collision-causing jumps. No pointless item swings. No chat spam.
 
@@ -354,7 +368,7 @@ nullarmy/
 ├── navigation/     # incremental A*, local steering, terrain cost
 ├── formation/      # boids/flocking, spacing, line/square/encircle/turtle
 ├── combat/         # weapons, cooldowns, shields, projectiles, potions
-├── build/          # schematics parser, BuilderAgent plan validation
+├── build/          # deterministic local plans, schematics and validation
 ├── redstone/       # visible-only circuit reasoning, traps, TNT
 ├── persistence/    # identity, owner, squad, inventory, objectives, timers
 ├── agent/          # OpenAI-compatible clients, circuit breaker, schemas
@@ -407,7 +421,7 @@ local model, chat on a large cloud model.
 | --- | --- | :-: |
 | **ChatCommander** | Produce short chat text | Issue commands, change targets, alter inventories, ban players, authorize actions |
 | **CombatTactician** | Recommend a high-level intent from a strict enum (`hold`, `approach`, `flank`, `retreat`, `shield`, `ranged volley`, `resupply`, `regroup`) | Deal damage directly, bypass the local combat validator |
-| **BuilderAgent** | Return a bounded block-plan JSON using an allowed palette and finite dimensions | Write blocks; skip inventory/support/protection/cost checks |
+| **BuilderAgent (legacy key)** | Connectivity test only; it receives no build-planning request | Design or execute a build, or return an action-bearing block plan |
 | **PathfinderCore** | Suggest a destination/route preference from a **sanitized** snapshot | Move the NPC; supply hidden-world or through-wall data |
 | **ScoutObserver** | Summarise what the squad can actually see: contacts, terrain, hazards | Receive hidden entities, inventories, or through-wall data |
 | **ThreatAnalyst** | Rank threats from visible evidence (gear, position, numbers) | Read hidden health, inventories, or unobserved targets |
@@ -439,14 +453,12 @@ local model, chat on a large cloud model.
 
 ## Works with zero AI models
 
-**NullArmy is complete with no endpoints configured.** Summoning, the portal, movement, flocking,
-pathfinding, the item ledger, every safety policy, the Commander, its loadout GUI, its skin and
-all mace/elytra combat techniques work fully offline.
-
-Only five extras genuinely need a model — free-form Null chat, builds described in a sentence,
-redstone interpretation, mining plans, and model-audits-model. Run `/null features` for the exact
-list on your server. Everything else either never used a model or has a deterministic local
-fallback.
+Core implemented behaviors have deterministic local paths when no endpoints are configured, but
+the full 471-item catalogue is not complete. Building always uses local deterministic planning and
+server-side validation; no AI endpoint is allowed to design or execute a build. The current
+Commander combat integration selects only supported mace choices. Run `/null features` for the
+exact list on the server; model-backed conversation and other explicitly enabled roles remain
+optional.
 
 Endpoints are an upgrade, not a requirement: **[`ENDPOINTS.md`](ENDPOINTS.md)**.
 
@@ -454,13 +466,12 @@ Endpoints are an upgrade, not a requirement: **[`ENDPOINTS.md`](ENDPOINTS.md)**.
 
 ## The Null Commander
 
-`/null commander` summons one named Null that steps out of a portal. It wears the skin of
-**one** configured Minecraft account (`uH3WR2v0ti0uTHJ` by default) — as does every other Null —
-carries a loadout you edit in a GUI (`/null loadout`), and picks its attacks from **25 mace and
-elytra PvP techniques** including smash commits, Wind Burst recovery, Breach shield-breaks,
-rocket chaining, strafe runs and riptide launches.
-
-The selector is deterministic and refuses to commit to a smash that cannot kill.
+`/null commander` summons one named Null that steps through a temporary portal doorway when a
+safe site is available. It can use an account skin, signed texture or custom PNG signed through
+MineSkin; carries a full Bukkit-item loadout editable in `/null loadout`; and is damageable like
+other Nulls. `PvpArsenal` has 25 planning entries, but the current live integration executes only
+supported mace weapon choices through vanilla combat. Elytra flight controls, pearl movement,
+water placement and other tactics are not yet implemented.
 
 Built with **no dependencies**: the skin lookup uses the JDK's own HTTP client, the GUI is a plain
 chest inventory, persistence is Bukkit's YAML, and the technique library is pure Java in `core`.
@@ -555,11 +566,11 @@ Implementation runs in gated phases. Each phase ends with a handoff stating file
 | **4** | Perception, movement, collision & formations — legal perception, incremental pathing, Boids separation, no-clumping, follow, all four formations, door/terrain traversal, stuck recovery | ⬜ |
 | **5** | Survival inventory & combat — resource ledger, equipment priorities, food/potions, ranged and melee combat, shields, crossbows, tridents, anti-air, allied support, loot, death recovery | ⬜ |
 | **6** | Mobility extensions — MLG attempts, bridging/scaffolding, boats, minecarts, mounts, Elytra/rockets, landing | ⬜ |
-| **7** | Builder, mining, redstone & destructive systems — `/schematics` parser, BuilderAgent JSON schema, per-block physical placement, mining, traps, redstone, guarded TNT/cannons | ⬜ |
+| **7** | Builder, mining, redstone & destructive systems — `/schematics` parser, deterministic local plan schema, per-block physical placement, mining, traps, redstone, guarded TNT/cannons | ⬜ |
 | **8** | External AI agents — one role at a time, strict schemas, circuit breaker, privacy controls, deterministic fallback, adversarial tests | ⬜ |
 | **9** | Performance, compatibility & release — version matrix, profiling, item-conservation and restart tests, documentation review, traceability audit | ⬜ |
 
-**Definition of Done:** the declared feature set is traceable, item conservation is proven, authoritative movement/combat/building works on every advertised version, the no-teleport and no-clipping invariants pass tests, endpoint failure is harmless, destructive features are opt-in and protected, resource limits are documented, **and the project builds from a clean checkout with no undeclared runtime dependencies.**
+**Definition of Done:** the declared feature set is traceable, item conservation is proven, authoritative movement/combat/building works on every advertised version, ordinary movement never teleports, the documented Ender Pearl and portal exceptions are explicitly tested, no-clipping invariants pass, endpoint failure is harmless, destructive features are opt-in and protected, resource limits are documented, **and the project builds from a clean checkout with no undeclared runtime dependencies.**
 
 ---
 
@@ -584,17 +595,17 @@ of the documented gameplay is not implemented. There is no stable v1.0.0 release
 
 ## Contributing
 
-Contributions are welcome once Phase 1 lands and there is code to contribute to. Until then, the most useful contributions are **on the spec** in [`NullArmy_Master_Prompt.md`](NullArmy_Master_Prompt.md):
+Contributions are welcome. The codebase is actively implemented, but the catalogue is incomplete; use [`STATUS.md`](STATUS.md) and [`TRACEABILITY.md`](TRACEABILITY.md) for the current evidence and the spec in [`NullArmy_Master_Prompt.md`](NullArmy_Master_Prompt.md) for remaining requirements.
 
 - finding a mechanic that vanilla cannot actually do (→ it belongs in the [vanilla-reality gate](#the-vanilla-reality-gate))
 - finding an item-conservation hole — a path where an item could be duplicated or deleted
-- finding a teleport cheat — any code path that moves a Null without walking
+- finding an unintended teleport — any relocation outside the documented vanilla Ender Pearl cannon or separately configured portal-travel path
 - tightening an acceptance criterion so it becomes genuinely testable
 
 **Ground rules for any contribution:**
 
 - No new runtime dependencies. Ever.
-- No teleport. Not for pathfinding recovery, not for "unsticking," not for convenience.
+- No arbitrary teleport. Never for pathfinding recovery or "unsticking"; only the documented owner-triggered Ender Pearl cannon and separately configured portal-travel path are exceptions.
 - No feature that works only via packets if it visibly affects the world.
 - Every feature ships with its traceability state: `implemented` · `partial` · `experimental` · `blocked by vanilla` · `not started`.
 - **Never label an experimental or blocked feature "complete."** Never fake success.

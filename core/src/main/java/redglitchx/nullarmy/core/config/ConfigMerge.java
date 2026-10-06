@@ -32,40 +32,6 @@ import java.util.TreeMap;
 public final class ConfigMerge {
 
     /** The outcome of one merge. */
-    /**
-     * Folds a legacy switch into its v4 replacement before it is appended.
-     *
-     * <p>An owner who answered {@code nulls.no-death-drops: true} has already
-     * told the plugin what he wants: no kit on the ground. v4 replaced that
-     * switch with {@code drops.enabled}. Adding the new key with its shipped
-     * default of {@code true} would silently reverse his answer, so the answer
-     * travels with it: the new key is appended carrying the old one's value.
-     * An owner who has already set {@code drops.enabled} himself is untouched -
-     * his explicit value beats both the default and the legacy key.</p>
-     *
-     * @return the additions to append, with the legacy answers folded in
-     */
-    public static Map<String, Object> foldLegacy(Map<String, Object> existing,
-                                                 Map<String, Object> additions) {
-        Map<String, Object> out = new LinkedHashMap<>(additions);
-        fold(out, existing, "nulls.no-death-drops", "drops.enabled");
-        return out;
-    }
-
-    private static void fold(Map<String, Object> additions, Map<String, Object> existing,
-                             String legacyKey, String newKey) {
-        if (existing == null || !existing.containsKey(legacyKey) || !additions.containsKey(newKey)) {
-            return;
-        }
-        if (existing.containsKey(newKey)) {
-            return; // his own answer stands
-        }
-        Object legacy = existing.get(legacyKey);
-        if (legacy instanceof Boolean on && on) {
-            additions.put(newKey, Boolean.FALSE);
-        }
-    }
-
     public static final class Result {
         private final Map<String, Object> additions;
         private final List<String> unknownKeys;

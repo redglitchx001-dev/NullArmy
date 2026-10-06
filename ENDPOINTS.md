@@ -9,34 +9,28 @@ as many as you want — there is no limit.
 
 ## You do not need any of this
 
-**NullArmy is complete with zero endpoints.** With `ai.enabled: false` (the default) the plugin is
-fully functional:
+**Endpoints are optional.** Implemented local behaviors have deterministic offline paths. The full
+471-mechanic catalogue is not complete, and current working-tree edits still require a build; see
+`STATUS.md` before treating any feature as verified.
 
-- ✅ summoning with the Call Horn or a Totem Of Null
-- ✅ the portal, and Nulls walking out of it
-- ✅ movement, flocking, collision-safe spawning, local A* pathfinding
-- ✅ item ledger and every safety/griefing policy
-- ✅ **the Commander**, its portal entrance, its loadout GUI and its skin
-- ✅ **all 23 mace and elytra PvP techniques** — the selector is pure local logic, not a model
-- ✅ safe shutdown
+- ✅ Building uses deterministic local plans and server-side validation; no endpoint receives build goals or authors construction plans.
+- ✅ An endpoint may be configured for supported AI-enabled roles such as Commander conversation or typed squad advice.
+- ✅ `/null ai test` can check endpoint connectivity without granting the model gameplay authority.
+- ✅ The Commander has 25 planning-library entries; the current live combat loop executes only supported mace weapon choices.
 
 Run `/null features` to see the exact breakdown on your server.
 
-### What actually needs a model
+### What can use a model
 
-Only five extras, and the plugin tells you rather than pretending:
-
-| Needs a model | What happens offline |
+| Optional role | Offline behavior |
 | --- | --- |
-| Free-form chat replies from Nulls | Nulls stay quiet instead of emitting canned filler |
-| Turning a sentence like "build a small bridge" into a block plan | Existing and manual plans still work |
-| Interpreting a redstone circuit from line-of-sight | Nulls simply don't attempt redstone analysis |
-| Choosing which visible blocks to mine, in what order | Nulls don't mine without a plan source |
-| A second model auditing the first model's proposals | Unnecessary — no model is running |
+| Commander/free-form chat | Bounded local replies or a clear disabled response |
+| Typed squad advice or other configured role | Deterministic local logic remains authoritative; unavailable or unsafe model output is rejected |
+| Endpoint connectivity test | No model-backed behavior is enabled by the test itself |
 
-Everything else either never used a model, or has a **deterministic local fallback** that runs
-either way: combat decisions, target priority, route choice, formation, idle behaviour,
-logistics, triage and scouting all work offline; a model only refines them.
+**Building is not a model-backed role.** The legacy `BuilderAgent` key is retained for compatibility
+and connectivity checks only; no build request is sent to it. Other features not yet implemented
+remain unavailable regardless of configured endpoints.
 
 > **A model never has authority regardless.** The local validator sits above every model
 > decision, and no endpoint can ban, kick or mute a player.
@@ -240,9 +234,10 @@ ai:
       enabled: true
 ```
 
-Valid role names: `ChatCommander`, `CombatTactician`, `BuilderAgent`, `PathfinderCore`,
-`ScoutObserver`, `ThreatAnalyst`, `LogisticsQuartermaster`, `MedicTriage`, `FormationTactician`,
-`RedstoneAnalyst`, `MiningForeman`, `IdleBehaviourDirector`, `GuardianAuditor`.
+Valid role names include `ChatCommander`, `CombatTactician`, `PathfinderCore`, `ScoutObserver`,
+`ThreatAnalyst`, `LogisticsQuartermaster`, `MedicTriage`, `FormationTactician`, `RedstoneAnalyst`,
+`MiningForeman`, `IdleBehaviourDirector`, and `GuardianAuditor`. The legacy `BuilderAgent` key is
+accepted for compatibility/connectivity tests only; no build goals or plans are sent to it.
 
 An unknown role name is logged as a warning with the valid list — never silently ignored.
 

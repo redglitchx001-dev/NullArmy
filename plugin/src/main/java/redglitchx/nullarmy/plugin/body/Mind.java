@@ -74,15 +74,10 @@ public final class Mind {
 
     public Order order;
 
-    // Attention: who or what the head is turned to.
+    // Intentional attention: a point or entity to face with head and body together.
     Vec3d attention;
+    UUID attentionTarget;
     long attentionUntil;
-    boolean attentionHeadOnly = true;
-    /** True when the current attention is only an idle look-around (players outrank it). */
-    boolean attentionIsScan;
-    long nextScanTick;
-    long nextPlayerGlance;
-    UUID glancedAt;
 
     // Idle and rest.
     long idleSince;
@@ -104,12 +99,16 @@ public final class Mind {
 
     // Combat.
     UUID combatTarget;
+    /** True only for an explicit attack/hunt objective; retaliation cannot pursue. */
+    boolean combatPursuit;
     long combatUntil;
     int strafeDir = 1;
     long nextStrafeFlip;
     boolean critJumped;
     long critJumpTick;
     long bowDrawStart = -1L;
+    /** Cooldown for the real, inventory-consuming Wind Charge combat throw. */
+    long nextWindChargeTick;
     /** P-05 aim: when the shot may be loosed, and how wrong this one is. */
     long aimReadyTick = -1L;
     boolean aimMiss;
@@ -150,6 +149,7 @@ public final class Mind {
      */
     public void clearFight() {
         combatTarget = null;
+        combatPursuit = false;
         combatUntil = 0L;
         critJumped = false;
     }

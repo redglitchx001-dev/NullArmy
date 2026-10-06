@@ -12,15 +12,17 @@ import java.util.Set;
 /**
  * The default equipment every Null starts with, and the kit line format.
  *
- * <h2>The v3 kit</h2>
+ * <h2>The shared soldier kit</h2>
  * Full netherite armour with Protection IV and Unbreaking III (boots also carry
  * Feather Falling IV), a netherite sword (Sharpness V, Unbreaking III), pickaxe
  * (Efficiency V, Fortune III, Unbreaking III), axe (Efficiency V, Unbreaking III)
  * and shovel, a bow with Power V and Infinity plus the one arrow Infinity needs,
  * potions of Healing II (two), Strength II and Regeneration II, four golden
- * apples and one enchanted golden apple, building blocks (cobblestone 64,
- * deepslate 64, obsidian 16), 32 torches, a water bucket, four ender pearls and
- * a shield in the offhand (the shield is what the PvP brain raises).
+ * apples and four enchanted golden apples, building blocks (cobblestone 64,
+ * deepslate 64, obsidian 16), 32 torches, a water bucket, four ender pearls,
+ * a mace, two Totems of Undying, 16 Wind Charges, 32 rockets and a shield in
+ * the offhand (the shield is what the PvP brain raises). The Commander gets
+ * this same kit plus an Elytra; only the Commander's chestplate has a white trim.
  *
  * <h2>Line format</h2>
  * <pre>
@@ -139,6 +141,21 @@ public final class DefaultKit {
             "5:IRON_PICKAXE:1", "6:ENDER_PEARL:8", "7:WATER_BUCKET:1", "8:TORCH:32",
             "38:IRON_CHESTPLATE:1", "40:SHIELD:1"));
 
+    /** The previously shipped v3 soldier kit, upgraded without losing custom edits. */
+    public static final List<String> LEGACY_V3_LINES = Collections.unmodifiableList(java.util.Arrays.asList(
+            "0:NETHERITE_SWORD:1|sharpness=5,unbreaking=3",
+            "1:BOW:1|power=5,infinity=1",
+            "2:NETHERITE_AXE:1|efficiency=5,unbreaking=3",
+            "3:NETHERITE_PICKAXE:1|efficiency=5,fortune=3,unbreaking=3",
+            "4:GOLDEN_APPLE:4", "5:POTION:2|potion=strong_healing", "6:COBBLESTONE:64",
+            "7:WATER_BUCKET:1", "8:ENDER_PEARL:4", "9:ARROW:1", "10:NETHERITE_SHOVEL:1",
+            "11:POTION:1|potion=strong_strength", "12:POTION:1|potion=strong_regeneration",
+            "13:ENCHANTED_GOLDEN_APPLE:1", "14:DEEPSLATE:64", "15:OBSIDIAN:16", "16:TORCH:32",
+            "36:NETHERITE_BOOTS:1|protection=4,unbreaking=3,feather_falling=4",
+            "37:NETHERITE_LEGGINGS:1|protection=4,unbreaking=3",
+            "38:NETHERITE_CHESTPLATE:1|protection=4,unbreaking=3",
+            "39:NETHERITE_HELMET:1|protection=4,unbreaking=3", "40:SHIELD:1|unbreaking=3"));
+
     static {
         List<Item> kit = new ArrayList<>();
         kit.add(item(0, "NETHERITE_SWORD", 1, "sharpness=5,unbreaking=3"));
@@ -154,10 +171,14 @@ public final class DefaultKit {
         kit.add(item(10, "NETHERITE_SHOVEL", 1, ""));
         kit.add(item(11, "POTION", 1, "potion=strong_strength"));
         kit.add(item(12, "POTION", 1, "potion=strong_regeneration"));
-        kit.add(item(13, "ENCHANTED_GOLDEN_APPLE", 1, ""));
+        kit.add(item(13, "ENCHANTED_GOLDEN_APPLE", 4, ""));
         kit.add(item(14, "DEEPSLATE", 64, ""));
         kit.add(item(15, "OBSIDIAN", 16, ""));
         kit.add(item(16, "TORCH", 32, ""));
+        kit.add(item(17, "MACE", 1, ""));
+        kit.add(item(18, "TOTEM_OF_UNDYING", 2, ""));
+        kit.add(item(19, "WIND_CHARGE", 16, ""));
+        kit.add(item(20, "FIREWORK_ROCKET", 32, ""));
         kit.add(item(36, "NETHERITE_BOOTS", 1, "protection=4,unbreaking=3,feather_falling=4"));
         kit.add(item(37, "NETHERITE_LEGGINGS", 1, "protection=4,unbreaking=3"));
         kit.add(item(38, "NETHERITE_CHESTPLATE", 1, "protection=4,unbreaking=3"));
@@ -217,19 +238,39 @@ public final class DefaultKit {
     /**
      * The kit an owner's config really means.
      *
-     * <p>A list that is exactly the pre-v3 shipped kit was never edited, so the
-     * v3 kit replaces it (and {@code notes} says so); anything else is the
-     * owner's own choice and is used as written.</p>
+     * <p>An exact shipped legacy list was never edited, so the current shared
+     * kit replaces it (and {@code notes} says so); anything else is the owner's
+     * own choice and is used as written.</p>
      */
     public static List<Item> resolveConfigured(List<String> lines, List<String> errors, List<String> notes) {
         if (isLegacyDefault(lines)) {
             if (notes != null) {
-                notes.add("loadout.default-kit is the unedited pre-v3 kit; the v3 netherite kit is used"
-                        + " instead (edit the list to keep your own)");
+                notes.add("loadout.default-kit is the unedited legacy kit; the current shared Null/Commander"
+                        + " kit is used instead (edit the list to keep your own)");
+            }
+            return DEFAULT;
+        }
+        if (sameLines(lines, LEGACY_V3_LINES)) {
+            if (notes != null) {
+                notes.add("loadout.default-kit is the unedited previous NullArmy kit; the updated shared"
+                        + " Null/Commander kit is used instead (edit the list to keep your own)");
             }
             return DEFAULT;
         }
         return parse(lines, errors);
+    }
+
+    private static boolean sameLines(List<String> lines, List<String> expected) {
+        if (lines == null || lines.size() != expected.size()) {
+            return false;
+        }
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i) == null ? "" : lines.get(i).trim();
+            if (!line.equalsIgnoreCase(expected.get(i))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** True when the lines are exactly the pre-v3 shipped kit (whitespace and case ignored). */

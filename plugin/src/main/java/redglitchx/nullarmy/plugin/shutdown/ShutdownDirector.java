@@ -3,7 +3,6 @@ package redglitchx.nullarmy.plugin.shutdown;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Particle;
-import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
 
@@ -204,8 +203,7 @@ public final class ShutdownDirector implements Reloadable {
             Location location = new Location(world, at.x(), at.y() + 1.0, at.z());
             world.spawnParticle(Particle.REVERSE_PORTAL, location, 60, 0.4, 0.9, 0.4, 0.05);
             world.spawnParticle(Particle.SOUL, location, 12, 0.3, 0.7, 0.3, 0.01);
-            world.playSound(location, Sound.BLOCK_PORTAL_TRIGGER, 0.7f, 0.7f);
-            world.playSound(location, Sound.BLOCK_AMETHYST_BLOCK_CHIME, 0.5f, 0.6f);
+            // Totem pops and shutdowns are deliberately silent.
         } catch (Throwable t) {
             plugin.getLogger().fine("[NullArmy] departure effects skipped: " + Guard.describe(t));
         }

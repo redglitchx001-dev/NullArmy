@@ -104,14 +104,8 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     /** A look target that is not refreshed for this many ticks expires. */
     private static final int LOOK_TTL = 80;
 
-    /** Degrees per tick the head may turn: quick, but never a snap. */
-    private static final float HEAD_TURN_PER_TICK = 28.0F;
-
-    /** Degrees per tick the travel frame (body) may turn. */
+    /** Degrees per tick the coupled head-and-body yaw may turn. */
     private static final float BODY_TURN_PER_TICK = 36.0F;
-
-    /** Vanilla keeps the head within this many degrees of the body. */
-    private static final float MAX_HEAD_BODY_DIFF = 75.0F;
 
     /** Vanilla's jump cooldown ({@code LivingEntity.noJumpDelay}). */
     private static final int JUMP_COOLDOWN = 10;
@@ -136,9 +130,8 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     private int intentAge = INTENT_TTL + 1;
     private int jumpCooldown;
 
-    // Look intent.
+    // Look intent; body and head always turn together.
     private Vec3d lookTarget;
-    private boolean lookHeadOnly;
     private int lookAge = LOOK_TTL + 1;
 
     NullPlayer(MinecraftServer server, ServerLevel level, GameProfile profile,
@@ -304,7 +297,6 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
             return;
         }
         this.lookTarget = target;
-        this.lookHeadOnly = headOnly;
         this.lookAge = 0;
     }
 
@@ -393,11 +385,11 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
     /**
      * Relocates the body to a destination the adapter has already verified.
      *
-     * <p>This is <b>not</b> ordinary movement: the only caller is
-     * {@link V1_21_11Adapter#portalTravel}, which checks the world, the chunk
-     * and the collision safety of the destination first, and the player sees
-     * portal effects at both ends. Velocity is cleared so the body cannot arrive
-     * mid-fall, and a non-finite destination is refused outright.</p>
+     * <p>This is <b>not</b> ordinary movement. Callers are restricted to
+     * {@link V1_21_11Adapter#portalTravel} and the post-impact fallback in
+     * {@link V1_21_11Adapter#enderPearlTeleport}; both verify a same-world,
+     * loaded, collision-safe destination first. Velocity is cleared so the body
+     * cannot arrive mid-fall, and a non-finite destination is refused outright.</p>
      *
      * @return true when the body is at the destination
      */
@@ -754,7 +746,7 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         }
     }
 
-    /** Turns head and body toward the look intent, never faster than a player. */
+    /** Turns head and body through one shared yaw; independent head turns are impossible. */
     private void applyLook() {
         if (lookAge <= LOOK_TTL) {
             lookAge++;
@@ -764,42 +756,29 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
         float moveYaw = moving ? yawOf(moveX, moveZ) : Float.NaN;
         Vec3d look = lookAge <= LOOK_TTL ? lookTarget : null;
 
-        float head = getYHeadRot();
         float body = getYRot();
         float pitch = getXRot();
-        float headGoal = head;
+        float yawGoal = body;
         float pitchGoal = pitch;
-        boolean hasLookYaw = false;
         if (look != null) {
             double dx = look.x() - getX();
             double dy = look.y() - getEyeY();
             double dz = look.z() - getZ();
             double horizontal = Math.sqrt(dx * dx + dz * dz);
             if (horizontal > 1.0e-3) {
-                headGoal = (float) Math.toDegrees(Math.atan2(-dx, dz));
-                hasLookYaw = true;
+                yawGoal = (float) Math.toDegrees(Math.atan2(-dx, dz));
             }
             pitchGoal = (float) Math.toDegrees(-Math.atan2(dy, Math.max(1.0e-3, horizontal)));
         } else if (moving) {
-            headGoal = moveYaw;
+            yawGoal = moveYaw;
             pitchGoal = pitch * 0.8F;
         }
 
-        float newHead = approach(head, headGoal, HEAD_TURN_PER_TICK);
-        float bodyGoal = (look != null && !lookHeadOnly && hasLookYaw) ? headGoal
-                : (moving ? moveYaw : body);
-        float newBody = approach(body, bodyGoal, BODY_TURN_PER_TICK);
-        float diff = wrap(newHead - newBody);
-        if (diff > MAX_HEAD_BODY_DIFF) {
-            newBody = newHead - MAX_HEAD_BODY_DIFF;
-        } else if (diff < -MAX_HEAD_BODY_DIFF) {
-            newBody = newHead + MAX_HEAD_BODY_DIFF;
-        }
+        float yaw = wrap(approach(body, yawGoal, BODY_TURN_PER_TICK));
         float newPitch = approach(pitch, Math.max(-90.0F, Math.min(90.0F, pitchGoal)), 20.0F);
-
-        setYRot(wrap(newBody));
-        setYBodyRot(wrap(newBody));
-        setYHeadRot(wrap(newHead));
+        setYRot(yaw);
+        setYBodyRot(yaw);
+        setYHeadRot(yaw);
         setXRot(newPitch);
     }
 
