@@ -7,8 +7,12 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.Registry;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ArmorMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.PotionMeta;
+import org.bukkit.inventory.meta.trim.ArmorTrim;
+import org.bukkit.inventory.meta.trim.TrimMaterial;
+import org.bukkit.inventory.meta.trim.TrimPattern;
 import org.bukkit.potion.PotionType;
 
 import redglitchx.nullarmy.core.kit.DefaultKit;
@@ -83,6 +87,40 @@ public final class KitItems {
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    /** Removes an armor trim while preserving every other item property. */
+    public static ItemStack withoutArmorTrim(ItemStack stack) {
+        if (stack == null) {
+            return null;
+        }
+        ItemMeta raw = stack.getItemMeta();
+        if (raw instanceof ArmorMeta) {
+            ArmorMeta meta = (ArmorMeta) raw;
+            if (meta.getTrim() != null) {
+                meta.setTrim(null);
+                stack.setItemMeta(meta);
+            }
+        }
+        return stack;
+    }
+
+    /**
+     * Adds the Commander's white quartz trim to a chestplate. Ordinary Null
+     * equipment intentionally never calls this.
+     */
+    public static ItemStack withCommanderChestplateTrim(ItemStack stack) {
+        if (stack == null || !stack.getType().name().endsWith("_CHESTPLATE")) {
+            return stack;
+        }
+        ItemMeta raw = stack.getItemMeta();
+        if (!(raw instanceof ArmorMeta)) {
+            return stack;
+        }
+        ArmorMeta meta = (ArmorMeta) raw;
+        meta.setTrim(new ArmorTrim(TrimMaterial.QUARTZ, TrimPattern.SENTRY));
+        stack.setItemMeta(meta);
+        return stack;
     }
 
     /** Level of an enchantment on a stack, 0 when absent. */

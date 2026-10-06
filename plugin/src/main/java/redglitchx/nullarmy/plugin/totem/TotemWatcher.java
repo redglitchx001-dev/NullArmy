@@ -1,5 +1,8 @@
 package redglitchx.nullarmy.plugin.totem;
 
+import org.bukkit.Bukkit;
+import org.bukkit.Sound;
+import org.bukkit.SoundCategory;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Item;
 import org.bukkit.entity.LivingEntity;
@@ -105,8 +108,52 @@ public final class TotemWatcher implements Listener, Reloadable {
                 // An ordinary Totem of Undying, or nothing at all.
                 return;
             }
+            silenceTotemPop(entity);
             trigger("The Totem Of Null popped for " + nameOf(entity));
         });
+    }
+
+    /**
+     * Suppress the pop before vanilla finishes the resurrect pipeline, then send
+     * a stop packet as a client-side fallback. The entity's prior silent state
+     * is restored two ticks later; the Totem Of Null is a shutdown trigger, not
+     * a sound effect.
+     */
+    private void silenceTotemPop(LivingEntity entity) {
+        if (entity == null || entity.getWorld() == null) {
+            return;
+        }
+        org.bukkit.World world = entity.getWorld();
+        org.bukkit.Location at = entity.getLocation().clone();
+        boolean wasSilent = entity.isSilent();
+        try {
+            if (!wasSilent) {
+                entity.setSilent(true);
+            }
+            Bukkit.getScheduler().runTaskLater(plugin, () -> Guard.attempt(plugin.getLogger(),
+                    "silencing the Totem Of Null sound", () -> {
+                        try {
+                            for (Player viewer : world.getPlayers()) {
+                                if (viewer.getLocation().distanceSquared(at) <= 64.0D * 64.0D) {
+                                    viewer.stopSound(Sound.ITEM_TOTEM_USE, SoundCategory.PLAYERS);
+                                }
+                            }
+                        } finally {
+                            if (!wasSilent && entity.isValid()) {
+                                entity.setSilent(false);
+                            }
+                        }
+                    }), 2L);
+        } catch (Throwable t) {
+            if (!wasSilent) {
+                try {
+                    entity.setSilent(false);
+                } catch (Throwable ignored) {
+                    // Preserve the original failure; the entity may already be gone.
+                }
+            }
+            plugin.getLogger().fine("[NullArmy] totem sound suppression deferred: " + Guard.describe(t));
+        }
     }
 
     /** The item in the hand vanilla named, or the other hand, or nothing. */

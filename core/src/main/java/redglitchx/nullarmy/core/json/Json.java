@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
  *
  * <p>Spec 1.1 forbids a third-party runtime dependency and explicitly allows
  * "a small, strictly bounded in-project codec". This is it. It exists because
- * BuilderAgent and the other endpoints return JSON, and the spec demands
+ * the deterministic builder and other internal endpoints use JSON, and the spec demands
  * "strict JSON/schema validation" (7.4) - so the parser must reject malformed
  * input rather than guess.</p>
  *

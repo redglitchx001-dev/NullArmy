@@ -1,5 +1,7 @@
 package redglitchx.nullarmy.core.ai;
 
+import redglitchx.nullarmy.core.formation.FormationMatrix;
+
 /**
  * The gate every AI-proposed action has to pass before it is executed.
  *
@@ -92,7 +94,7 @@ public final class ActionPolicy {
             case FORMATION:
                 if (!isFormation(action.argument())) {
                     return deny("'" + action.argument() + "' is not a formation"
-                            + " (line, square, encircle, turtle)");
+                            + " (line, wall, rank, column, square, wedge, phalanx, arrow, encircle, turtle)");
                 }
                 return permission("nullarmy.follow", view);
             case TACTICS:
@@ -143,8 +145,7 @@ public final class ActionPolicy {
     }
 
     private static boolean isFormation(String value) {
-        return "line".equals(value) || "square".equals(value)
-                || "encircle".equals(value) || "turtle".equals(value);
+        return FormationMatrix.isKnown(value);
     }
 
     private static boolean isTactics(String value) {

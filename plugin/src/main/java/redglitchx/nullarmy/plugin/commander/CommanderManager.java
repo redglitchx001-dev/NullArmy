@@ -24,6 +24,7 @@ import redglitchx.nullarmy.nms.VersionAdapter;
 import redglitchx.nullarmy.plugin.NullArmyPlugin;
 import redglitchx.nullarmy.plugin.config.PluginConfig;
 import redglitchx.nullarmy.plugin.config.Reloadable;
+import redglitchx.nullarmy.plugin.kit.KitItems;
 import redglitchx.nullarmy.plugin.skin.SkinData;
 import redglitchx.nullarmy.plugin.skin.SkinResolver;
 import redglitchx.nullarmy.plugin.util.Guard;
@@ -58,7 +59,7 @@ public final class CommanderManager implements Listener, Reloadable {
     private static final String FILE_NAME = "commander.yml";
     private static final String DEFAULT_NAME = "NullCommander";
 
-    /** Every message starts with the shared gradient brand. */
+    /** Private Commander status messages use the shared plugin prefix. */
     private static final String PREFIX = PluginText.PREFIX;
 
     private final NullArmyPlugin plugin;
@@ -403,13 +404,20 @@ public final class CommanderManager implements Listener, Reloadable {
         org.bukkit.entity.Player handle = redglitchx.nullarmy.plugin.body.Bodies.player(commander);
         if (handle != null) {
             org.bukkit.inventory.PlayerInventory inv = handle.getInventory();
-            for (int i = 0; i < loadout.length && i < redglitchx.nullarmy.plugin.body.Bodies.SLOTS; i++) {
+            ItemStack[] equipped = new ItemStack[redglitchx.nullarmy.plugin.body.Bodies.SLOTS];
+            for (int i = 0; i < loadout.length && i < equipped.length; i++) {
                 ItemStack stack = loadout[i];
                 if (stack == null || stack.getType() == null || stack.getType().isAir()) {
                     continue;
                 }
-                redglitchx.nullarmy.plugin.body.Bodies.set(inv, i, stack.clone());
+                ItemStack item = stack.clone();
+                KitItems.withoutArmorTrim(item);
+                if (i == 38) {
+                    KitItems.withCommanderChestplateTrim(item);
+                }
+                equipped[i] = item;
             }
+            redglitchx.nullarmy.plugin.body.Bodies.apply(inv, equipped);
             return;
         }
         List<LoadoutSlot> slots = new ArrayList<>();
@@ -473,9 +481,9 @@ public final class CommanderManager implements Listener, Reloadable {
         return copy;
     }
 
-    /** Picks the technique the Commander uses for a situation. */
+    /** Picks a supported, vanilla-executed melee technique for the Commander. */
     public PvpArsenal.Technique plan(CombatSituation situation) {
-        return PvpArsenal.select(situation);
+        return PvpArsenal.selectSupportedMelee(situation);
     }
 
     /**

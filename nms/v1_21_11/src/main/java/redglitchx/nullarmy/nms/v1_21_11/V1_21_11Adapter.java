@@ -10,6 +10,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.players.PlayerList;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import org.bukkit.Bukkit;
@@ -138,7 +139,9 @@ public final class V1_21_11Adapter implements VersionAdapter {
         // fall damage instead of pretending there is none.
         boolean safe = request.airborne()
                 ? isAirborneSpawnSafe(request.worldName(), request.position())
-                : isSpawnSafe(request.worldName(), request.position());
+                : request.portalMouth()
+                    ? isPortalSpawnSafe(request.worldName(), request.position())
+                    : isSpawnSafe(request.worldName(), request.position());
         if (!safe) {
             throw new SpawnRefusedException("refusing to spawn Null at unsafe position "
                     + request.position()
@@ -563,6 +566,39 @@ public final class V1_21_11Adapter implements VersionAdapter {
         return ((NullPlayer) body).portalTo(destination.x(), destination.y(), destination.z());
     }
 
+    /**
+     * Narrow fallback for a Null-owned, real Ender Pearl after its projectile
+     * hit. Vanilla may decline to move an NPC whose packet connection is not a
+     * real client, so the cannon calls this only after observing that tracked
+     * projectile's impact and confirming vanilla did not already move the body.
+     */
+    @Override
+    public boolean enderPearlTeleport(String worldName, NullBody body, Vec3d destination) {
+        if (worldName == null || body == null || destination == null || !(body instanceof NullPlayer)
+                || !body.isAlive() || !Bukkit.isPrimaryThread()
+                || !Double.isFinite(destination.x()) || !Double.isFinite(destination.y())
+                || !Double.isFinite(destination.z())) {
+            return false;
+        }
+        World world = Bukkit.getWorld(worldName);
+        if (world == null || !(world instanceof CraftWorld)) {
+            return false;
+        }
+        NullPlayer npc = (NullPlayer) body;
+        ServerLevel level = npc.serverLevelOrNull();
+        if (level == null || level != ((CraftWorld) world).getHandle()) {
+            return false;
+        }
+        int blockX = (int) Math.floor(destination.x());
+        int blockZ = (int) Math.floor(destination.z());
+        if (!world.isChunkLoaded(blockX >> 4, blockZ >> 4)
+                || !isSpawnSafe(worldName, destination)
+                || !isEntitySpaceFree(worldName, destination)) {
+            return false;
+        }
+        return npc.portalTo(destination.x(), destination.y(), destination.z());
+    }
+
     @Override
     public BlockView blockView(String worldName) {
         World bukkitWorld = Bukkit.getWorld(worldName);
@@ -596,6 +632,47 @@ public final class V1_21_11Adapter implements VersionAdapter {
      * free of solid blocks, but there is deliberately no requirement for ground
      * beneath the feet. Only the air-drop path uses this.
      */
+    @Override
+    public boolean isPortalSpawnSafe(String worldName, Vec3d position) {
+        World world = Bukkit.getWorld(worldName);
+        if (world == null || position == null) {
+            return false;
+        }
+        ServerLevel level = ((CraftWorld) world).getHandle();
+        int minX = (int) Math.floor(position.x() - BODY_WIDTH / 2.0);
+        int maxX = (int) Math.floor(position.x() + BODY_WIDTH / 2.0);
+        int minZ = (int) Math.floor(position.z() - BODY_WIDTH / 2.0);
+        int maxZ = (int) Math.floor(position.z() + BODY_WIDTH / 2.0);
+        int feetY = (int) Math.floor(position.y());
+        boolean foundPortal = false;
+
+        // The NETHER_PORTAL has no collision shape, but unlike ordinary air it
+        // is not air in the block registry. Permit only these blocks to overlap
+        // the body; a leaked solid block still makes the doorway unsafe.
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                for (int y = feetY; y < feetY + (int) Math.ceil(BODY_HEIGHT); y++) {
+                    if (y > level.getMaxY()) {
+                        return false;
+                    }
+                    BlockPos pos = new BlockPos(x, y, z);
+                    BlockState state = level.getBlockState(pos);
+                    if (state.is(Blocks.NETHER_PORTAL)) {
+                        foundPortal = true;
+                    } else if (!state.isAir()) {
+                        return false;
+                    }
+                }
+                BlockPos belowPos = new BlockPos(x, feetY - 1, z);
+                BlockState below = level.getBlockState(belowPos);
+                if (below.isAir() || below.is(Blocks.NETHER_PORTAL)) {
+                    return false;
+                }
+            }
+        }
+        return foundPortal;
+    }
+
     @Override
     public boolean isAirborneSpawnSafe(String worldName, Vec3d position) {
         World world = Bukkit.getWorld(worldName);

@@ -20,7 +20,7 @@ Verified: **471 items, numbers 1–471, no gaps, no duplicates, no title collisi
 > Per the spec: *"Do not label experimental or blocked features 'complete.'"* This register is the
 > authority. Any feature claimed elsewhere must match its status here.
 
-## Summary — 2026-10-03
+## Last recorded planning snapshot — 2026-10-03 (stale)
 
 | Group | Items | implemented | partial | experimental | blocked by vanilla | version-specific | not started |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -38,9 +38,13 @@ Verified: **471 items, numbers 1–471, no gaps, no duplicates, no title collisi
 | **L** — L. Stealth, perception, scouting & lifelike behaviour | 25 | 0 | 0 | 0 | 0 | 0 | **25** |
 | **Total** | **471** | **0** | **0** | **0** | **0** | **0** | **471** |
 
-**0 of 471 implemented.** Phase 0 is planning only; no mechanic has been built or tested.
+**This is not a current implementation count.** The `0 of 471` table above was generated for the
+Phase 0 planning snapshot before the later v3/v4 implementation. The `not started` labels below
+were not refreshed against that code and must not be read as current findings. `STATUS.md` records
+historical checks and clearly marks the latest unverified edits; a per-mechanic source/test audit
+is still pending, so this register does not claim a current implemented total.
 
-> The **Phase** column is the phase in which the item is planned to land, per §11.
+> The **Phase** column is the phase in which the item was planned to land, per §11.
 > It is a plan, not a result.
 
 ## A. Combat and equipment tactics (1–40)
@@ -290,7 +294,7 @@ Verified: **471 items, numbers 1–471, no gaps, no duplicates, no title collisi
 | 216 | Terrain ambush | `not started` | 6 |
 | 217 | Watch rotation | `not started` | 6 |
 | 218 | Shift-signal vocabulary | `not started` | 6 |
-| 219 | Natural gaze and posture | `not started` | 6 |
+| 219 | Explicit attention; head and body turn together, with no ambient glances | `not started` | 6 |
 | 220 | Chat psychology | `not started` | 6 |
 | 221 | Organic idle loop | `not started` | 6 |
 

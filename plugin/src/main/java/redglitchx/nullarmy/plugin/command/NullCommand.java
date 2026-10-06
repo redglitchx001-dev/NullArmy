@@ -69,7 +69,7 @@ import java.util.Locale;
  */
 public final class NullCommand implements CommandExecutor, TabCompleter, Reloadable {
 
-    /** Every chat line the plugin sends starts with the shared gradient brand. */
+    /** Command responses use the shared gradient brand prefix. */
     private static final String PREFIX = PluginText.PREFIX;
 
     /** Subcommands in help order. Aliases are resolved before this list is used. */
@@ -109,10 +109,12 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             new String[]{"skin", "nullarmy.admin", "Which skins are configured and resolved."},
             new String[]{"follow", "nullarmy.follow", "Your Nulls walk to you. They never teleport."},
             new String[]{"guard", "nullarmy.follow", "Hold position and watch."},
-            new String[]{"formation <style>", "nullarmy.follow", "line, square, encircle or turtle."},
+            new String[]{"formation <style>", "nullarmy.follow", "Styles: " + String.join(", ", FORMATIONS) + "."},
             new String[]{"attack <player>", "nullarmy.attack", "Set a physical pursuit objective."},
             new String[]{"attackx <player>", "nullarmy.attackx", "Extreme-combat profile for the squad."},
             new String[]{"come", "nullarmy.follow", "Walk your squad to your position (never a teleport)."},
+            new String[]{"bring", "nullarmy.follow", "Alias for come; the squad walks to you."},
+            new String[]{"tp", "nullarmy.admin", "Get a nearly-broken rod for the one-use Ender Pearl teleport cannon."},
             new String[]{"stop", "nullarmy.admin", "Stop every Null of yours exactly where it stands."},
             new String[]{"dismiss", "nullarmy.admin", "Remove your Nulls immediately (kill switch)."},
             new String[]{"list", "nullarmy.admin", "Every live Null with health and position."},
@@ -126,7 +128,8 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             new String[]{"reload", "nullarmy.admin", "Re-read config.yml without a restart."},
             new String[]{"wand", "nullarmy.build", "Region-select tool for building (Phase 7)."},
             new String[]{"build <structure>", "nullarmy.build", "Bounded, inventory-funded building (Phase 7)."},
-            new String[]{"chat [null|commander|off]", "nullarmy.chat", "Private chat with a Null or the Commander."},
+            new String[]{"chat <public|private|null|commander|off>", "nullarmy.chat",
+                    "Choose public Commander replies, open a private channel, or turn chat off."},
             new String[]{"ai", "nullarmy.admin", "Whether an AI model is configured and reachable."},
             new String[]{"portal [player]", "nullarmy.admin", "Walk your Nulls through a portal to you or a player."},
             new String[]{"emote <wave|salute|nod|point|dance|sit>", "nullarmy.admin", "A visible human gesture from your Nulls."},
@@ -150,7 +153,7 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
                     "nullarmy.follow", "Give an order; the Nulls acknowledge with a gesture."},
             new String[]{"loadout [null|template <name> [save|apply]]", "nullarmy.gui",
                     "Edit the Commander's or a Null's loadout; save/apply templates."},
-            new String[]{"ai build <goal>", "nullarmy.build", "The Nulls build it by hand (AI plan or offline planner)."},
+            new String[]{"ai build <goal>", "nullarmy.build", "Deterministic local build; AI is never used to plan construction."},
             new String[]{"ai stop", "nullarmy.build", "Stop your build."});
 
     private final NullArmyPlugin plugin;
@@ -247,7 +250,8 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
                 case "emote":
                     return startingWith(EMOTES, args[1]);
                 case "chat":
-                    return startingWith(Arrays.asList("commander", "null", "off", "status"), args[1]);
+                    return startingWith(Arrays.asList("public", "private", "commander", "null", "off", "status"),
+                            args[1]);
                 case "portal":
                 case "greet":
                     return onlinePlayerNames(args[1]);
@@ -317,6 +321,8 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
                 return combatObjective(sender, args, true);
             case "come":
                 return come(sender);
+            case "tp":
+                return teleportCannon(sender);
             case "stop":
                 return stop(sender);
             case "dismiss":
@@ -417,7 +423,6 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             case "cannon":
             case "wc":
                 return "withercannon";
-            case "tp":
             case "bring":
                 return "come";
             case "skins":
@@ -437,8 +442,8 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             }
             sender.sendMessage(PREFIX + "  /null " + line[0] + " - " + line[2]);
         }
-        sender.sendMessage(PREFIX + "Nulls walk; they never teleport. Destructive features are off"
-                + " until you enable them in config.yml.");
+        sender.sendMessage(PREFIX + "Ordinary movement and summoning stay physical; /null tp is the"
+                + " separate Ender Pearl cannon. Destructive features remain protected by config.yml.");
         return true;
     }
 
@@ -526,7 +531,7 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
                 + " | adapter " + (adapter == null ? "none" : adapter.minecraftVersion())
                 + " | server " + server);
         sender.sendMessage(PREFIX + "Nulls are real server-side entities: one hitbox, one inventory,"
-                + " no teleporting, no free items.");
+                + " ordinary movement is physical, and cannon pearls are paid from their inventories.");
         return true;
     }
 
@@ -1061,8 +1066,10 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
         if (player == null) {
             return true;
         }
+        String action = args.length > 0 && args[0].equalsIgnoreCase("kill") ? "kill"
+                : (extreme ? "attackx" : "attack");
         if (args.length < 2) {
-            sender.sendMessage(PREFIX + "Usage: /null " + (extreme ? "attackx" : "attack") + " <player>");
+            sender.sendMessage(PREFIX + "Usage: /null " + action + " <player>");
             return true;
         }
         Player target = Bukkit.getPlayerExact(args[1]);
@@ -1071,13 +1078,27 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             sender.sendMessage(PREFIX + "No online player named '" + args[1] + "'.");
             return true;
         }
+        List<NullBody> members = squads.membersOf(player.getUniqueId());
+        if (members.isEmpty()) {
+            sender.sendMessage(PREFIX + "You have no live Nulls to send.");
+            return true;
+        }
+        if (plugin.brain() == null || members.stream().noneMatch(body -> plugin.brain().mayTarget(body, target))) {
+            sender.sendMessage(PREFIX + "That target is protected from your Nulls; no combat order was issued.");
+            return true;
+        }
         int count = squads.attack(player.getUniqueId(), target.getUniqueId(), target.getName());
         if (count <= 0) {
             sender.sendMessage(PREFIX + "You have no live Nulls to send.");
             return true;
         }
-        sender.sendMessage(PREFIX + count + " Null(s) will pursue " + target.getName()
-                + (extreme ? " on the extreme profile (better tactics - never extra damage or free items)." : "."));
+        if ("kill".equals(action)) {
+            sender.sendMessage(PREFIX + "Lethal combat objective set on " + target.getName() + "."
+                    + " They can escape, fight back, or survive.");
+        } else {
+            sender.sendMessage(PREFIX + count + " Null(s) will pursue " + target.getName()
+                    + (extreme ? " on the extreme profile (better tactics - never extra damage or free items)." : "."));
+        }
         sender.sendMessage(PREFIX + "They have to walk there. Nothing was teleported and"
                 + " " + target.getName() + " was not touched.");
         return true;
@@ -1086,9 +1107,9 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
     /**
      * Walks the squad to the player.
      *
-     * <p>Deliberately <b>not</b> a teleport: spec 5 forbids teleporting Nulls,
-     * including as recovery. This is the same physical objective {@code follow}
-     * uses, so the squad arrives by walking.</p>
+     * <p>Deliberately <b>not</b> a teleport: this is the same physical objective
+     * {@code follow} uses, so the squad arrives by walking. The separate,
+     * owner-triggered Ender Pearl cannon is available through {@code /null tp}.</p>
      */
     private boolean come(CommandSender sender) {
         if (!require(sender, "nullarmy.follow")) {
@@ -1107,6 +1128,23 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
                 new Vec3d(loc.getX(), loc.getY(), loc.getZ()), "your position");
         answer(sender, count, "are walking to you (physical travel, no teleport).",
                 "You have no live Nulls to call.");
+        return true;
+    }
+
+    /** Gives a permission-gated, one-use fishing-rod Ender Pearl cannon. */
+    private boolean teleportCannon(CommandSender sender) {
+        if (!require(sender, "nullarmy.admin")) {
+            return true;
+        }
+        Player player = asPlayer(sender, "Only a player can aim the teleport cannon.");
+        if (player == null) {
+            return true;
+        }
+        if (plugin.teleportCannon() == null) {
+            sender.sendMessage(PREFIX + "The teleport cannon is unavailable on this server.");
+            return true;
+        }
+        sender.sendMessage(PREFIX + plugin.teleportCannon().giveRod(player));
         return true;
     }
 
@@ -1463,7 +1501,7 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
         return true;
     }
 
-    /** {@code /null chat [null|commander|off|status]} - the private channel. */
+    /** {@code /null chat [public|private|null|commander|off|status]}. */
     private boolean chat(CommandSender sender, String[] args) {
         if (!require(sender, "nullarmy.chat")) {
             return true;
@@ -1478,8 +1516,7 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
         }
         if (args.length < 2 || args[1].equalsIgnoreCase("status")) {
             sender.sendMessage(PREFIX + plugin.chat().describe(player.getUniqueId()));
-            sender.sendMessage(PREFIX + "Usage: /null chat <null|commander|off>"
-                    + " - then just type normally in chat.");
+            sender.sendMessage(PREFIX + "Usage: /null chat <public|private|null|commander|off>.");
             if (!plugin.chat().brain().available()) {
                 sender.sendMessage(PREFIX + "AI: off (" + plugin.chat().brain().unavailableReason() + ").");
             } else {
@@ -1487,16 +1524,22 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
             }
             return true;
         }
+        if (args[1].equalsIgnoreCase("public")) {
+            plugin.chat().setPublicMode(player);
+            return true;
+        }
+        if (args[1].equalsIgnoreCase("off")) {
+            plugin.chat().setOffMode(player);
+            return true;
+        }
         ChatDirector.Speaker speaker = ChatDirector.Speaker.parse(args[1]);
         if (speaker == null) {
-            sender.sendMessage(PREFIX + "'" + args[1] + "' is neither a Null nor the Commander."
-                    + " Use /null chat <null|commander|off>.");
+            sender.sendMessage(PREFIX + "'" + args[1] + "' is neither a Null nor a chat mode."
+                    + " Use /null chat <public|private|null|commander|off>.");
             return true;
         }
         if (speaker == ChatDirector.Speaker.NONE) {
-            if (!plugin.chat().endSession(player, null)) {
-                sender.sendMessage(PREFIX + "No private channel was open.");
-            }
+            plugin.chat().setOffMode(player);
             return true;
         }
         plugin.chat().startSession(player, speaker);
@@ -1808,22 +1851,9 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
     }
 
     private boolean kill(CommandSender sender, String[] args) {
-        if (!require(sender, "nullarmy.attack")) {
-            return true;
-        }
-        if (args.length < 2) {
-            sender.sendMessage(PREFIX + "Usage: /null kill <player>");
-            return true;
-        }
-        Player target = Bukkit.getPlayerExact(args[1]);
-        if (target == null) {
-            sender.sendMessage(PREFIX + "No online player named '" + args[1] + "'.");
-            return true;
-        }
-        // A lethal-combat OBJECTIVE only. The target can escape, defend or win.
-        sender.sendMessage(PREFIX + "Lethal objective set on " + target.getName()
-                + ". They can still escape, fight back, or survive.");
-        return true;
+        // Same explicit pursuit mechanics and protection checks as /null attack,
+        // with lethal intent only in the operator-facing description.
+        return combatObjective(sender, args, false);
     }
 
     // ------------------------------------------------------------------ helpers

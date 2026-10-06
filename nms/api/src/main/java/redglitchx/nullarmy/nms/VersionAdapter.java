@@ -39,6 +39,7 @@ public interface VersionAdapter {
         private final String skinValue;
         private final String skinSignature;
         private final boolean airborne;
+        private final boolean portalMouth;
 
         /**
          * Full form, carrying the skin this Null must wear.
@@ -82,6 +83,20 @@ public interface VersionAdapter {
                             Vec3d position, int inventoryCapacity,
                             String skinValue, String skinSignature, boolean airborne,
                             boolean allowCrowding) {
+            this(owner, profileName, worldName, position, inventoryCapacity, skinValue, skinSignature,
+                    airborne, allowCrowding, false);
+        }
+
+        /**
+         * Full form for a Null that intentionally starts inside a validated,
+         * temporary portal doorway. Only that doorway's real NETHER_PORTAL blocks
+         * may overlap the body; ordinary blocks, ground support, and occupancy
+         * checks remain mandatory.
+         */
+        public SpawnRequest(UUID owner, String profileName, String worldName,
+                            Vec3d position, int inventoryCapacity,
+                            String skinValue, String skinSignature, boolean airborne,
+                            boolean allowCrowding, boolean portalMouth) {
             this.owner = owner;
             this.profileName = profileName;
             this.worldName = worldName;
@@ -91,12 +106,16 @@ public interface VersionAdapter {
             this.skinSignature = skinSignature == null ? "" : skinSignature;
             this.airborne = airborne;
             this.allowCrowding = allowCrowding;
+            this.portalMouth = portalMouth;
         }
 
         private final boolean allowCrowding;
 
         /** True when the occupancy refusal is skipped (self test only). */
         public boolean allowCrowding() { return allowCrowding; }
+
+        /** True only for a body starting inside a manager-owned temporary doorway. */
+        public boolean portalMouth() { return portalMouth; }
 
         /** Convenience form with no skin - existing call sites keep working. */
         public SpawnRequest(UUID owner, String profileName, String worldName,
@@ -154,8 +173,8 @@ public interface VersionAdapter {
     NullBody spawnNull(SpawnRequest request);
 
     /**
-     * Moves an existing body through a portal: the one deliberate, visible
-     * exception to the no-teleport rule.
+     * Moves an existing body through an authorized portal: a distinct,
+     * visible exception to ordinary non-teleporting movement.
      *
      * <p>Implementations must verify the destination (world present, spot
      * collision-safe), perform the move on the server thread only, and clear
@@ -171,6 +190,21 @@ public interface VersionAdapter {
         return false;
     }
 
+    /**
+     * Completes the explicit {@code /null tp} Ender Pearl cannon for a Null
+     * whose vanilla pearl projectile has already impacted.
+     *
+     * <p>This is not a general relocation API. Callers may use it only from the
+     * cannon's post-impact fallback, for a same-world, loaded, collision-safe
+     * landing spot. Implementations must repeat those checks and move on the
+     * server thread. Ordinary movement, AI, and summoning must never call it.</p>
+     *
+     * @return true when the body is now at the pearl's safe landing spot
+     */
+    default boolean enderPearlTeleport(String worldName, NullBody body, Vec3d destination) {
+        return false;
+    }
+
     /** A block-collision/cost view rooted at a world, for pathfinding. */
     BlockView blockView(String worldName);
 
@@ -182,6 +216,13 @@ public interface VersionAdapter {
      *     without intersecting a solid block
      */
     boolean isSpawnSafe(String worldName, Vec3d position);
+
+    /**
+     * Safety check for a body inside a validated temporary arrival portal.
+     * Only NETHER_PORTAL blocks may occupy its body box; all other blocks,
+     * ground support, world bounds, and entity-collision checks still apply.
+     */
+    boolean isPortalSpawnSafe(String worldName, Vec3d position);
 
     /**
      * Safety check for a sky-delivered body: the body's space must be free of

@@ -33,6 +33,7 @@ import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.Vector;
 
 import redglitchx.nullarmy.core.combat.Ballistics;
+import redglitchx.nullarmy.core.construct.BuildStep;
 import redglitchx.nullarmy.core.config.YamlProblem;
 import redglitchx.nullarmy.core.flock.Separation;
 import redglitchx.nullarmy.core.math.Vec3d;
@@ -210,9 +211,6 @@ final class SelfTestV3 {
             Guard.attempt(plugin.getLogger(), "self test entity", entity::remove);
         }
         extraEntities.clear();
-        if (plugin.brain() != null) {
-            plugin.brain().extraWatchers().clear();
-        }
         if (plugin.builder() != null) {
             plugin.builder().stopAll("self test finished");
         }
@@ -293,8 +291,8 @@ final class SelfTestV3 {
         steps.add(this::b05Gone);
         steps.add(this::b06Walk);
         steps.add(this::b06WalkCheck);
-        steps.add(this::b06Watch);
-        steps.add(this::b06WatchCheck);
+        steps.add(this::b06Attention);
+        steps.add(this::b06AttentionCheck);
         steps.add(this::b07Spawn);
         for (int i = 0; i < 8; i++) {
             steps.add(() -> t.gap(20));
@@ -560,6 +558,7 @@ final class SelfTestV3 {
             mark = plugin.currentTick();
             counter = itemsNear(one.bodyPosition());
             numberA = plugin.chatGate().forbiddenBroadcasts();
+            numberB = plugin.chatGate().vanillaDeathMessageCount();
             Player victim = handle(one);
             Player attacker = probe == null ? null : handle(probe);
             double before = one.health();
@@ -592,10 +591,7 @@ final class SelfTestV3 {
                 .contains(one);
         check("S-46", "B-05", gone, "the body is removed after the animation");
         int itemsNow = itemsNear(one.bodyPosition());
-        // P-10 reverses this one: a defeated Null now leaves its kit on the
-        // ground, so this check measures the new promise instead of the old one.
-        // The old answer is not lost - the migration folds nulls.no-death-drops
-        // into drops.enabled, and S-110 proves a server that said no keeps it.
+        // P-10: a defeated Null now leaves its kit on the ground, like /kill.
         redglitchx.nullarmy.plugin.config.V3Settings v3 =
                 plugin.pluginConfig() == null ? null : plugin.pluginConfig().v3();
         boolean nullsDrop = v3 == null || v3.dropsEnabled();
@@ -603,12 +599,16 @@ final class SelfTestV3 {
                 ? "a dead Null leaves its kit on the ground (" : "a dead Null drops nothing (")
                 + itemsNow + " items near, was " + counter + ", drops.enabled=" + nullsDrop + ")");
         List<NullLifecycleListener.Death> deaths = plugin.lifecycle().deathsSince(mark);
-        boolean cleared = !deaths.isEmpty();
+        boolean visibleDeathMessage = !deaths.isEmpty();
         for (NullLifecycleListener.Death d : deaths) {
-            cleared &= d.messageCleared;
+            visibleDeathMessage &= !d.messageCleared;
         }
-        check("S-48", "B-05", cleared && plugin.chatGate().forbiddenBroadcasts() == (int) numberA,
-                "the death caused zero chat broadcasts (" + deaths.size() + " death(s), message cleared)");
+        boolean deathBroadcast = plugin.chatGate().vanillaDeathMessageCount() > (int) numberB;
+        boolean noUnexpectedBroadcast = plugin.chatGate().forbiddenBroadcasts() == (int) numberA;
+        check("S-48", "B-05", visibleDeathMessage && deathBroadcast && noUnexpectedBroadcast,
+                "the vanilla kill/death message is retained for each Null death (" + deaths.size()
+                        + " death(s), " + (plugin.chatGate().vanillaDeathMessageCount() - (int) numberB)
+                        + " visible message(s), no unrelated broadcasts)");
         if (probe != null) {
             Guard.attempt(plugin.getLogger(), "probe", probe::destroy);
             probe = null;
@@ -659,36 +659,50 @@ final class SelfTestV3 {
         }
     }
 
-    private void b06Watch() {
+    private void b06Attention() {
         if (one == null) {
             return;
         }
-        Vec3d p = one.bodyPosition();
-        double yaw = Math.toRadians(one.bodyYaw() + 100.0D);
-        vecA = new Vec3d(p.x() - Math.sin(yaw) * 5.0D, p.y() + 1.6D, p.z() + Math.cos(yaw) * 5.0D);
-        blocked("S-50", "B-06", "no real player connects to the headless smoke server; a watcher point 5 blocks"
-                + " away goes through the same player-glance code");
-        plugin.brain().extraWatchers().add(vecA);
-        numberB = 360.0D;
-        final NullBody body = one;
-        final Vec3d watcher = vecA;
-        sampler = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
-            Vec3d q = body.bodyPosition();
-            double want = Math.toDegrees(Math.atan2(-(watcher.x() - q.x()), watcher.z() - q.z()));
-            numberB = Math.min(numberB, Math.abs(wrap(body.headYaw() - want)));
-        }, 1L, 1L);
+        try {
+            plugin.brain().order(List.of(one), Mind.Verb.STOP, null, null, null, 1);
+            Vec3d p = one.bodyPosition();
+            double initialYaw = one.bodyYaw();
+            double desiredYaw = wrap(initialYaw + 100.0D);
+            double radians = Math.toRadians(desiredYaw);
+            vecA = new Vec3d(p.x() - Math.sin(radians) * 6.0D, p.y() + 1.6D,
+                    p.z() + Math.cos(radians) * 6.0D);
+            numberA = desiredYaw;
+            numberB = 360.0D;
+            numberC = 360.0D;
+            final NullBody body = one;
+            final Vec3d target = vecA;
+            plugin.brain().forceLook(body, target, 80);
+            sampler = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+                Vec3d q = body.bodyPosition();
+                double want = Math.toDegrees(Math.atan2(-(target.x() - q.x()), target.z() - q.z()));
+                double bodyError = Math.abs(wrap(body.bodyYaw() - want));
+                double headError = Math.abs(wrap(body.headYaw() - want));
+                double jointError = Math.max(bodyError, headError);
+                if (jointError < numberB) {
+                    numberB = jointError;
+                    numberC = Math.abs(wrap(body.headYaw() - body.bodyYaw()));
+                }
+            }, 1L, 1L);
+        } catch (Throwable e) {
+            check("S-50", "B-06", false, "intentional attention setup threw " + Guard.describe(e));
+        }
         t.gap(50);
     }
 
-    private void b06WatchCheck() {
-        if (one == null || vecA == null) {
+    private void b06AttentionCheck() {
+        if (one == null) {
             return;
         }
         stopSampler();
-        double off = numberB;
-        check("S-50", "B-06", off < 25.0D, "the head turns to a nearby watcher (closest "
-                + String.format(Locale.ROOT, "%.0f", off) + " degrees during a 2-4 s glance)");
-        plugin.brain().extraWatchers().clear();
+        boolean together = numberB < 15.0D && numberC < 10.0D;
+        check("S-50", "B-06", together, "an intentional attention target turns body and head together "
+                + "(best joint aim error " + String.format(Locale.ROOT, "%.0f", numberB)
+                + " degrees; best body/head gap " + String.format(Locale.ROOT, "%.0f", numberC) + " degrees)");
         dismissAll();
     }
 
@@ -1045,9 +1059,9 @@ final class SelfTestV3 {
             int[] fp = portal.frame().footprint();
             inside &= testZone.contains(c.x(), c.z()) && testZone.containsBox(fp[0], fp[1], fp[2] + 1, fp[3] + 1);
         }
-        check("S-66", "B-13", portals.size() == 20 && valid >= 19, "20 doorways stand complete: 14 obsidian, a 2x3"
-                + " air opening (" + valid + "/" + portals.size() + " valid" + (firstProblem.isEmpty() ? ""
-                : "; " + firstProblem) + ")");
+        check("S-66", "B-13", portals.size() == 20 && valid >= 19, "20 doorways stand complete: 14 obsidian and"
+                + " six real NETHER_PORTAL blocks (" + valid + "/" + portals.size() + " valid"
+                + (firstProblem.isEmpty() ? "" : "; " + firstProblem) + ")");
         check("S-67", "B-13", ground > 0 && floating > 0, "the doorways are mixed: " + ground + " on the ground, "
                 + floating + " floating");
         check("S-68", "B-14", inside && !portals.isEmpty(), "every doorway and its apron lies inside the zone ("
@@ -1067,8 +1081,8 @@ final class SelfTestV3 {
             check("S-69", "B-13", false, "no ground doorway to throw something through");
             return;
         }
-        blocked("S-69", "B-13", "no real player connects to the headless smoke server; a pig is thrown through"
-                + " the opening instead (same entity portal code)");
+        blocked("S-69", "B-13", "the headless smoke uses a pig to exercise EntityPortalEvent; a real player's"
+                + " separate PlayerPortalEvent still needs a live client to verify end-to-end");
         double[] out = groundPortal.frame().stepOutPoint();
         Vec3d c = groundPortal.center();
         Location from = new Location(world, out[0], out[1] + 0.2D, out[2]);
@@ -1078,7 +1092,9 @@ final class SelfTestV3 {
         pig.setVelocity(push);
         flag = groundPortal.frame().widthOnX();
         vecA = new Vec3d(from.getX(), from.getY(), from.getZ());
-        t.gap(40);
+        // Wait beyond the normal portal dwell threshold: a cancellation test at
+        // forty ticks would pass even if travel had merely not started yet.
+        t.gap(100);
     }
 
     private void b13ThrowCheck() {
@@ -1098,8 +1114,10 @@ final class SelfTestV3 {
                 }
             }
         }
-        check("S-69", "B-13", stayed && portalBlocks == 0, "something thrown into a doorway is not teleported"
-                + " (one-way: " + portalBlocks + " portal blocks in the openings)");
+        int expectedPortalBlocks = portals.size() * PortalBuilder.INTERIOR_WIDTH * PortalBuilder.INTERIOR_HEIGHT;
+        check("S-69", "B-13", stayed && portalBlocks == expectedPortalBlocks,
+                "the doorway contains real NETHER_PORTAL blocks but travel events are cancelled"
+                        + " (" + portalBlocks + "/" + expectedPortalBlocks + " portal blocks; entity stayed=" + stayed + ")");
         if (pig != null) {
             pig.remove();
         }
@@ -1109,7 +1127,7 @@ final class SelfTestV3 {
     private void b13Restore() {
         List<int[]> cells = new ArrayList<>();
         for (PortalBuilder.BuiltPortal portal : portals) {
-            cells.addAll(portal.frame().frameCells());
+            cells.addAll(portal.frame().faceCells());
         }
         int closed = 0;
         for (PortalBuilder.BuiltPortal portal : portals) {
@@ -1321,25 +1339,18 @@ final class SelfTestV3 {
 
     private void b16Start() {
         try {
-            if (stub == null) {
-                stub = StubHttp.start();
-            }
-            String plan = "{\\\"steps\\\":[{\\\"action\\\":\\\"PLACE\\\",\\\"x\\\":2,\\\"y\\\":0,\\\"z\\\":3,\\\"block\\\":\\\"COBBLESTONE\\\"},"
-                    + "{\\\"action\\\":\\\"PLACE\\\",\\\"x\\\":3,\\\"y\\\":0,\\\"z\\\":3,\\\"block\\\":\\\"COBBLESTONE\\\"},"
-                    + "{\\\"action\\\":\\\"PLACE\\\",\\\"x\\\":4,\\\"y\\\":0,\\\"z\\\":3,\\\"block\\\":\\\"COBBLESTONE\\\"}]}";
-            stub.respond("/v1/chat/completions", 200, "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\""
-                    + plan + "\"}}]}");
             Vec3d stand = at(24, 24);
             prepare(stand, 16);
             UUID o = owner("b16");
-            SquadManager.Squad s = plugin.squads().spawnSquadAt(o, worldName, List.of(ground(stand.x() + 1, stand.z())));
+            SquadManager.Squad s = plugin.squads().spawnSquadAt(o, worldName,
+                    List.of(ground(stand.x() + 1, stand.z())));
             one = s.members().get(0);
             counter = Bodies.count(handle(one).getInventory(), Material.COBBLESTONE);
             plugin.zones().open(o, worldName, stand);
             vecA = stand;
             notes.clear();
-            String answer = plugin.builder().start(o, worldName, stand, 0.0F, "a short cobblestone wall",
-                    notes::add, stub.url("/v1"), "stub-model", "");
+            String answer = plugin.builder().start(o, worldName, stand, 0.0F,
+                    "a short 2-block cobblestone wall", notes::add);
             notes.add(answer);
         } catch (Throwable e) {
             one = null;
@@ -1352,21 +1363,33 @@ final class SelfTestV3 {
             return;
         }
         BuilderService.Job built = plugin.builder().lastJob();
-        boolean fromAi = built != null && built.source().startsWith("ai") && built.steps().size() == 3;
-        check("S-77", "B-16", fromAi, "the stub endpoint's 3-step JSON plan is accepted (" + (built == null ? "no job"
-                : built.source()) + "; " + String.join(" | ", notes) + ")");
-        int ox = (int) Math.floor(vecA.x());
-        int oy = (int) Math.floor(vecA.y());
-        int oz = (int) Math.floor(vecA.z());
-        int present = 0;
-        for (int x = 2; x <= 4; x++) {
-            Block block = world.getBlockAt(ox + x, oy, oz + 3);
-            if (block.getType() == Material.COBBLESTONE) {
-                present++;
-                placedBlocks.add(block);
+        int plannedPlacements = 0;
+        if (built != null) {
+            for (BuildStep step : built.steps()) {
+                if (step.action() == BuildStep.Action.PLACE) {
+                    plannedPlacements++;
+                }
             }
         }
-        check("S-78", "B-16", present == 3, "the Null placed the 3 blocks by hand (" + present + "/3, "
+        boolean localPlan = built != null && built.source().contains("deterministic local planner")
+                && plannedPlacements == 6 && String.join(" | ", notes).contains("no AI request was made");
+        check("S-77", "B-16", localPlan, "the deterministic local planner makes a 6-block wall without an AI call ("
+                + (built == null ? "no job" : built.source() + ", " + plannedPlacements + " placements")
+                + "; " + String.join(" | ", notes) + ")");
+        int present = 0;
+        if (built != null) {
+            for (int x = -1; x <= 0; x++) {
+                for (int y = 0; y <= 2; y++) {
+                    Block block = world.getBlockAt(built.zone().originX() + x, built.zone().originY() + y,
+                            built.zone().originZ() + 2);
+                    if (block.getType() == Material.COBBLESTONE) {
+                        present++;
+                        placedBlocks.add(block);
+                    }
+                }
+            }
+        }
+        check("S-78", "B-16", present == 6, "the Null placed the 6 local-plan blocks by hand (" + present + "/6, "
                 + (built == null ? "?" : built.placed()) + " placements" + (built == null || built.skips().isEmpty()
                 ? "" : ", skipped: " + built.skips()) + ")");
         int rate = plugin.pluginConfig().v3().builderPlaceRateTicks();
@@ -1378,8 +1401,8 @@ final class SelfTestV3 {
         check("S-79", "B-16", paced, "placements are paced at least place-rate-ticks (" + rate + ") apart "
                 + ticks);
         int now = Bodies.count(handle(one).getInventory(), Material.COBBLESTONE);
-        check("S-80", "B-16", counter - now == 3, "the blocks came out of the Null's inventory (" + counter + " -> "
-                + now + ")");
+        check("S-80", "B-16", counter - now == 6, "the blocks came out of the Null's inventory (" + counter + " -> "
+                + now + ", expected six local placements)");
         plugin.builder().stopAll("self test");
         for (Block block : placedBlocks) {
             block.setType(Material.AIR, false);
@@ -1410,8 +1433,8 @@ final class SelfTestV3 {
             Player attacker = handle(one);
             attacker.getInventory().setItemInMainHand(new ItemStack(Material.NETHERITE_SWORD));
             attacker.getInventory().setHeldItemSlot(attacker.getInventory().getHeldItemSlot());
-            plugin.brain().forceLook(one, eye(two), 400, false);
-            plugin.brain().forceLook(two, eye(one), 400, false);
+            plugin.brain().forceLook(one, eye(two), 400);
+            plugin.brain().forceLook(two, eye(one), 400);
         } catch (Throwable e) {
             one = null;
             check("S-81", "B-17", false, "the combat setup threw " + Guard.describe(e));
@@ -1555,7 +1578,7 @@ final class SelfTestV3 {
             victim.getInventory().setItemInOffHand(new ItemStack(Material.SHIELD));
         }
         victim.setHealth(Math.min(victim.getHealth() + 10.0D, 20.0D));
-        plugin.brain().forceLook(two, eye(one), 200, false);
+        plugin.brain().forceLook(two, eye(one), 200);
         victim.startUsingItem(EquipmentSlot.OFF_HAND);
         counter = 0;
         t.gap(12);
@@ -1568,7 +1591,7 @@ final class SelfTestV3 {
             return;
         }
         Player victim = handle(two);
-        plugin.brain().forceLook(two, eye(one), 200, false);
+        plugin.brain().forceLook(two, eye(one), 200);
         Vec3d v = two.bodyPosition();
         Vec3d a = one.bodyPosition();
         double want = Math.toDegrees(Math.atan2(-(a.x() - v.x()), a.z() - v.z()));
@@ -1699,7 +1722,7 @@ final class SelfTestV3 {
                     targetStep.getX(), 0.0D, targetStep.getZ(), Ballistics.FULL_DRAW_SPEED);
             Vec3d q = body.bodyPosition();
             double[] look = aim.lookPoint(q.x(), q.y() + 1.62D, q.z(), 10.0D);
-            plugin.brain().forceLook(body, new Vec3d(look[0], look[1], look[2]), 5, false);
+            plugin.brain().forceLook(body, new Vec3d(look[0], look[1], look[2]), 5);
             boolean aligned = Math.abs(wrap(body.bodyYaw() - aim.yaw())) < 2.0D
                     && Math.abs(body.pitch() - aim.pitch()) < 2.0D;
             long drawn = plugin.currentTick() - mark;

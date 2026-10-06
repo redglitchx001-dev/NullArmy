@@ -9,10 +9,12 @@ import java.util.List;
  * The server-authoritative body of one Null.
  *
  * <p>This is what the plugin and core are allowed to do to a Null. Note what is
- * <b>absent</b>: there is no {@code teleport} and no {@code setPosition}.
- * Spec 1.2 and 5 forbid teleportation outright, including as a recovery
- * mechanism, so the interface simply does not offer it. {@link #applySteering}
- * is the only way to move a Null.</p>
+ * <b>absent</b>: there is no general {@code teleport} or {@code setPosition}
+ * operation. Ordinary movement, path recovery, formation, and summoning use
+ * vanilla movement only. The distinct owner-triggered {@code /null tp}
+ * Ender-Pearl cannon is handled through the vanilla projectile pipeline; it is
+ * not exposed as a relocation primitive here and is never used by AI or summon
+ * code. {@link #applySteering} remains the normal way to move a Null.</p>
  *
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
  */
@@ -120,9 +122,10 @@ public interface NullBody {
     }
 
     /**
-     * Where the body should look. With {@code headOnly} the head turns but the
-     * travel frame does not, which is how a walking Null glances at a player.
-     * A null target clears the look so the head follows the movement again.
+     * Where the body should look. A null target clears the look so movement
+     * resumes controlling orientation. {@code headOnly} is retained for API
+     * compatibility but adapters must keep head and body orientation coupled;
+     * independent head turns are not used by NullArmy.
      */
     default void setLookTarget(Vec3d target, boolean headOnly) {
         if (target != null) {

@@ -22,6 +22,7 @@ import org.bukkit.inventory.meta.ItemMeta;
 import redglitchx.nullarmy.nms.NullBody;
 import redglitchx.nullarmy.plugin.NullArmyPlugin;
 import redglitchx.nullarmy.plugin.body.Bodies;
+import redglitchx.nullarmy.plugin.kit.KitItems;
 import redglitchx.nullarmy.plugin.util.Guard;
 import redglitchx.nullarmy.plugin.util.PluginText;
 
@@ -228,8 +229,9 @@ public final class LoadoutService implements Listener {
                 if (handle == null || !body.isAlive()) {
                     return false;
                 }
-                Bodies.apply(handle.getInventory(), slots);
-                nullLoadouts.put(body.profileName().toLowerCase(Locale.ROOT), copy(slots));
+                ItemStack[] soldierLoadout = withoutArmorTrims(slots);
+                Bodies.apply(handle.getInventory(), soldierLoadout);
+                nullLoadouts.put(body.profileName().toLowerCase(Locale.ROOT), copy(soldierLoadout));
                 save();
                 return true;
             }
@@ -259,15 +261,16 @@ public final class LoadoutService implements Listener {
                 if (plugin.commander() == null) {
                     return false;
                 }
+                ItemStack[] commanderLoadout = withCommanderTrim(slots);
                 ItemStack[] saved = plugin.commander().loadout();
-                for (int i = 0; i < saved.length && i < slots.length; i++) {
-                    saved[i] = slots[i] == null ? null : slots[i].clone();
+                for (int i = 0; i < saved.length && i < commanderLoadout.length; i++) {
+                    saved[i] = commanderLoadout[i] == null ? null : commanderLoadout[i].clone();
                 }
                 Guard.attempt(plugin.getLogger(), "saving the Commander loadout", () -> plugin.commander().save());
                 NullBody body = plugin.commander().body();
                 Player handle = Bodies.player(body);
                 if (handle != null) {
-                    Bodies.apply(handle.getInventory(), slots);
+                    Bodies.apply(handle.getInventory(), commanderLoadout);
                 }
                 return true;
             }
@@ -484,6 +487,24 @@ public final class LoadoutService implements Listener {
                 }
             }
         }
+    }
+
+    private static ItemStack[] withoutArmorTrims(ItemStack[] slots) {
+        ItemStack[] clean = copy(slots);
+        for (int slot = 0; slot < clean.length; slot++) {
+            if (clean[slot] != null) {
+                KitItems.withoutArmorTrim(clean[slot]);
+            }
+        }
+        return clean;
+    }
+
+    private static ItemStack[] withCommanderTrim(ItemStack[] slots) {
+        ItemStack[] clean = withoutArmorTrims(slots);
+        if (clean[38] != null) {
+            KitItems.withCommanderChestplateTrim(clean[38]);
+        }
+        return clean;
     }
 
     private static ItemStack[] copy(ItemStack[] slots) {

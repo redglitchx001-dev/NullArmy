@@ -1,10 +1,12 @@
 package redglitchx.nullarmy.plugin.portal;
 
+import org.bukkit.Axis;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.BlockData;
+import org.bukkit.block.data.Orientable;
 
 import redglitchx.nullarmy.core.math.Vec3d;
 import redglitchx.nullarmy.core.portal.PortalFrame;
@@ -28,10 +30,10 @@ import java.util.logging.Logger;
  *
  * <h2>What a doorway is</h2>
  * <p>An upright, complete obsidian frame - 4 wide, 5 tall, 14 blocks - around a
- * 2 x 3 opening that is left as <b>air</b> ({@link PortalFrame}). There are no
- * portal blocks, so nothing that walks or is thrown into the opening is ever
- * teleported: the doorway is one-way by construction. Portal particles and
- * sounds make it read as a portal.</p>
+ * 2 x 3 opening filled with real {@link Material#NETHER_PORTAL} blocks
+ * ({@link PortalFrame}). The portal is visible and physical; portal-travel events
+ * for blocks owned by this manager are cancelled, so nobody is sent to the
+ * Nether. Portal particles and sounds add the visual flourish.</p>
  *
  * <h2>Where</h2>
  * <p>Inside the summon zone only, at random spots around the summoner. A
@@ -302,7 +304,12 @@ public final class PortalBuilder {
                     }
                     BuiltPortal portal = new BuiltPortal(world.getName(), frame, exits, now,
                             now + Math.max(60L, request.lifetimeTicks));
-                    place(world, frame, portal);
+                    try {
+                        place(world, frame, portal);
+                    } catch (RuntimeException failure) {
+                        return Result.refused("could not safely place a doorway (" + Guard.describe(failure) + ")",
+                                tried);
+                    }
                     return Result.built(portal);
                 }
             }
@@ -396,7 +403,7 @@ public final class PortalBuilder {
         };
     }
 
-    /** Problems with a doorway as it stands now; empty when it is complete and one-way. */
+    /** Problems with a doorway as it stands now; empty when its obsidian and portal blocks are complete. */
     public List<String> validate(World world, BuiltPortal portal, int airMin, int airMax) {
         if (world == null || portal == null) {
             return Collections.singletonList("no doorway");
@@ -441,11 +448,29 @@ public final class PortalBuilder {
 
     private void place(World world, PortalFrame frame, BuiltPortal portal) {
         BlockData obsidian = Material.OBSIDIAN.createBlockData();
-        for (int[] cell : frame.frameCells()) {
-            Block block = world.getBlockAt(cell[0], cell[1], cell[2]);
-            portal.record(new BlockKey(cell[0], cell[1], cell[2]), block.getBlockData());
-            // physics=false: no neighbour updates, no fire, no falling sand.
-            block.setBlockData(obsidian, false);
+        BlockData portalData = Material.NETHER_PORTAL.createBlockData();
+        if (!(portalData instanceof Orientable)) {
+            throw new IllegalStateException("NETHER_PORTAL block data does not expose an orientation axis");
+        }
+        ((Orientable) portalData).setAxis(frame.widthOnX() ? Axis.X : Axis.Z);
+        try {
+            for (int[] cell : frame.frameCells()) {
+                Block block = world.getBlockAt(cell[0], cell[1], cell[2]);
+                portal.record(new BlockKey(cell[0], cell[1], cell[2]), block.getBlockData());
+                // physics=false: no neighbour updates, no fire, no falling sand.
+                block.setBlockData(obsidian, false);
+            }
+            for (int[] cell : frame.interiorCells()) {
+                Block block = world.getBlockAt(cell[0], cell[1], cell[2]);
+                portal.record(new BlockKey(cell[0], cell[1], cell[2]), block.getBlockData());
+                // These are real portal blocks, not particles pretending to be one.
+                // PortalManager cancels travel events originating in this doorway.
+                block.setBlockData(portalData, false);
+            }
+        } catch (RuntimeException failure) {
+            // A partial doorway must never be left behind when a block write fails.
+            portal.restore(world, logger);
+            throw failure;
         }
         effects(world, portal, true);
     }

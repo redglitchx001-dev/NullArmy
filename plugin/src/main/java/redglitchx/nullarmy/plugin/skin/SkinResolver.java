@@ -140,8 +140,9 @@ public final class SkinResolver {
      * fresh data. Used by {@code /null clearskins} after the owner changes the
      * skin account.
      *
-     * <p>Nothing here is fatal: a file that cannot be deleted is left alone and
-     * counted as not cleared. Bundled skins inside the jar are never deleted.</p>
+     * <p>Only generated {@code *.skin} cache files are deleted. Administrator
+     * assets such as {@code skins/null.png} and bundled jar resources are kept;
+     * a file that cannot be deleted is simply left in place.</p>
      *
      * @return how many cached entries (memory + disk files) were cleared
      */
@@ -152,6 +153,10 @@ public final class SkinResolver {
             if (Files.isDirectory(cacheDir)) {
                 try (java.util.stream.Stream<Path> files = Files.list(cacheDir)) {
                     for (Path file : files.toList()) {
+                        if (!Files.isRegularFile(file)
+                                || !file.getFileName().toString().endsWith(".skin")) {
+                            continue;
+                        }
                         try {
                             if (Files.deleteIfExists(file)) {
                                 cleared++;

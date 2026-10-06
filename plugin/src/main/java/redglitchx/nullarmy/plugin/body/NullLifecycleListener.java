@@ -35,14 +35,13 @@ import java.util.UUID;
 
 /**
  * What happens to a Null's body in vanilla's event pipeline: it can be hurt, it
- * dies like a player, and none of that reaches public chat.
+ * dies like a player, including its vanilla death message and drops.
  *
  * <ul>
- *   <li><b>Death</b> - {@code ServerPlayer.die} fires {@link PlayerDeathEvent}
- *       and then broadcasts the death message unless it is empty. For a Null the
- *       message is cleared, death messages are switched off and (by default) the
- *       drops and experience are removed. The death becomes a console/status
- *       event. A MONITOR check counts anything that would still leak.</li>
+ *   <li><b>Death</b> - {@code ServerPlayer.die} fires {@link PlayerDeathEvent};
+ *       NullArmy preserves the vanilla kill/death message and, by default,
+ *       leaves the full inventory on the ground. A MONITOR check records the
+ *       visible message and resulting drop list.</li>
  *   <li><b>Advancements</b> - a Null never announces "has made the advancement".</li>
  *   <li><b>Fall damage</b> - real by default; {@code combat.fall-damage: false}
  *       cancels it for Nulls only.</li>
@@ -82,6 +81,17 @@ public final class NullLifecycleListener implements Listener {
             this.blocked = blocked;
             this.cancelled = cancelled;
             this.tick = tick;
+        }
+    }
+
+    /** An item prototype and the total count accounted for during drop repair. */
+    private static final class DropCount {
+        private final ItemStack item;
+        private int amount;
+
+        private DropCount(ItemStack item, int amount) {
+            this.item = item;
+            this.amount = amount;
         }
     }
 
@@ -128,7 +138,7 @@ public final class NullLifecycleListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onDeath(PlayerDeathEvent event) {
-        Guard.attempt(plugin.getLogger(), "silencing a Null death", () -> {
+        Guard.attempt(plugin.getLogger(), "handling a Null death", () -> {
             Player body = event.getPlayer();
             if (!isNull(body)) {
                 return;
@@ -137,26 +147,20 @@ public final class NullLifecycleListener implements Listener {
             String cause = original == null ? "unknown"
                     : net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()
                     .serialize(original);
-            event.deathMessage(null);
-            event.setShowDeathMessages(false);
+            // Keep both vanilla's message and its show-death-messages rule: a
+            // Null should be indistinguishable from a player killed with /kill.
             V3Settings s = settings();
-            // v4 (P-10): a defeated Null leaves its kit on the ground, like a
-            // player. drops.enabled is the only switch - a server that already
-            // answered the pre-v4 nulls.no-death-drops keeps that answer because
-            // the migration folded it into drops.enabled, not because the old
-            // key is consulted here. Two switches for one question is how an
-            // update silently reverses an owner's answer.
-            boolean drop = s == null || s.dropsEnabled();
+            boolean drop = s == null || DeathDrops.enabled(s.dropsEnabled());
             if (!drop) {
                 event.getDrops().clear();
                 event.setDroppedExp(0);
                 event.setShouldDropExperience(false);
                 event.setKeepInventory(false);
             } else {
+                event.setKeepInventory(false);
                 equipDrops(body, event.getDrops(), s == null ? 1.0D : s.dropsChance());
             }
             if (plugin.chatGate() != null) {
-                plugin.chatGate().vanillaSilenced();
                 plugin.chatGate().event("null.died", "name", body.getName(), "cause", cause);
             }
         });
@@ -173,7 +177,7 @@ public final class NullLifecycleListener implements Listener {
             boolean cleared = message == null || message.equals(Component.empty())
                     || !event.getShowDeathMessages();
             if (!cleared && plugin.chatGate() != null) {
-                plugin.chatGate().vanillaLeaked("death message of " + body.getName());
+                plugin.chatGate().vanillaDeathAllowed();
             }
             synchronized (deaths) {
                 deaths.addLast(new Death(body.getUniqueId(), body.getName(), plugin.currentTick(), cleared,
@@ -209,34 +213,63 @@ public final class NullLifecycleListener implements Listener {
      */
     private void equipDrops(Player body, List<ItemStack> drops, double chance) {
         try {
-            java.util.Set<String> present = new java.util.HashSet<>();
-            for (ItemStack already : drops) {
-                if (already != null && already.getType() != Material.AIR) {
-                    present.add(already.getType().name());
-                }
-            }
             PlayerInventory inv = body.getInventory();
             java.util.Random random = new java.util.Random(body.getUniqueId().getLeastSignificantBits()
                     ^ plugin.currentTick());
+            List<DropCount> wanted = new ArrayList<>();
             for (int slot = 0; slot < 41; slot++) {
                 ItemStack stack = inv.getItem(slot);
-                if (stack == null || stack.getType() == Material.AIR || stack.getAmount() <= 0) {
+                if (stack == null || stack.getType().isAir() || stack.getAmount() <= 0
+                        || !DeathDrops.shouldDrop(true, chance, random.nextDouble())) {
                     continue;
                 }
-                if (!DeathDrops.shouldDrop(true, chance, random.nextDouble())) {
-                    continue;
+                accumulate(wanted, stack);
+            }
+
+            // Paper normally supplied all inventory drops already. Account by
+            // full item metadata and amount, not just material: a player may
+            // have several stacks of the same item or distinct enchanted items.
+            List<DropCount> present = new ArrayList<>();
+            for (ItemStack already : drops) {
+                if (already != null && !already.getType().isAir() && already.getAmount() > 0) {
+                    accumulate(present, already);
                 }
-                if (present.contains(stack.getType().name())) {
-                    continue;
+            }
+            for (DropCount expected : wanted) {
+                DropCount existing = matching(present, expected.item);
+                int missing = expected.amount - (existing == null ? 0 : existing.amount);
+                while (missing > 0) {
+                    int amount = Math.min(expected.item.getType().getMaxStackSize(), missing);
+                    ItemStack addition = expected.item.clone();
+                    addition.setAmount(amount);
+                    drops.add(addition);
+                    accumulate(present, addition);
+                    missing -= amount;
                 }
-                present.add(stack.getType().name());
-                drops.add(stack.clone());
             }
             dropsCleared++;
             lastDropCount = drops.size();
         } catch (Throwable t) {
             plugin.getLogger().fine("[NullArmy] could not equip the drops: " + Guard.describe(t));
         }
+    }
+
+    private static void accumulate(List<DropCount> counts, ItemStack item) {
+        DropCount existing = matching(counts, item);
+        if (existing == null) {
+            counts.add(new DropCount(item.clone(), item.getAmount()));
+        } else {
+            existing.amount += item.getAmount();
+        }
+    }
+
+    private static DropCount matching(List<DropCount> counts, ItemStack item) {
+        for (DropCount candidate : counts) {
+            if (candidate.item.isSimilar(item)) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     /**

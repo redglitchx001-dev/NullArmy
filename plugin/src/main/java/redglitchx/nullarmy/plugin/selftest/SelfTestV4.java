@@ -18,7 +18,6 @@ import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.player.PlayerInteractEvent;
-import org.bukkit.event.server.ServerListPingEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
@@ -31,9 +30,7 @@ import redglitchx.nullarmy.core.construct.FallbackPlanner;
 import redglitchx.nullarmy.core.drops.DeathDrops;
 import redglitchx.nullarmy.core.march.MarchCadence;
 import redglitchx.nullarmy.core.math.Vec3d;
-import redglitchx.nullarmy.core.naming.NullNames;
 import redglitchx.nullarmy.core.orders.OrderParser;
-import redglitchx.nullarmy.core.ping.PingNumbers;
 import redglitchx.nullarmy.nms.NullBody;
 import redglitchx.nullarmy.plugin.NullArmyPlugin;
 import redglitchx.nullarmy.plugin.SquadManager;
@@ -89,6 +86,7 @@ final class SelfTestV4 {
     private double numberB;
     private long mark;
     private boolean flag;
+    private Vec3d passiveStart;
     private final List<Double> samples = new ArrayList<>();
     private final List<String> notes = new ArrayList<>();
 
@@ -259,7 +257,7 @@ final class SelfTestV4 {
         }
         steps.add(this::p02Check);        // S-87, S-88
 
-        // ---- P-03 readable names and real portals
+        // ---- P-03 random alphanumeric usernames and real portals
         steps.add(this::p03Names);        // S-89
         steps.add(this::p03Portals);      // S-90
 
@@ -337,9 +335,6 @@ final class SelfTestV4 {
         steps.add(() -> t.gap(20));
         steps.add(this::p10DropsCheck);   // S-110
 
-        // ---- P-11 server list ping
-        steps.add(this::p11Ping);         // S-111, S-112
-
         // ---- P-12 live rename and conversation
         steps.add(this::p12Rename);       // S-113
 
@@ -358,6 +353,11 @@ final class SelfTestV4 {
         steps.add(() -> t.gap(20));
         steps.add(() -> t.gap(20));
         steps.add(this::l08LootCheck);    // S-115
+
+        // ---- C-01 no autonomous hostile acquisition or pursuit
+        steps.add(this::c01PassiveHostile);
+        steps.add(() -> t.gap(40));
+        steps.add(this::c01PassiveCheck); // S-116
 
         steps.add(() -> {
             dismissAll();
@@ -615,7 +615,7 @@ final class SelfTestV4 {
 
     // ------------------------------------------------------------------- P-03
 
-    /** Names are readable words, unique, and never a hex blob or a UUID. */
+    /** Names are random 16-character alphanumeric usernames and unique. */
     private void p03Names() {
         dismissAll();
         boolean ok = true;
@@ -629,9 +629,9 @@ final class SelfTestV4 {
             Set<String> seen = new HashSet<>();
             for (NullBody body : squad.members()) {
                 String name = body.profileName();
-                boolean readable = NullNames.isReadable(name);
+                boolean valid = redglitchx.nullarmy.plugin.NameGenerator.isValid(name);
                 boolean unique = seen.add(name.toLowerCase(Locale.ROOT));
-                if (!readable || !unique) {
+                if (!valid || !unique) {
                     ok = false;
                     worst.append(name).append(' ');
                 }
@@ -643,8 +643,7 @@ final class SelfTestV4 {
             ok = false;
             notes.add("p03 names threw " + Guard.describe(e));
         }
-        check("S-89", "P-03", ok, "every Null has a readable, unique name of at most 16 characters - a themed"
-                + " word with a small number, never hex and never a UUID"
+        check("S-89", "P-03", ok, "every Null has a unique 16-character username with letters and digits"
                 + (worst.length() == 0 ? "" : " (bad: " + worst + ")"));
         dismissAll();
     }
@@ -653,6 +652,7 @@ final class SelfTestV4 {
     private void p03Portals() {
         boolean obsidian = false;
         boolean staggered = false;
+        int portalBlocks = 0;
         int frames = 0;
         String refusal = "";
         String note = "";
@@ -691,6 +691,11 @@ final class SelfTestV4 {
             for (redglitchx.nullarmy.plugin.portal.PortalBuilder.BuiltPortal portal : standing) {
                 if (!worldName.equals(portal.worldName())) {
                     continue;
+                }
+                for (int[] cell : portal.frame().interiorCells()) {
+                    if (world.getBlockAt(cell[0], cell[1], cell[2]).getType() == Material.NETHER_PORTAL) {
+                        portalBlocks++;
+                    }
                 }
                 Vec3d c = portal.center();
                 for (int dx = -3; dx <= 3 && !obsidian; dx++) {
@@ -736,6 +741,11 @@ final class SelfTestV4 {
                 // other, which is what makes a squad come out of a portal one
                 // Null at a time instead of all at one point.
                 for (redglitchx.nullarmy.plugin.portal.PortalBuilder.BuiltPortal portal : direct) {
+                    for (int[] cell : portal.frame().interiorCells()) {
+                        if (world.getBlockAt(cell[0], cell[1], cell[2]).getType() == Material.NETHER_PORTAL) {
+                            portalBlocks++;
+                        }
+                    }
                     Vec3d first = plugin.portals().takeExit(portal, 0);
                     Vec3d second = plugin.portals().takeExit(portal, 1);
                     if (first != null && second != null
@@ -762,11 +772,15 @@ final class SelfTestV4 {
         } catch (Throwable e) {
             notes.add("p03 portals threw " + Guard.describe(e));
         }
-        check("S-90", "P-03", obsidian && staggered, "the arrival portal is built from real obsidian blocks"
-                + " and the squad emerges from it staggered, not in one tick (" + frames + " frame(s) standing,"
-                + " obsidian=" + obsidian + ", staggered=" + staggered
-                + (refusal == null || refusal.isEmpty() ? "" : ", last refusal: " + refusal)
-                + ", arrival: " + note + ")");
+        int expectedPortalBlocks = frames * redglitchx.nullarmy.plugin.portal.PortalBuilder.INTERIOR_WIDTH
+                * redglitchx.nullarmy.plugin.portal.PortalBuilder.INTERIOR_HEIGHT;
+        boolean realPortal = portalBlocks == expectedPortalBlocks && expectedPortalBlocks > 0;
+        check("S-90", "P-03", obsidian && realPortal && staggered,
+                "the arrival doorway has an obsidian frame and real NETHER_PORTAL blocks; the squad emerges"
+                        + " staggered, not in one tick (" + frames + " frame(s), " + portalBlocks + "/"
+                        + expectedPortalBlocks + " portal blocks, obsidian=" + obsidian + ", staggered=" + staggered
+                        + (refusal == null || refusal.isEmpty() ? "" : ", last refusal: " + refusal)
+                        + ", arrival: " + note + ")");
         dismissAll();
         if (plugin.portals() != null) {
             Guard.attempt(plugin.getLogger(), "v4 portal cleanup", plugin.portals()::restoreAll);
@@ -933,7 +947,6 @@ final class SelfTestV4 {
                 }
                 ItemStack[] slots = new ItemStack[41];
                 kits.installBossKit(slots);
-                PlayerInventory probe = null;
                 for (Map.Entry<String, Integer> wanted : expected.entrySet()) {
                     Material material = Material.matchMaterial(wanted.getKey());
                     int have = 0;
@@ -953,12 +966,39 @@ final class SelfTestV4 {
                 if (expected.isEmpty()) {
                     detail.append("no boss kit expectations");
                 }
+
+                ItemStack customCommanderChestplate = new ItemStack(Material.DIAMOND_CHESTPLATE);
+                redglitchx.nullarmy.plugin.kit.KitItems.withCommanderChestplateTrim(customCommanderChestplate);
+                org.bukkit.inventory.meta.ItemMeta commanderMeta = customCommanderChestplate.getItemMeta();
+                org.bukkit.inventory.meta.trim.ArmorTrim commanderTrim = commanderMeta
+                        instanceof org.bukkit.inventory.meta.ArmorMeta
+                        ? ((org.bukkit.inventory.meta.ArmorMeta) commanderMeta).getTrim() : null;
+                boolean hasWhiteCommanderTrim = commanderTrim != null
+                        && commanderTrim.getMaterial() == org.bukkit.inventory.meta.trim.TrimMaterial.QUARTZ;
+                ItemStack strippedRegularArmor = customCommanderChestplate.clone();
+                redglitchx.nullarmy.plugin.kit.KitItems.withoutArmorTrim(strippedRegularArmor);
+                org.bukkit.inventory.meta.ItemMeta strippedMeta = strippedRegularArmor.getItemMeta();
+                boolean regularTrimRemoved = strippedMeta instanceof org.bukkit.inventory.meta.ArmorMeta
+                        && ((org.bukkit.inventory.meta.ArmorMeta) strippedMeta).getTrim() == null;
+
+                redglitchx.nullarmy.core.kit.DefaultKit.Item soldierChest =
+                        new redglitchx.nullarmy.core.kit.DefaultKit.Item(38, "NETHERITE_CHESTPLATE", 1);
+                ItemStack ordinaryChestplate =
+                        redglitchx.nullarmy.plugin.kit.KitItems.toStack(soldierChest, new ArrayList<>());
+                org.bukkit.inventory.meta.ItemMeta soldierMeta = ordinaryChestplate == null
+                        ? null : ordinaryChestplate.getItemMeta();
+                boolean ordinaryHasNoTrim = soldierMeta instanceof org.bukkit.inventory.meta.ArmorMeta
+                        && ((org.bukkit.inventory.meta.ArmorMeta) soldierMeta).getTrim() == null;
+                detail.append(" white Commander trim=").append(hasWhiteCommanderTrim)
+                        .append(" ordinary trim-free=").append(ordinaryHasNoTrim)
+                        .append(" regular custom trim removed=").append(regularTrimRemoved);
+                ok &= hasWhiteCommanderTrim && ordinaryHasNoTrim && regularTrimRemoved;
             }
         } catch (Throwable e) {
             notes.add("p06 kit threw " + Guard.describe(e));
         }
-        check("S-95", "P-06", ok, "the Commander's boss kit is complete: mace, elytra, two totems, four"
-                + " enchanted gapples, wind charges, rockets and a netherite sword (" + detail + ")");
+        check("S-95", "P-06", ok, "the Commander receives the shared kit plus an Elytra and white chestplate trim;"
+                + " the regular kit stays trim-free (" + detail + ")");
     }
 
     // ------------------------------------------------------------------- P-07
@@ -1060,7 +1100,8 @@ final class SelfTestV4 {
                 BuilderService.Endpoint named = builder.resolve("id:does-not-exist");
                 Map<String, redglitchx.nullarmy.core.agent.EndpointConfig> known =
                         plugin.pluginConfig() == null ? Map.of() : plugin.pluginConfig().endpoints();
-                boolean listed = builder.describeEndpoints().contains("builder endpoint:");
+                boolean listed = builder.describeEndpoints().contains("AI endpoint test:")
+                        && builder.describeEndpoints().contains("deterministic local");
                 detail = "plain=" + plain.url() + " unknown-id-rejected=" + !named.usable()
                         + " known=" + known.size();
                 ok = plain.usable() && plain.url().equals("http://localhost:1234/v1")
@@ -1695,7 +1736,6 @@ final class SelfTestV4 {
             }
             boolean enabled = settings() == null || settings().dropsEnabled();
             boolean chance = DeathDrops.shouldDrop(true, 1.0D, 0.5D);
-            boolean legacyWins = !DeathDrops.enabled(false, true);
             int itemsBefore = 0;
             for (Entity e : world.getNearbyEntities(handle.getLocation(), 6, 6, 6)) {
                 if (e instanceof org.bukkit.entity.Item) {
@@ -1737,89 +1777,26 @@ final class SelfTestV4 {
             int recorded = plugin.lifecycle() == null ? -1 : plugin.lifecycle().lastDropCount();
             boolean enabled = settings() == null || settings().dropsEnabled();
             boolean chance = DeathDrops.shouldDrop(true, 1.0D, 0.5D);
-            // The pre-v4 switch is not a second switch: the migration folds it
-            // into drops.enabled, so one key answers the question.
-            boolean legacyFolded = redglitchx.nullarmy.core.config.ConfigMerge.foldLegacy(java.util.Map.of("nulls.no-death-drops",
-                            Boolean.TRUE), java.util.Map.of("drops.enabled", Boolean.TRUE))
-                    .get("drops.enabled").equals(Boolean.FALSE);
+            java.util.Map<String, Object> legacy = java.util.Map.of("nulls.no-death-drops", Boolean.TRUE);
+            java.util.Map<String, Object> shipped = java.util.Map.of("drops.enabled", Boolean.TRUE);
+            Object defaultAfterLegacy = redglitchx.nullarmy.core.config.ConfigMerge.merge(legacy, shipped)
+                    .additions().get("drops.enabled");
+            java.util.Map<String, Object> explicitOff = java.util.Map.of("drops.enabled", Boolean.FALSE);
+            boolean explicitOffPreserved = !redglitchx.nullarmy.core.config.ConfigMerge
+                    .merge(explicitOff, shipped).additions().containsKey("drops.enabled");
+            boolean legacyDoesNotSuppress = Boolean.TRUE.equals(defaultAfterLegacy);
             detail = "the Null carried " + carriedBefore + " stack(s), drops enabled=" + enabled
-                    + ", chance 1.0 drops=" + chance + ", the legacy switch is folded=" + legacyFolded
-                    + ", the death listed " + recorded + " item(s), " + itemsAfter
-                    + " on the ground (was " + dropsBefore + ")";
-            ok = enabled && chance && legacyFolded && carriedBefore >= 3
+                    + ", chance 1.0 drops=" + chance + ", legacy key inert=" + legacyDoesNotSuppress
+                    + ", explicit false preserved=" + explicitOffPreserved + ", the death listed " + recorded
+                    + " item(s), " + itemsAfter + " on the ground (was " + dropsBefore + ")";
+            ok = enabled && chance && legacyDoesNotSuppress && explicitOffPreserved && carriedBefore >= 3
                     && (recorded >= 3 || itemsAfter - dropsBefore >= 3);
         } catch (Throwable e) {
             ok = false;
             detail = Guard.describe(e);
         }
-        check("S-110", "P-10", ok, "a Null that dies leaves its armour, its held item and its pack on the"
-                + " ground, and a server that already said no keeps its answer (" + detail + ")");
-        dismissAll();
-    }
-
-    // ------------------------------------------------------------------- P-11
-
-    /** The army is in the server list: real players plus Nulls, capped at motd.max-players. */
-    private void p11Ping() {
-        boolean ok = false;
-        String detail;
-        try {
-            dismissAll();
-            squad = plugin.squads().spawnSquadAt(owner("p11"), worldName, List.of(at(90, 20), at(92, 20)));
-            int nulls = 0;
-            for (NullBody body : plugin.squads().allMembers()) {
-                if (body.isAlive()) {
-                    nulls++;
-                }
-            }
-            int real = 0;
-            for (Player player : Bukkit.getOnlinePlayers()) {
-                if (plugin.adapter() == null || !plugin.adapter().isNullEntity(player.getUniqueId())) {
-                    real++;
-                }
-            }
-            int max = settings() == null ? PingNumbers.DEFAULT_MAX : settings().motdMaxPlayers();
-            String count = PingNumbers.num(real, nulls, max);
-            int shown = Integer.parseInt(count.substring(0, count.indexOf('/')));
-            ok = shown == real + nulls && count.endsWith("/" + max);
-            detail = count + " (real " + real + " + Nulls " + nulls + ", max " + max + ")";
-        } catch (Throwable e) {
-            ok = false;
-            detail = Guard.describe(e);
-        }
-        check("S-111", "P-11", ok, "the server list counts the real players plus the live Nulls against"
-                + " motd.max-players (" + detail + ")");
-
-        boolean motdOk = false;
-        String motdDetail;
-        try {
-            String format = settings() == null ? PingNumbers.DEFAULT_FORMAT : settings().motdFormat();
-            int nulls = 0;
-            for (NullBody body : plugin.squads().allMembers()) {
-                if (body.isAlive()) {
-                    nulls++;
-                }
-            }
-            String line = PingNumbers.motd(format, nulls, 0);
-            List<String> names = new ArrayList<>();
-            for (NullBody body : plugin.squads().allMembers()) {
-                if (body.isAlive()) {
-                    names.add(body.profileName());
-                }
-            }
-            String sample = PingNumbers.sampleJoined(names, List.of("Steve"), PingNumbers.SAMPLE_LIMIT);
-            boolean formatRight = PingNumbers.DEFAULT_FORMAT.equals("NULL ARMY - {nulls} strong")
-                    && line.contains(String.valueOf(nulls)) && !line.contains("{nulls}");
-            boolean sampleRight = sample.contains(names.isEmpty() ? "" : names.get(0))
-                    && sample.contains("Steve");
-            motdDetail = "\"" + line + "\" hover: " + sample;
-            motdOk = formatRight && sampleRight;
-        } catch (Throwable e) {
-            motdOk = false;
-            motdDetail = Guard.describe(e);
-        }
-        check("S-112", "P-11", motdOk, "the MOTD is motd.format with {nulls} substituted and the hover sample"
-                + " lists the army first, then the real players (" + motdDetail + ")");
+        check("S-110", "P-10", ok, "a Null drops its armour, held item and pack by default; only an explicit"
+                + " drops.enabled: false suppresses loot (" + detail + ")");
         dismissAll();
     }
 
@@ -2003,4 +1980,48 @@ final class SelfTestV4 {
                 + " discipline (" + detail + ")");
         dismissAll();
     }
+
+    // ------------------------------------------------------------------- C-01
+
+    private void c01PassiveHostile() {
+        dismissAll();
+        passiveStart = null;
+        try {
+            Vec3d start = at(132, 40);
+            prepare(start, 16);
+            squad = plugin.squads().spawnSquadAt(owner("c01"), worldName, List.of(start));
+            attacker = squad.members().get(0);
+            passiveStart = attacker.bodyPosition();
+            Entity hostile = world.spawnEntity(new Location(world, start.x() + 10.0D, start.y(), start.z()),
+                    EntityType.CREEPER);
+            hostile.setInvulnerable(true);
+            if (hostile instanceof org.bukkit.entity.Mob) {
+                ((org.bukkit.entity.Mob) hostile).setAI(false);
+            }
+            extraEntities.add(hostile);
+        } catch (Throwable e) {
+            notes.add("c01 passive setup threw " + Guard.describe(e));
+        }
+    }
+
+    private void c01PassiveCheck() {
+        boolean safe = false;
+        double moved = -1.0D;
+        try {
+            if (attacker != null && passiveStart != null) {
+                Vec3d now = attacker.bodyPosition();
+                moved = Math.hypot(now.x() - passiveStart.x(), now.z() - passiveStart.z());
+                Mind mind = plugin.brain().mind(attacker);
+                safe = mind != null && mind.combatTarget() == null && moved < 0.75D;
+            }
+        } catch (Throwable e) {
+            notes.add("c01 passive check threw " + Guard.describe(e));
+        }
+        check("S-116", "C-01", safe, "a nearby hostile is not acquired or pursued without an explicit "
+                + "attack/hunt order (" + (attacker == null ? "no body" : "target="
+                + (plugin.brain().mind(attacker) == null ? "?" : plugin.brain().mind(attacker).combatTarget())
+                + ", moved " + String.format(Locale.ROOT, "%.2f", moved) + " blocks") + ")");
+        dismissAll();
+    }
+
 }

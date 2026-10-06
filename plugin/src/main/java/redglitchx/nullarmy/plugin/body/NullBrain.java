@@ -17,7 +17,6 @@ import org.bukkit.inventory.PlayerInventory;
 
 import redglitchx.nullarmy.core.flock.Separation;
 import redglitchx.nullarmy.core.formation.FormationMatrix;
-import redglitchx.nullarmy.core.formation.FormationMatrix;
 import redglitchx.nullarmy.core.march.MarchCadence;
 import redglitchx.nullarmy.core.math.Vec3d;
 import redglitchx.nullarmy.core.nav.BlockView;
@@ -56,13 +55,13 @@ import java.util.UUID;
  *   <li>the squad objective (follow, formation, guard, attack, destination);</li>
  *   <li>stepping out of the arrival doorway;</li>
  *   <li>sliding out of a pile ({@link #unstack});</li>
- *   <li>idle life: keep a body's width from everybody, glance at players who come
- *       close, look around, rest after a minute, eat when hurt.</li>
+ *   <li>idle life: keep a body's width from everybody, rest after a minute,
+ *       eat when hurt, and raise a shield when threatened.</li>
  * </ol>
  *
  * <p>Separation is added to every movement except a precise hold, so a squad
- * never melts into one block; the head follows the movement unless something
- * more interesting is in view.</p>
+ * never melts into one block. Intentional attention and explicit combat or
+ * formation looks turn the head and body together; idle ticks add no glances.</p>
  *
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
  */
@@ -80,7 +79,6 @@ public final class NullBrain implements Reloadable {
         /** Stepping off an edge is intended (leaving a floating doorway, walking down on purpose). */
         public boolean allowDrop;
         public Vec3d look;
-        public boolean lookHeadOnly = true;
 
         public static Intent stop() {
             Intent i = new Intent();
@@ -93,14 +91,12 @@ public final class NullBrain implements Reloadable {
         }
     }
 
-    private static final double PLAYER_GLANCE_RANGE = 8.0D;
     private static final int UNSTACK_INTERVAL = 10;
 
     private final NullArmyPlugin plugin;
     private final Map<UUID, Mind> minds = new HashMap<>();
     private final Random random = new Random();
     private final CombatBrain combat;
-    private final List<Vec3d> extraWatchers = new ArrayList<>();
     private V3Settings v3;
     private long now;
     private int unstackedTotal;
@@ -194,12 +190,6 @@ public final class NullBrain implements Reloadable {
     /** How many bodies the unstacker has moved this session, and the last report. */
     public int unstackedTotal() { return unstackedTotal; }
     public String lastUnstack() { return lastUnstack; }
-
-    /**
-     * Positions the self test adds as "players nearby", because no real player
-     * connects to the headless smoke server. The same glance code uses them.
-     */
-    public List<Vec3d> extraWatchers() { return extraWatchers; }
 
     // ------------------------------------------------------------------- tick
 
@@ -385,15 +375,14 @@ public final class NullBrain implements Reloadable {
             }
         }
         if (!busy || intent.look == null) {
-            chooseLook(body, mind, handle, world, pos, intent);
+            chooseLook(mind, world, intent);
         }
         if (mind.gestureUntil > now) {
             intent.look = new Vec3d(pos.x(), pos.y() + 0.2D, pos.z()).add(forward(body, 2.0D));
-            intent.lookHeadOnly = true;
         }
 
         body.setMovement(intent.dx, intent.dz, intent.gait, intent.jump, intent.sneak);
-        body.setLookTarget(intent.look, intent.lookHeadOnly);
+        body.setLookTarget(intent.look, false);
         mind.lastPos = pos;
     }
 
@@ -555,20 +544,12 @@ public final class NullBrain implements Reloadable {
                     intent.precise = true;
                     return intent;
                 }
-                // L-03: a guard sweeps his head instead of staring at the floor.
-                Intent stop = Intent.stop();
-                Vec3d ahead = forward(body, 6.0D);
-                double base = Math.atan2(ahead.z(), ahead.x());
-                double phase = (now % 100L) / 100.0D * Math.PI * 2.0D;
-                double yaw = base + Math.sin(phase) * 0.7D;
-                stop.look = new Vec3d(pos.x() + Math.cos(yaw) * 6.0D, pos.y() + 1.6D,
-                        pos.z() + Math.sin(yaw) * 6.0D);
-                stop.lookHeadOnly = true;
-                return stop;
+                return Intent.stop();
             }
             case ATTACK:
                 if (order.entity != null) {
                     mind.combatTarget = order.entity;
+                    mind.combatPursuit = true;
                     mind.combatUntil = now + 20L * 120L;
                 }
                 mind.order = null;
@@ -641,7 +622,6 @@ public final class NullBrain implements Reloadable {
                 Intent intent = Intent.stop();
                 if (order.entity != null) {
                     intent.look = targetPosition(order.entity, world);
-                    intent.lookHeadOnly = false;
                 }
                 if (now - order.issuedTick < 4L) {
                     return intent;
@@ -694,6 +674,8 @@ public final class NullBrain implements Reloadable {
                     return Intent.stop();
                 }
                 if (!order.chaser) {
+                    mind.combatTarget = null;
+                    mind.combatPursuit = false;
                     Vec3d hold = mind.holdCell != null ? mind.holdCell : body.bodyPosition();
                     Intent intent = steerTo(body, mind, world, pos, hold, 0.3D, NullBody.GAIT_WALK);
                     if (intent == null) {
@@ -701,10 +683,10 @@ public final class NullBrain implements Reloadable {
                     }
                     Location at = hunted.getLocation();
                     intent.look = new Vec3d(at.getX(), at.getY() + 1.6D, at.getZ());
-                    intent.lookHeadOnly = false;
                     return intent;
                 }
                 mind.combatTarget = order.entity;
+                mind.combatPursuit = true;
                 mind.combatUntil = now + 20L * 60L;
                 return null;
             }
@@ -729,6 +711,7 @@ public final class NullBrain implements Reloadable {
             return;
         }
         mind.combatTarget = null;
+        mind.combatPursuit = false;
         mind.combatUntil = 0L;
         Mind.Order standing = order;
         UUID owner = order.issuer;
@@ -969,7 +952,6 @@ public final class NullBrain implements Reloadable {
         }
         Intent intent = Intent.stop();
         intent.look = new Vec3d(chosen.getX() + 0.5D, chosen.getY() + 0.5D, chosen.getZ() + 0.5D);
-        intent.lookHeadOnly = false;
         if (Bodies.breakOne(handle, chosen)) {
             blocksDestroyed++;
         }
@@ -1152,13 +1134,6 @@ public final class NullBrain implements Reloadable {
             mind.campBehaviour = "watch";
             campBehaviours.add("watch");
         }
-        // A guard never stares at his boots: the head keeps moving.
-        Vec3d ahead = forward(body, 6.0D);
-        double base = Math.atan2(ahead.z(), ahead.x());
-        double yaw = base + Math.sin((now % 120L) / 120.0D * Math.PI * 2.0D) * 0.8D;
-        intent.look = new Vec3d(pos.x() + Math.cos(yaw) * 6.0D, pos.y() + 1.6D,
-                pos.z() + Math.sin(yaw) * 6.0D);
-        intent.lookHeadOnly = true;
     }
 
     private UUID ownerOf(NullBody body) {
@@ -1191,6 +1166,10 @@ public final class NullBrain implements Reloadable {
             }
             Mind.Order created = new Mind.Order(verb, point, entity, issuer, now, Math.max(1, count));
             mind.order = created;
+            // A new movement/formation order cancels any previous combat target.
+            // ATTACK/HUNT establish their target when the order is processed.
+            mind.combatTarget = null;
+            mind.combatPursuit = false;
             mind.detour = null;
             mind.blockedTicks = 0;
             mind.saluted = false;
@@ -1205,14 +1184,9 @@ public final class NullBrain implements Reloadable {
                 created.radius = Math.max(1, count);
             }
             if (verb == Mind.Verb.STOP) {
-                mind.combatTarget = null;
                 if (plugin.builder() != null) {
                     plugin.builder().release(body);
                 }
-            }
-            if ((verb == Mind.Verb.ATTACK || verb == Mind.Verb.HUNT) && entity != null) {
-                mind.combatTarget = entity;
-                mind.combatUntil = now + 20L * 120L;
             }
             acknowledge(body, mind);
             if (issuer != null) {
@@ -1336,25 +1310,21 @@ public final class NullBrain implements Reloadable {
         if (mind == null || entity == null) {
             return;
         }
-        mind.glancedAt = entity;
+        mind.attentionTarget = entity;
+        mind.attention = null;
         mind.attentionUntil = now + Math.max(10, ticks);
-        mind.attentionHeadOnly = true;
-        mind.nextPlayerGlance = mind.attentionUntil + 40;
     }
 
-    /** Holds a body's look on a point for a while (aiming, the self test). */
-    public void forceLook(NullBody body, Vec3d point, int ticks, boolean headOnly) {
+    /** Holds a body's head and body on a point for a while (aiming, the self test). */
+    public void forceLook(NullBody body, Vec3d point, int ticks) {
         Mind mind = mind(body);
         if (mind == null || point == null) {
             return;
         }
-        mind.glancedAt = null;
+        mind.attentionTarget = null;
         mind.attention = point;
-        mind.attentionIsScan = false;
         mind.attentionUntil = now + Math.max(1, ticks);
-        mind.attentionHeadOnly = headOnly;
-        mind.nextPlayerGlance = mind.attentionUntil + 40;
-        body.setLookTarget(point, headOnly);
+        body.setLookTarget(point, false);
     }
 
     /** Every Null of {@code owner} within 24 blocks looks at the speaker. */
@@ -1378,6 +1348,7 @@ public final class NullBrain implements Reloadable {
                 mind.order = null;
                 mind.holdCell = null;
                 mind.combatTarget = null;
+                mind.combatPursuit = false;
             }
         }
     }
@@ -1409,6 +1380,7 @@ public final class NullBrain implements Reloadable {
             case ATTACK: {
                 if (squad.targetId() != null) {
                     mind.combatTarget = squad.targetId();
+                    mind.combatPursuit = true;
                     mind.combatUntil = now + 40;
                 }
                 return null;
@@ -1449,7 +1421,6 @@ public final class NullBrain implements Reloadable {
             if (anchorLook != null) {
                 double yaw = Math.toRadians(squad.formationYaw());
                 hold.look = new Vec3d(cell.x() - Math.sin(yaw) * 6.0D, cell.y() + 1.6D, cell.z() + Math.cos(yaw) * 6.0D);
-                hold.lookHeadOnly = false;
             }
             return hold;
         }
@@ -1486,10 +1457,17 @@ public final class NullBrain implements Reloadable {
             }
             Location at = owner.getLocation();
             yaw = at.getYaw();
-            double back = FormationMatrix.followDistance(kind, count, spacing);
             double yawRad = Math.toRadians(yaw);
-            ax = at.getX() + Math.sin(yawRad) * back;
-            az = at.getZ() - Math.cos(yawRad) * back;
+            if ("wall".equalsIgnoreCase(kind)) {
+                // The wall protects the owner's front, rather than trailing
+                // behind like the ordinary following formations.
+                ax = at.getX() - Math.sin(yawRad) * 2.5D;
+                az = at.getZ() + Math.cos(yawRad) * 2.5D;
+            } else {
+                double back = FormationMatrix.followDistance(kind, count, spacing);
+                ax = at.getX() + Math.sin(yawRad) * back;
+                az = at.getZ() - Math.cos(yawRad) * back;
+            }
             ay = at.getY();
         }
         List<double[]> cells = FormationMatrix.worldCells(kind, count, spacing, ax, az, yaw);
@@ -1550,112 +1528,31 @@ public final class NullBrain implements Reloadable {
     // ------------------------------------------------------------------ look
 
     /**
-     * Where the head goes: the speaker or order-giver first, then a player who
-     * comes within 8 blocks (a 2-4 second glance, head only), then - when
-     * standing - an unhurried look around. While walking with nothing to look
-     * at, the body leaves the head to follow the movement.
+     * Applies explicit attention only. There are no ambient player glances or
+     * idle scans, and every selected look turns the head and body together.
      */
-    private void chooseLook(NullBody body, Mind mind, Player handle, String world, Vec3d pos, Intent intent) {
+    private void chooseLook(Mind mind, String world, Intent intent) {
         if (intent.look != null) {
             return;
         }
-        Vec3d eye = new Vec3d(pos.x(), pos.y() + 1.62D, pos.z());
-        if (mind.glancedAt != null && now < mind.attentionUntil) {
-            Entity entity = Bukkit.getEntity(mind.glancedAt);
-            if (entity != null && entity.getWorld() != null && entity.getWorld().getName().equals(world)) {
-                Location at = entity instanceof LivingEntity
-                        ? ((LivingEntity) entity).getEyeLocation() : entity.getLocation();
-                intent.look = new Vec3d(at.getX(), at.getY(), at.getZ());
-                intent.lookHeadOnly = mind.attentionHeadOnly;
-                return;
-            }
-            if (mind.attention != null) {
-                intent.look = mind.attention;
-                intent.lookHeadOnly = true;
-                return;
-            }
-        }
-        if (mind.attention != null && now < mind.attentionUntil && mind.glancedAt == null && !mind.attentionIsScan) {
-            intent.look = mind.attention;
-            intent.lookHeadOnly = mind.attentionHeadOnly;
+        if (now >= mind.attentionUntil) {
+            mind.attention = null;
+            mind.attentionTarget = null;
             return;
         }
-        if (now >= mind.nextPlayerGlance) {
-            Object watcher = nearestWatcher(world, eye, body);
-            if (watcher instanceof Player) {
-                mind.glancedAt = ((Player) watcher).getUniqueId();
-                mind.attention = null;
-                mind.attentionIsScan = false;
-                mind.attentionUntil = now + 40 + random.nextInt(41);
-                mind.attentionHeadOnly = true;
-                mind.nextPlayerGlance = mind.attentionUntil + 60 + random.nextInt(100);
-                Location at = ((Player) watcher).getEyeLocation();
-                intent.look = new Vec3d(at.getX(), at.getY(), at.getZ());
-                intent.lookHeadOnly = true;
+        if (mind.attentionTarget != null) {
+            Entity entity = Bukkit.getEntity(mind.attentionTarget);
+            if (entity == null || entity.isDead() || entity.getWorld() == null
+                    || !entity.getWorld().getName().equals(world)) {
+                mind.attentionTarget = null;
                 return;
             }
-            if (watcher instanceof Vec3d) {
-                mind.glancedAt = null;
-                mind.attention = (Vec3d) watcher;
-                mind.attentionIsScan = false;
-                mind.attentionUntil = now + 40 + random.nextInt(41);
-                mind.attentionHeadOnly = true;
-                mind.nextPlayerGlance = mind.attentionUntil + 60 + random.nextInt(100);
-                intent.look = mind.attention;
-                intent.lookHeadOnly = true;
-                return;
-            }
-            mind.nextPlayerGlance = now + 10;
-        }
-        if (mind.attention != null && now < mind.attentionUntil && mind.attentionIsScan) {
-            intent.look = mind.attention;
-            intent.lookHeadOnly = true;
+            Location at = entity instanceof LivingEntity
+                    ? ((LivingEntity) entity).getEyeLocation() : entity.getLocation();
+            intent.look = new Vec3d(at.getX(), at.getY(), at.getZ());
             return;
         }
-        if (!intent.moving() && v3 != null && v3.idleBehaviour() && now >= mind.nextScanTick) {
-            double yaw = Math.toRadians(body.bodyYaw() + (random.nextDouble() * 140.0D - 70.0D));
-            mind.glancedAt = null;
-            mind.attention = new Vec3d(eye.x() - Math.sin(yaw) * 5.0D, eye.y() + random.nextDouble() * 1.6D - 1.0D,
-                    eye.z() + Math.cos(yaw) * 5.0D);
-            mind.attentionUntil = now + 30 + random.nextInt(30);
-            mind.attentionHeadOnly = true;
-            mind.attentionIsScan = true;
-            mind.nextScanTick = now + 60 + random.nextInt(80);
-            intent.look = mind.attention;
-            intent.lookHeadOnly = true;
-        }
-    }
-
-    /** The nearest real player (or self-test stand-in) within glance range, or null. */
-    private Object nearestWatcher(String world, Vec3d eye, NullBody self) {
-        World w = Bukkit.getWorld(world);
-        if (w == null) {
-            return null;
-        }
-        Player best = null;
-        double bestDist = PLAYER_GLANCE_RANGE;
-        for (Player player : w.getPlayers()) {
-            if (plugin.adapter() != null && plugin.adapter().isNullEntity(player.getUniqueId())) {
-                continue; // other Nulls are not "players nearby"
-            }
-            double d = player.getLocation().toVector().distance(new org.bukkit.util.Vector(eye.x(), eye.y(), eye.z()));
-            if (d <= bestDist) {
-                bestDist = d;
-                best = player;
-            }
-        }
-        if (best != null) {
-            return best;
-        }
-        Vec3d bestPoint = null;
-        for (Vec3d point : extraWatchers) {
-            double d = point.distanceTo(eye);
-            if (d <= bestDist) {
-                bestDist = d;
-                bestPoint = point;
-            }
-        }
-        return bestPoint;
+        intent.look = mind.attention;
     }
 
     // ------------------------------------------------------------- idle life
@@ -1852,8 +1749,12 @@ public final class NullBrain implements Reloadable {
         if (!mayTarget(body, attacker)) {
             return;
         }
+        if (mind.combatPursuit && mind.combatTarget != null) {
+            return; // a fresh hit does not cancel a deliberate attack order
+        }
         if (mind.combatTarget == null || !mind.combatTarget.equals(attacker.getUniqueId())) {
             mind.combatTarget = attacker.getUniqueId();
+            mind.combatPursuit = false;
             if (plugin.chatGate() != null) {
                 plugin.chatGate().event("combat.retaliate", "name", body.profileName(), "target", attacker.getName());
             }
@@ -1865,11 +1766,10 @@ public final class NullBrain implements Reloadable {
      * The one rule that decides whether a Null may ever fight something.
      *
      * <p><b>P-04.</b> The totem/horn holder is the sole commander and the army
-     * never turns on him: not in retaliation, not by order, not because he is
-     * the nearest target, not with a bow. Squad mates and the Commander are
-     * exempt too, and so is anyone on {@code policy.protected}. Every path that
-     * sets a combat target - retaliation, the "nearest hostile" scan, a chat
-     * order, {@code /null order attack} - goes through this method.</p>
+     * never targets him: not in retaliation, not by order, and not with a bow.
+     * Squad mates and the Commander are exempt too, and so is anyone on
+     * {@code policy.protected}. Every retaliation or explicit attack target
+     * goes through this method.</p>
      *
      * @param attacker the Null that would be doing the fighting (a real player
      *                 passes too, so the same rule can be asked about an order)
@@ -1900,13 +1800,15 @@ public final class NullBrain implements Reloadable {
         }
         NullBody self = body != null ? body : (isNullEntity(attacker) ? plugin.adapter().bodyOf(attacker.getUniqueId()) : null);
 
-        // 1. Never the Commander.
-        if (plugin.commander() != null && plugin.commander().body() != null
+        // 1. A Null never targets the Commander, but real players must still be
+        // able to damage him just like any other player.
+        boolean nullAttacker = isNullEntity(attacker);
+        if (nullAttacker && plugin.commander() != null && plugin.commander().body() != null
                 && id.equals(plugin.commander().body().uuid())) {
             return false;
         }
         String name = target.getName();
-        if (plugin.commander() != null && plugin.commander().commanderName() != null
+        if (nullAttacker && plugin.commander() != null && plugin.commander().commanderName() != null
                 && plugin.commander().commanderName().equalsIgnoreCase(name)) {
             return false;
         }
@@ -1922,7 +1824,7 @@ public final class NullBrain implements Reloadable {
             }
         }
         // 3. Never the owner. A Null is the owner's; it does not hit back at him.
-        if (isNullEntity(attacker) && plugin.squads() != null) {
+        if (nullAttacker && plugin.squads() != null) {
             NullBody attackerBody = self;
             if (attackerBody != null) {
                 UUID owner = plugin.squads().ownerOf(attackerBody);
@@ -2043,7 +1945,6 @@ public final class NullBrain implements Reloadable {
     /** Drops every mind (used when the plugin disables). */
     public void clear() {
         minds.clear();
-        extraWatchers.clear();
     }
 
     /** One line per Null with an order or a fight, for /null status. */

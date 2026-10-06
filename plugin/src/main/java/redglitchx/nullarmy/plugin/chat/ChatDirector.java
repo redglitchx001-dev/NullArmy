@@ -7,7 +7,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-import org.bukkit.event.player.AsyncPlayerChatEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 
 import redglitchx.nullarmy.core.math.Vec3d;
 import redglitchx.nullarmy.core.util.RateLimiter;
@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Everything the player can say in chat instead of typing a command.
@@ -40,11 +41,13 @@ import java.util.UUID;
  *       {@code null come}, {@code null stop} - the wake word plus a subcommand
  *       is dispatched through the same {@link NullCommand} executor as typing
  *       {@code /null …}, so permissions, caps and policy gates are identical.
- *       The order is not broadcast to the server.</li>
- *   <li><b>Conversation.</b> {@code null chat commander} opens a private line
- *       to the Commander (or to a Null); the player's next messages go to that
- *       character and nobody else sees them. With no AI endpoint configured the
- *       character still answers with short, honest local lines.</li>
+ *       OFF hides recognized order lines; PRIVATE consumes its conversation
+ *       privately; PUBLIC leaves recognized orders visible.</li>
+ *   <li><b>Conversation.</b> A per-player {@link ChatMode} selects OFF, PRIVATE,
+ *       or PUBLIC independently of {@link Session} history. {@code /null chat
+ *       private} opens a private line; {@code /null chat public} enables public
+ *       name/wake-word replies; {@code /null chat off} closes routing. Private
+ *       messages are intercepted; public replies use {@code Name: message}.</li>
  *   <li><b>Falling back.</b> {@code null who are you} - not an order, not a
  *       session - is answered by the model in the Commander's voice, or by a
  *       plain "AI is off" line with the reason.</li>
@@ -59,6 +62,9 @@ import java.util.UUID;
 public final class ChatDirector implements Listener, Reloadable {
 
     private static final String PREFIX = PluginText.PREFIX;
+
+    /** Conversation visibility selected by one player, independent of history/session state. */
+    public enum ChatMode { OFF, PRIVATE, PUBLIC }
 
     /** Who a session is with. */
     public enum Speaker {
@@ -76,6 +82,7 @@ public final class ChatDirector implements Listener, Reloadable {
                 case "commander":
                 case "commando":
                 case "co":
+                case "private":
                     return COMMANDER;
                 case "off":
                 case "none":
@@ -169,8 +176,9 @@ public final class ChatDirector implements Listener, Reloadable {
     private final NullArmyPlugin plugin;
     private final NullCommand command;
     private final ChatBrain brain;
-    private final Map<UUID, Session> sessions = new LinkedHashMap<>();
-    private final Map<UUID, RateLimiter> orderLimits = new HashMap<>();
+    private final Map<UUID, Session> sessions = new ConcurrentHashMap<>();
+    private final Map<UUID, ChatMode> chatModes = new ConcurrentHashMap<>();
+    private final Map<UUID, RateLimiter> orderLimits = new ConcurrentHashMap<>();
 
     private PluginConfig config;
 
@@ -200,9 +208,8 @@ public final class ChatDirector implements Listener, Reloadable {
     /**
      * How a speaker is named in chat.
      *
-     * <p>The Commander is shown by its configured name with no colours and no
-     * symbols, exactly like a normal player; the brand prefix in front of the line
-     * is the plugin's own gradient.</p>
+     * <p>The Commander is shown by its configured name, exactly like a normal
+     * player; public messages use {@code Name: message} formatting.</p>
      */
     private String label(Speaker speaker) {
         if (speaker == Speaker.COMMANDER && plugin.commander() != null) {
@@ -221,6 +228,23 @@ public final class ChatDirector implements Listener, Reloadable {
 
     public int sessionCount() {
         return sessions.size();
+    }
+
+    /** The selected channel visibility; defaults to the server's public-reply setting. */
+    public ChatMode chatMode(UUID player) {
+        if (player == null) {
+            return ChatMode.OFF;
+        }
+        ChatMode selected = chatModes.get(player);
+        return selected == null ? (publicRepliesEnabled() ? ChatMode.PUBLIC : ChatMode.OFF) : selected;
+    }
+
+    private boolean publicRepliesEnabled() {
+        return config == null || config.v3().commanderPublicReplies();
+    }
+
+    private boolean explicitlyOff(UUID player) {
+        return player != null && chatModes.get(player) == ChatMode.OFF;
     }
 
     // -------------------------------------------------------------- session control
@@ -245,6 +269,7 @@ public final class ChatDirector implements Listener, Reloadable {
             return false;
         }
         sessions.put(player.getUniqueId(), new Session(speaker, plugin.currentTick()));
+        chatModes.put(player.getUniqueId(), ChatMode.PRIVATE);
         player.sendMessage(PREFIX + "Private channel open with the " + speaker.displayName() + ".");
         player.sendMessage(PREFIX + "Type your messages normally - only the " + speaker.displayName()
                 + " hears them. Say 'exit' or run /null chat off to end it.");
@@ -253,6 +278,34 @@ public final class ChatDirector implements Listener, Reloadable {
                     + " full conversation needs a model: " + brain.unavailableReason() + ".";
             player.sendMessage(PREFIX + reason);
         }
+        return true;
+    }
+
+    /** Selects public Commander replies for this player, without opening a history session. */
+    public boolean setPublicMode(Player player) {
+        if (player == null) {
+            return false;
+        }
+        if (!player.hasPermission("nullarmy.chat")) {
+            player.sendMessage(PREFIX + "You do not have permission to talk to the Commander (nullarmy.chat).");
+            return false;
+        }
+        boolean closedPrivate = sessions.remove(player.getUniqueId()) != null;
+        chatModes.put(player.getUniqueId(), ChatMode.PUBLIC);
+        player.sendMessage(PREFIX + (closedPrivate ? "Private channel closed. " : "")
+                + "Public Commander chat is on. Address him by name or wake word; replies appear as Name: message.");
+        return true;
+    }
+
+    /** Turns off persistent Commander routing; explicit army orders remain available. */
+    public boolean setOffMode(Player player) {
+        if (player == null) {
+            return false;
+        }
+        boolean closedPrivate = sessions.remove(player.getUniqueId()) != null;
+        chatModes.put(player.getUniqueId(), ChatMode.OFF);
+        player.sendMessage(PREFIX + (closedPrivate ? "Private channel closed. " : "")
+                + "Commander chat mode is off. Addressed conversation lines will not be routed; orders still work.");
         return true;
     }
 
@@ -265,6 +318,7 @@ public final class ChatDirector implements Listener, Reloadable {
         if (session == null) {
             return false;
         }
+        chatModes.put(player.getUniqueId(), ChatMode.OFF);
         player.sendMessage(PREFIX + "The " + session.speaker.displayName() + " signs off."
                 + (why == null || why.isEmpty() ? "" : " (" + why + ")"));
         return true;
@@ -273,26 +327,45 @@ public final class ChatDirector implements Listener, Reloadable {
     /** One-line status for {@code /null chat}. */
     public String describe(UUID player) {
         Session session = player == null ? null : sessions.get(player);
-        if (session == null) {
-            return "No private channel open. Use /null chat commander or /null chat null.";
+        if (session != null) {
+            return "Private channel with the " + session.speaker.displayName() + " is open - "
+                    + session.history.size() + " message(s) in context.";
         }
-        return "Talking to the " + session.speaker.displayName() + " -"
-                + " " + session.history.size() + " message(s) in context.";
+        ChatMode mode = chatMode(player);
+        if (mode == ChatMode.PUBLIC) {
+            return "Public Commander chat is on. Address him by name or wake word; use /null chat off to stop.";
+        }
+        if (explicitlyOff(player)) {
+            return "Commander chat mode is OFF. Use /null chat public or /null chat private to choose a channel.";
+        }
+        return "No private channel open. Server default is private replies. Use /null chat public,"
+                + " /null chat private, or /null chat off.";
     }
 
     // ------------------------------------------------------------------- chat hook
 
     /**
-     * Paper's modern chat event. The conversation is public: a line addressed to
-     * the Commander - by a wake word or by the Commander's plain name, in any
-     * case - stays in public chat, and the Commander answers in public chat with
-     * the gradient brand and its plain name (it is in the tab list like a
-     * player). Order lines are obeyed; the Nulls gesture and never speak. Any
-     * other line is left completely alone.
+     * Paper's modern chat event. Public mode leaves addressed lines and order
+     * text visible, replying as {@code Name: message}; private mode consumes
+     * conversation into the player's session, and OFF disables conversation
+     * routing while still processing recognized orders. Unrelated OFF-mode
+     * lines are left alone.
      */
     @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
     public void onChat(io.papermc.paper.event.player.AsyncChatEvent event) {
         Guard.attempt(plugin.getLogger(), "chat handling", () -> handle(event));
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onQuit(PlayerQuitEvent event) {
+        if (event == null || event.getPlayer() == null) {
+            return;
+        }
+        UUID player = event.getPlayer().getUniqueId();
+        sessions.remove(player);
+        chatModes.remove(player);
+        orderLimits.remove(player);
+        pendingDestroy.remove(player);
     }
 
     private void handle(io.papermc.paper.event.player.AsyncChatEvent event) {
@@ -344,34 +417,42 @@ public final class ChatDirector implements Listener, Reloadable {
             }
         });
 
+        ChatMode mode = chatMode(player.getUniqueId());
+        boolean offExplicitly = explicitlyOff(player.getUniqueId());
         String talkTarget = talkCommand(rest);
         if (talkTarget != null) {
             event.setCancelled(true);
             if (talkTarget.isEmpty()) {
-                player.sendMessage(PREFIX + "Usage: 'null chat <null|commander|off>'.");
+                player.sendMessage(PREFIX + "Usage: 'null chat <public|private|null|commander|off>'.");
+                return;
+            }
+            if (talkTarget.equalsIgnoreCase("public")) {
+                setPublicMode(player);
+                return;
+            }
+            if (talkTarget.equalsIgnoreCase("off")) {
+                setOffMode(player);
                 return;
             }
             Speaker target = Speaker.parse(talkTarget);
             if (target == null) {
-                player.sendMessage(PREFIX + "'" + talkTarget + "' is neither a Null nor the Commander."
-                        + " Use 'null chat commander', 'null chat null' or 'null chat off'.");
+                player.sendMessage(PREFIX + "'" + talkTarget + "' is neither a Null nor a chat mode."
+                        + " Use 'null chat public', 'null chat private', 'null chat null' or 'null chat off'.");
                 return;
             }
             if (target == Speaker.NONE) {
-                if (!endSession(player, null)) {
-                    player.sendMessage(PREFIX + "No private channel was open.");
-                }
+                setOffMode(player);
                 return;
             }
             startSession(player, target);
             return;
         }
 
-        boolean publicReplies = config == null || config.v3().commanderPublicReplies();
+        boolean publicReplies = mode == ChatMode.PUBLIC;
         if (rest.isEmpty()) {
             if (publicReplies) {
                 commanderReply("Yes, " + player.getName() + "? Give the order, or ask me something.");
-            } else {
+            } else if (!offExplicitly) {
                 event.setCancelled(true);
                 player.sendMessage(PREFIX + "Yes? Try 'null help', 'null attack <player>',"
                         + " or 'null chat commander' to talk.");
@@ -388,7 +469,15 @@ public final class ChatDirector implements Listener, Reloadable {
             // is an order at all; anything the word-matching path understood
             // above is untouched, so no old sentence changes meaning.
             if (naturalOrder(player, raw)) {
+                // OFF disables conversation, not army orders. Recognized orders
+                // are hidden outside PUBLIC mode and remain visible in PUBLIC mode.
+                if (mode != ChatMode.PUBLIC) {
+                    event.setCancelled(true);
+                }
                 return;
+            }
+            if (offExplicitly) {
+                return; // explicitly disabled chat leaves ordinary public chat untouched
             }
             // A question or a remark: the Commander answers.
             if (publicReplies) {
@@ -417,7 +506,7 @@ public final class ChatDirector implements Listener, Reloadable {
     // ------------------------------------------------------- natural orders (P-09)
 
     /** A destroy order waiting for its confirm: owner -> verb + target. */
-    private final Map<UUID, String> pendingDestroy = new LinkedHashMap<>();
+    private final Map<UUID, String> pendingDestroy = new ConcurrentHashMap<>();
 
     /** How many natural-language orders were obeyed (self test). */
     private int naturalOrders;
@@ -482,7 +571,7 @@ public final class ChatDirector implements Listener, Reloadable {
             return false;
         }
         naturalOrders++;
-        commanderReply(acknowledgement(order.verb().name(), player.getName()));
+        replyByMode(player, acknowledgement(order.verb().name(), player.getName()));
         return true;
     }
 
@@ -660,7 +749,7 @@ public final class ChatDirector implements Listener, Reloadable {
         player.sendMessage(PREFIX + plugin.brain().destroy(targets,
                 new Vec3d(at.getX(), at.getY(), at.getZ()), 2, player.getUniqueId()));
         naturalOrders++;
-        commanderReply("As you say. It comes down.");
+        replyByMode(player, "As you say. It comes down.");
         return true;
     }
 
@@ -686,6 +775,18 @@ public final class ChatDirector implements Listener, Reloadable {
                 plugin.chatGate().commanderSay(name, text);
             }
         });
+    }
+
+    private void replyByMode(Player player, String text) {
+        if (player == null || text == null) {
+            return;
+        }
+        ChatMode mode = chatMode(player.getUniqueId());
+        if (mode == ChatMode.PUBLIC) {
+            commanderReply(text);
+        } else if (!explicitlyOff(player.getUniqueId())) {
+            player.sendMessage(PREFIX + text);
+        }
     }
 
     private String commanderName() {
@@ -876,7 +977,10 @@ public final class ChatDirector implements Listener, Reloadable {
         Session session = sessions.get(player.getUniqueId());
         if (session != null && session.speaker == speaker) {
             history = new ArrayList<>(session.history);
+        } else {
+            session = null;
         }
+        final Session expectedSession = session;
 
         // Greetings first: they are free, instant and never wrong.
         if (history == null || history.isEmpty()) {
@@ -894,6 +998,9 @@ public final class ChatDirector implements Listener, Reloadable {
         brain.ask(persona, history, message, new ChatBrain.Reply() {
             @Override
             public void ok(String text) {
+                if (expectedSession != null && sessions.get(player.getUniqueId()) != expectedSession) {
+                    return; // the player switched channels while this reply was in flight
+                }
                 String clipped = clip(text, config == null ? 400 : config.chatMaxReplyChars());
                 player.sendMessage(PREFIX + label(speaker) + ": " + clipped);
                 if (onDone != null) {
@@ -903,6 +1010,9 @@ public final class ChatDirector implements Listener, Reloadable {
 
             @Override
             public void failed(String reason) {
+                if (expectedSession != null && sessions.get(player.getUniqueId()) != expectedSession) {
+                    return; // do not answer into a channel the player already left
+                }
                 String local = localLine(message);
                 if (local != null) {
                     player.sendMessage(PREFIX + label(speaker) + ": " + local);

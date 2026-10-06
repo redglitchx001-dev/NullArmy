@@ -191,6 +191,41 @@ public final class PvpArsenal {
         return best;
     }
 
+    /**
+     * Selects only mace choices the live combat loop currently performs through
+     * vanilla {@code Player#attack}. Movement tricks that require a pearl,
+     * placing water, aerial control, or an unimplemented flight controller stay
+     * available to the pure planning library but are never executed by combat.
+     */
+    public static Technique selectSupportedMelee(CombatSituation situation) {
+        Technique best = Technique.DISENGAGE;
+        for (Technique technique : Technique.values()) {
+            if (usesMaceForAttack(technique) && technique.applies(situation)
+                    && technique.priority() > best.priority()) {
+                best = technique;
+            }
+        }
+        return best;
+    }
+
+    /** True when the selected live tactic should put a mace in the main hand. */
+    public static boolean usesMaceForAttack(Technique technique) {
+        if (technique == null) {
+            return false;
+        }
+        switch (technique) {
+            case FULL_SMASH:
+            case COMBO_DOUBLE_SMASH:
+            case WIND_BURST_RECOVERY:
+            case DENSITY_BURST:
+            case HOTBAR_SWAP_SMASH:
+            case ELYTRA_DIVE_SMASH:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     /** Every technique of a given discipline, in priority order. */
     public static List<Technique> forDiscipline(Discipline discipline) {
         List<Technique> out = new ArrayList<>();

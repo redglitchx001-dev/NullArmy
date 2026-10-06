@@ -19,10 +19,10 @@ import java.util.Map;
 /**
  * Default equipment for the Commander and for every Null.
  *
- * <p>Iron chestplate, shield in the offhand, and a hotbar of iron sword, bow,
- * arrows, golden apples, cooked food, iron pickaxe, ender pearls, water bucket
- * and torches. Slot numbers are the real player-inventory numbers, so armour and
- * the offhand go to the slots Bukkit will not write through {@code setItem}.</p>
+ * <p>The shared enchanted netherite soldier kit is applied to both ordinary
+ * Nulls and the Commander. The Commander receives only one additional default
+ * item, an Elytra, and the white trim on his chestplate; ordinary Nulls get no
+ * Elytra or armor trims.</p>
  *
  * <h2>Three rules this class exists to keep</h2>
  * <ul>
@@ -216,12 +216,21 @@ public final class KitService implements Reloadable {
      * @return true when the Commander's loadout was written
      */
     public boolean installCommanderDefault(CommanderManager commander) {
-        if (commander == null || commander.hasSavedLoadout()) {
+        if (commander == null) {
             return false;
         }
         ItemStack[] loadout = commander.loadout();
         if (loadout == null) {
             return false;
+        }
+        boolean fresh = !commander.hasSavedLoadout();
+        if (!fresh) {
+            if (!matchesPreviousCommanderDefault(loadout)) {
+                return false; // a saved owner edit is never overwritten
+            }
+            java.util.Arrays.fill(loadout, null);
+            plugin.getLogger().info("[NullArmy] the unedited previous Commander default kit was found;"
+                    + " upgrading it to the shared Null kit plus Elytra and the white chestplate trim.");
         }
         for (DefaultKit.Item item : kit) {
             if (item.slot() < 0 || item.slot() >= loadout.length) {
@@ -234,9 +243,15 @@ public final class KitService implements Reloadable {
                         + "' could not be built on this server - skipped (" + problems + ").");
                 continue;
             }
+            if (item.slot() == 38) {
+                KitItems.withCommanderChestplateTrim(stack);
+            }
             loadout[item.slot()] = stack;
         }
         installBossKit(loadout);
+        if (loadout.length > 38 && loadout[38] != null) {
+            KitItems.withCommanderChestplateTrim(loadout[38]);
+        }
         try {
             commander.save();
         } catch (Throwable t) {
@@ -244,30 +259,53 @@ public final class KitService implements Reloadable {
                     + " saved to commander.yml: " + Guard.describe(t));
             return false;
         }
-        plugin.getLogger().info("[NullArmy] no Commander loadout was saved, so the default kit ("
-                + describe() + ") plus the Commander's boss kit was installed into commander.yml.");
+        plugin.getLogger().info("[NullArmy] no Commander loadout was saved, so the shared default kit ("
+                + describe() + ") plus the Commander's Elytra was installed into commander.yml.");
+        return true;
+    }
+
+    /**
+     * Recognizes only the exact, unedited Commander kit shipped before the
+     * shared-kit update. Any personal edit prevents migration.
+     */
+    private boolean matchesPreviousCommanderDefault(ItemStack[] actual) {
+        ItemStack[] expected = new ItemStack[redglitchx.nullarmy.plugin.commander.CommanderManager.LOADOUT_SLOTS];
+        for (DefaultKit.Item item : DefaultKit.parse(DefaultKit.LEGACY_V3_LINES, null)) {
+            List<String> problems = new ArrayList<>();
+            ItemStack stack = KitItems.toStack(item, problems);
+            if (stack == null || item.slot() >= expected.length) {
+                return false;
+            }
+            expected[item.slot()] = stack;
+        }
+        installLegacyBossKit(expected);
+        for (int slot = 0; slot < expected.length; slot++) {
+            ItemStack have = slot < actual.length ? actual[slot] : null;
+            ItemStack want = expected[slot];
+            boolean haveEmpty = have == null || have.getType() == org.bukkit.Material.AIR;
+            boolean wantEmpty = want == null || want.getType() == org.bukkit.Material.AIR;
+            if (haveEmpty != wantEmpty) {
+                return false;
+            }
+            if (!haveEmpty && (!have.isSimilar(want) || have.getAmount() != want.getAmount())) {
+                return false;
+            }
+        }
         return true;
     }
 
     // ------------------------------------------------------------------ P-06
 
     /**
-     * The Commander's boss kit (P-06).
-     *
-     * <p>An ordinary Null is a soldier: netherite armour, tools, blocks, potions
-     * and food - the normal kit, unchanged. The Commander is the boss, and it is
-     * the one body that carries the toys: a mace, an elytra, two totems of
-     * undying, four enchanted golden apples, wind charges, fireworks and a
-     * netherite sword.</p>
-     *
-     * <p>The slot in these entries is a placeholder: the items are placed into
-     * the first free slots, so nothing already carried is ever displaced.</p>
-     *
-     * <p>Nothing already in a slot is replaced - whatever the owner left there
-     * (a book, a renamed item) stays - and this only ever runs on a fresh
-     * install, so a saved {@code commander.yml} is never overwritten.</p>
+     * Commander-only addition to the shared kit (P-06). Ordinary Nulls already
+     * carry the mace, totems, food, Wind Charges, rockets and weapons; the
+     * Commander's only extra default item is an Elytra.
      */
     public static final List<DefaultKit.Item> BOSS_KIT = List.of(
+            new DefaultKit.Item(0, "ELYTRA", 1));
+
+    /** The exact Commander extras shipped before the shared-kit migration. */
+    private static final List<DefaultKit.Item> LEGACY_BOSS_KIT = List.of(
             new DefaultKit.Item(0, "MACE", 1),
             new DefaultKit.Item(0, "ELYTRA", 1),
             new DefaultKit.Item(0, "TOTEM_OF_UNDYING", 2),
@@ -295,15 +333,6 @@ public final class KitService implements Reloadable {
             return 0;
         }
         int added = 0;
-        for (int i = 0; i < loadout.length; i++) {
-            ItemStack existing = loadout[i];
-            if (existing != null && existing.getType() != org.bukkit.Material.AIR
-                    && existing.getType().name().equals("ENCHANTED_GOLDEN_APPLE")
-                    && existing.getAmount() < 4) {
-                // The ordinary kit carries one; the Commander carries four.
-                existing.setAmount(4);
-            }
-        }
         for (DefaultKit.Item item : BOSS_KIT) {
             if (present(loadout, item.material())) {
                 added++;
@@ -327,6 +356,36 @@ public final class KitService implements Reloadable {
             added++;
         }
         return added;
+    }
+
+    private void installLegacyBossKit(ItemStack[] loadout) {
+        if (loadout == null) {
+            return;
+        }
+        // Reconstruct the exact prior default only to recognize an untouched
+        // saved Commander kit. This path is never used to equip a live Commander.
+        for (ItemStack existing : loadout) {
+            if (existing != null && existing.getType() != org.bukkit.Material.AIR
+                    && existing.getType().name().equals("ENCHANTED_GOLDEN_APPLE")
+                    && existing.getAmount() < 4) {
+                existing.setAmount(4);
+            }
+        }
+        for (DefaultKit.Item item : LEGACY_BOSS_KIT) {
+            if (present(loadout, item.material())) {
+                continue;
+            }
+            int slot = freeSlot(loadout);
+            if (slot < 0) {
+                return;
+            }
+            List<String> problems = new ArrayList<>();
+            ItemStack stack = KitItems.toStack(
+                    new DefaultKit.Item(slot, item.material(), item.count()), problems);
+            if (stack != null) {
+                loadout[slot] = stack;
+            }
+        }
     }
 
     private static boolean present(ItemStack[] loadout, String material) {
@@ -356,6 +415,6 @@ public final class KitService implements Reloadable {
 
     /** Materials the Commander is expected to carry (P-06, S-95). */
     public static List<String> bossKitExpectations() {
-        return List.of("MACE", "ELYTRA", "TOTEM_OF_UNDYING", "ENCHANTED_GOLDEN_APPLE");
+        return List.of("ELYTRA");
     }
 }

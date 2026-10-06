@@ -3,10 +3,12 @@ package redglitchx.nullarmy.plugin.body;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.attribute.Attribute;
+import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.LivingEntity;
-import org.bukkit.entity.Monster;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.WindCharge;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
@@ -14,12 +16,15 @@ import org.bukkit.util.Vector;
 
 import redglitchx.nullarmy.core.combat.AimSkill;
 import redglitchx.nullarmy.core.combat.Ballistics;
+import redglitchx.nullarmy.core.combat.CombatSituation;
+import redglitchx.nullarmy.core.combat.PvpArsenal;
 import redglitchx.nullarmy.core.combat.ReachGate;
 import redglitchx.nullarmy.core.combat.SwingCadence;
 import redglitchx.nullarmy.core.math.Vec3d;
 import redglitchx.nullarmy.nms.NullBody;
 import redglitchx.nullarmy.plugin.NullArmyPlugin;
 import redglitchx.nullarmy.plugin.config.V3Settings;
+import redglitchx.nullarmy.plugin.kit.KitItems;
 
 import java.util.Random;
 import java.util.UUID;
@@ -41,14 +46,23 @@ import java.util.UUID;
  *   <li><b>Shields.</b> Between swings the offhand shield goes up; it comes down
  *       for the swing. An axe on the raised shield disables it (see
  *       {@link NullLifecycleListener}).</li>
+ *   <li><b>Wind charges.</b> On an explicit attack order, a real charge is
+ *       thrown at medium range, consumed from inventory, and subject to a
+ *       per-body cooldown. Its vanilla wind burst is not cancelled.</li>
+ *   <li><b>Commander mace planning.</b> The live selector reads the actual
+ *       inventory, target armour and fall state. Supported smash, Wind Burst,
+ *       Density and elytra-dive choices select a real mace for vanilla
+ *       {@code Player#attack}; shield-break, pearl, water-placement and
+ *       flight-controller plans remain planning-only.</li>
  *   <li><b>Bows.</b> Beyond 8 blocks it draws, aims with lead and arc
  *       ({@link Ballistics}) and releases a real arrow.</li>
  *   <li><b>Retreat.</b> Below 30 % health it backs off and eats or drinks.</li>
  * </ul>
  *
- * <p>Who to fight is decided by the rules: an explicit order, or retaliation
- * when {@code combat.retaliate} is on. With {@code combat.initiate: false} (the
- * default) a Null never starts a fight with anyone on its own.</p>
+ * <p>Combat pursuit and target-facing require an explicit attack or hunt order.
+ * Configured retaliation may defend at melee range, but never makes a Null
+ * acquire, face, or run toward a target on its own. There is no autonomous
+ * nearest-hostile scan.</p>
  *
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
  */
@@ -92,6 +106,10 @@ public final class CombatBrain {
     public String lastNote() { return lastNote; }
 
     private String lastNote = "no fight yet";
+    private PvpArsenal.Technique lastCommanderTechnique = PvpArsenal.Technique.DISENGAGE;
+
+    /** Last supported melee technique selected for the Commander, for diagnostics. */
+    public PvpArsenal.Technique lastCommanderTechnique() { return lastCommanderTechnique; }
 
     /** Self test: clears the swing / crit counters before a measured window. */
     public void resetCounters() {
@@ -144,22 +162,16 @@ public final class CombatBrain {
         V3Settings v3 = brain.settings();
         if (v3 == null || !v3.combatEnabled() || handle == null) {
             mind.combatTarget = null;
+            mind.combatPursuit = false;
             return false;
-        }
-        if (mind.combatTarget == null && v3.initiate()) {
-            LivingEntity hostile = nearestHostile(handle);
-            if (hostile != null) {
-                mind.combatTarget = hostile.getUniqueId();
-                mind.combatUntil = brain.now() + 20L * 20L;
-            }
         }
         if (mind.combatTarget == null) {
             return false;
         }
         Entity entity = Bukkit.getEntity(mind.combatTarget);
-        // P-04: an order, a retaliation or a "nearest target" scan can never put
-        // the owner, the Commander, a squad mate or a protected player on the
-        // business end of a Null. Checked every tick, not only when it was set.
+        // P-04: an order or retaliation can never put the owner, the Commander,
+        // a squad mate or a protected player on the business end of a Null.
+        // Checked every tick, not only when the target was first set.
         if (entity != null && !brain.mayTarget(handle, entity)) {
             endFight(mind, handle);
             return false;
@@ -175,27 +187,13 @@ public final class CombatBrain {
 
     void endFight(Mind mind, Player handle) {
         mind.combatTarget = null;
+        mind.combatPursuit = false;
         mind.critJumped = false;
         if (mind.bowDrawStart >= 0 && handle != null) {
             handle.clearActiveItem();
         }
         mind.bowDrawStart = -1L;
         brain.raiseShield(handle, mind, false);
-    }
-
-    private LivingEntity nearestHostile(Player handle) {
-        LivingEntity best = null;
-        double bestDist = 12.0D * 12.0D;
-        for (Entity near : handle.getNearbyEntities(12.0D, 4.0D, 12.0D)) {
-            if (near instanceof Monster && !near.isDead() && brain.mayTarget(handle, near)) {
-                double d = near.getLocation().distanceSquared(handle.getLocation());
-                if (d < bestDist) {
-                    bestDist = d;
-                    best = (LivingEntity) near;
-                }
-            }
-        }
-        return best;
     }
 
     NullBrain.Intent tick(NullBody body, Mind mind, Player handle, String world, Vec3d pos) {
@@ -209,8 +207,9 @@ public final class CombatBrain {
         double dz = targetPos.z() - pos.z();
         double dist = Math.hypot(dx, dz);
         NullBrain.Intent intent = new NullBrain.Intent();
-        intent.look = new Vec3d(eyeAt.getX(), eyeAt.getY() - 0.2D, eyeAt.getZ());
-        intent.lookHeadOnly = false;
+        if (mind.combatPursuit) {
+            intent.look = new Vec3d(eyeAt.getX(), eyeAt.getY() - 0.2D, eyeAt.getZ());
+        }
 
         // Retreat and heal when badly hurt.
         double max = NullBrain.maxHealth(handle);
@@ -222,10 +221,31 @@ public final class CombatBrain {
                 intent.dx = -dx / Math.max(1.0e-6, dist);
                 intent.dz = -dz / Math.max(1.0e-6, dist);
                 intent.gait = NullBody.GAIT_SPRINT;
-                intent.lookHeadOnly = true;
             } else {
                 brain.maybeEat(body, mind, handle);
             }
+            return intent;
+        }
+
+        // A retaliatory target is never a pursuit order. Defend only if it is
+        // already inside melee reach; do not face or close the gap otherwise.
+        if (!mind.combatPursuit && dist > reach()) {
+            lastNote = "holding position: no attack order";
+            brain.raiseShield(handle, mind, false);
+            cancelBow(mind, handle);
+            return intent;
+        }
+
+        // A Wind Charge is a real, non-blocking vanilla projectile. It is
+        // available only to an explicitly ordered pursuer; retaliation never
+        // starts a ranged action or approaches its target.
+        if (mind.combatPursuit && dist > Math.max(reach(), 4.0D)
+                && dist <= BOW_MIN_DISTANCE && now >= mind.nextWindChargeTick
+                && hasWindCharge(handle) && throwWindCharge(handle, target)) {
+            mind.nextWindChargeTick = now + 40L;
+            brain.raiseShield(handle, mind, false);
+            cancelBow(mind, handle);
+            lastNote = "threw wind charge at " + (int) dist;
             return intent;
         }
 
@@ -236,7 +256,15 @@ public final class CombatBrain {
             return bow(body, mind, handle, target, pos, intent, now);
         }
         cancelBow(mind, handle);
-        holdMeleeWeapon(handle);
+        boolean commanderBody = isCommander(body);
+        PvpArsenal.Technique technique = commanderBody
+                ? planCommanderTechnique(handle, target, dist) : PvpArsenal.Technique.DISENGAGE;
+        if (commanderBody) {
+            lastCommanderTechnique = technique;
+        }
+        boolean useMace = commanderBody && PvpArsenal.usesMaceForAttack(technique)
+                && dist <= reach() + 0.5D;
+        holdMeleeWeapon(handle, useMace);
 
         float cooldown = attackCooldown(handle, mind, now);
         double reach = reach();
@@ -254,7 +282,7 @@ public final class CombatBrain {
             mind.shieldUp = false;
             blocking = holdingShield(handle);
         }
-        if (dist > reach - 0.3D) {
+        if (mind.combatPursuit && dist > reach - 0.3D) {
             // Close the gap; running, so the first hit carries sprint knockback.
             // No shield on the way in: a raised shield is a fifth of a body's
             // speed, and a Null that blocks while it charges never arrives.
@@ -274,17 +302,20 @@ public final class CombatBrain {
             return intent;
         }
 
-        // Strafe at 2-3 blocks.
-        if (now >= mind.nextStrafeFlip) {
-            mind.strafeDir = -mind.strafeDir;
-            mind.nextStrafeFlip = now + 30 + (Math.abs(mind.id.hashCode()) % 25);
+        // Ordered fighters strafe at 2-3 blocks. Retaliation never moves toward
+        // (or circles) its attacker, even when the attacker is already in reach.
+        if (mind.combatPursuit) {
+            if (now >= mind.nextStrafeFlip) {
+                mind.strafeDir = -mind.strafeDir;
+                mind.nextStrafeFlip = now + 30 + (Math.abs(mind.id.hashCode()) % 25);
+            }
+            double nx = dx / Math.max(1.0e-6, dist);
+            double nz = dz / Math.max(1.0e-6, dist);
+            double radial = (dist - STRAFE_DISTANCE) * 0.8D;
+            intent.dx = -nz * mind.strafeDir * 0.6D + nx * radial;
+            intent.dz = nx * mind.strafeDir * 0.6D + nz * radial;
+            intent.gait = NullBody.GAIT_RUN;
         }
-        double nx = dx / Math.max(1.0e-6, dist);
-        double nz = dz / Math.max(1.0e-6, dist);
-        double radial = (dist - STRAFE_DISTANCE) * 0.8D;
-        intent.dx = -nz * mind.strafeDir * 0.6D + nx * radial;
-        intent.dz = nx * mind.strafeDir * 0.6D + nz * radial;
-        intent.gait = NullBody.GAIT_RUN;
 
         if (ready && dist <= reach && !blocking) {
             // P-01: the strike still has to be legal - inside reach AND with a
@@ -418,7 +449,6 @@ public final class CombatBrain {
         Ballistics.Aim aim = aimAt(handle, target);
         double[] point = aim.lookPoint(pos.x(), pos.y() + 1.62D, pos.z(), 10.0D);
         intent.look = new Vec3d(point[0], point[1], point[2]);
-        intent.lookHeadOnly = false;
         intent.gait = NullBody.GAIT_STOP;
         /*
          * P-05: imperfect aim. The firing solution above is exactly right, which
@@ -516,10 +546,109 @@ public final class CombatBrain {
                 || Bodies.find(inv, Material.SPECTRAL_ARROW) >= 0 || Bodies.find(inv, Material.TIPPED_ARROW) >= 0);
     }
 
-    /** Sword first, then axe, in hand. */
-    private static void holdMeleeWeapon(Player handle) {
+    private boolean isCommander(NullBody body) {
+        return body != null && plugin.commander() != null && plugin.commander().body() == body;
+    }
+
+    /** Builds the selector's primitive-only snapshot from the Commander's real inventory and target. */
+    private PvpArsenal.Technique planCommanderTechnique(Player handle, LivingEntity target, double distance) {
+        PlayerInventory inventory = handle.getInventory();
+        int maceSlot = Bodies.find(inventory, Material.MACE);
+        ItemStack mace = maceSlot < 0 ? null : inventory.getItem(maceSlot);
+        AttributeInstance armor = null;
+        try {
+            armor = target.getAttribute(Attribute.ARMOR);
+        } catch (RuntimeException ignored) {
+            // Some custom living entities do not expose the vanilla armor attribute.
+        }
+        double targetArmor = armor == null ? 0.0D : Math.max(0.0D, armor.getValue());
+        Vector velocity = handle.getVelocity();
+        double fallSpeed = Math.max(0.0D, -velocity.getY() * 20.0D);
+        CombatSituation situation = CombatSituation.builder()
+                .distanceToTarget(distance)
+                .heightAboveTarget(handle.getLocation().getY() - target.getLocation().getY())
+                .fallSpeed(fallSpeed)
+                .ownHealth(handle.getHealth())
+                .targetHealth(target.getHealth())
+                .targetArmor(targetArmor)
+                .hasMace(mace != null && !mace.getType().isAir())
+                .hasElytra(Bodies.count(inventory, Material.ELYTRA) > 0)
+                .hasWindCharge(Bodies.count(inventory, Material.WIND_CHARGE) > 0)
+                .hasShield(Bodies.count(inventory, Material.SHIELD) > 0)
+                .hasBow(Bodies.count(inventory, Material.BOW) > 0)
+                .hasCrossbow(Bodies.count(inventory, Material.CROSSBOW) > 0)
+                .hasTrident(Bodies.count(inventory, Material.TRIDENT) > 0)
+                .hasEnderPearl(Bodies.count(inventory, Material.ENDER_PEARL) > 0)
+                .hasWaterBucket(Bodies.count(inventory, Material.WATER_BUCKET) > 0)
+                .elytraDeployed(handle.isGliding())
+                .targetBlocking(target instanceof Player && ((Player) target).isBlocking())
+                .inRain(handle.getWorld().hasStorm())
+                .inWater(handle.isInWater())
+                .fireworks(Bodies.count(inventory, Material.FIREWORK_ROCKET))
+                .maceHasDensity(KitItems.level(mace, "density") > 0)
+                .maceHasBreach(KitItems.level(mace, "breach") > 0)
+                .maceHasWindBurst(KitItems.level(mace, "wind_burst") > 0)
+                .build();
+        return plugin.commander().plan(situation);
+    }
+
+    private static boolean hasWindCharge(Player handle) {
+        return Bodies.find(handle.getInventory(), Material.WIND_CHARGE) >= 0;
+    }
+
+    /**
+     * Throws one genuine Bukkit Wind Charge toward a target and consumes one
+     * item only after a valid projectile has spawned. Wind charges have their
+     * own vanilla burst; no explosion or projectile-cancellation hook is added.
+     */
+    private static boolean throwWindCharge(Player handle, LivingEntity target) {
+        PlayerInventory inventory = handle.getInventory();
+        int slot = Bodies.find(inventory, Material.WIND_CHARGE);
+        if (slot < 0) {
+            return false;
+        }
+        Vector velocity = target.getEyeLocation().toVector()
+                .subtract(handle.getEyeLocation().toVector());
+        if (velocity.lengthSquared() < 1.0e-6D) {
+            return false;
+        }
+        velocity.normalize().multiply(1.35D);
+        Bodies.hold(handle, slot);
+        try {
+            WindCharge projectile = handle.launchProjectile(WindCharge.class, velocity);
+            if (projectile == null || !projectile.isValid()) {
+                return false;
+            }
+            projectile.setIsIncendiary(false);
+            ItemStack stack = inventory.getItem(slot);
+            if (stack != null && stack.getType() == Material.WIND_CHARGE) {
+                if (stack.getAmount() <= 1) {
+                    inventory.setItem(slot, null);
+                } else {
+                    stack.setAmount(stack.getAmount() - 1);
+                }
+            }
+            handle.swingMainHand();
+            return true;
+        } catch (RuntimeException launchFailure) {
+            return false;
+        }
+    }
+
+    /** Holds the selected Commander mace tactic, otherwise sword first and axe second. */
+    private static void holdMeleeWeapon(Player handle, boolean preferMace) {
         PlayerInventory inv = handle.getInventory();
         ItemStack held = inv.getItemInMainHand();
+        if (preferMace) {
+            if (held != null && held.getType() == Material.MACE) {
+                return;
+            }
+            int mace = Bodies.find(inv, Material.MACE);
+            if (mace >= 0) {
+                Bodies.hold(handle, mace);
+                return;
+            }
+        }
         if (held != null && (held.getType().name().endsWith("_SWORD") || held.getType().name().endsWith("_AXE"))) {
             return;
         }
@@ -558,6 +687,7 @@ public final class CombatBrain {
             return;
         }
         mind.combatTarget = target;
+        mind.combatPursuit = true;
         mind.combatUntil = brain.now() + Math.max(20, ticks);
         if (plugin.chatGate() != null) {
             plugin.chatGate().event("combat.ordered", "name", body.profileName(),

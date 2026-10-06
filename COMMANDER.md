@@ -3,11 +3,12 @@
 One named Null that spawns from a portal, wears one configured skin, carries a loadout you edit
 in a GUI, and fights with a real mace/elytra technique library.
 
-> ### ⚠️ Status: written, not run
-> **None of this has ever been compiled.** It was authored in a sandbox with no JDK and no route
-> to Mojang's API, so the skin lookup, the GUI and the spawn have **never executed**. The
-> technique library in `core` is pure logic and is covered by unit tests, but those tests have
-> never been *run* either. Treat everything here as "authored, awaiting a first build".
+> ### ⚠️ Status: implemented; current follow-up edits are unverified
+> The repository records earlier core and Paper 1.21.11 smoke-test runs; see `STATUS.md` for
+> their exact scope. This working tree has since received additional combat, kit, chat, death,
+> naming and configuration edits. It has no Java runtime available, so those latest changes have
+> **not** been rebuilt or run. Do not treat the historical results as verification of the current
+> working tree.
 
 ---
 
@@ -45,8 +46,9 @@ silently doing nothing.
 
 ## The skin: configurable, for Nulls and the Commander
 
-Every Null and the Commander wear the skin of a Minecraft account **you choose**. Set it in
-`config.yml`:
+Every Null and the Commander can wear a signed skin from a Minecraft account **you choose**, a
+pasted signed texture, or a custom PNG signed through MineSkin. Configure account names and signed
+texture data in `config.yml`:
 
 ```yaml
 skins:
@@ -57,11 +59,29 @@ skins:
   commander: ""
 ```
 
-Two independent values. Leave `commander` empty and it inherits `nulls`, so setting one line
-changes every NPC.
+Two independent account names. Leave `commander` empty and it inherits the Null skin, so one
+setting can cover every NPC.
 
-You can also override without editing any file, which is handy when the name turns out to be
-wrong and the server is already running:
+### Registering a custom skin PNG
+
+Place the image at `plugins/NullArmy/skins/null.png`. A PNG by itself is not a usable Minecraft
+player texture: the plugin must obtain a signed texture value and signature. Configure a MineSkin
+API key, preferably through an environment variable:
+
+```yaml
+skins:
+  mineskin:
+    api-key: "env:MINESKIN_API_KEY"
+```
+
+The plugin uploads and polls asynchronously, then caches MineSkin's signed result. The literal
+key may be configured, but `env:NAME` is safer; the resolved secret is hidden from diagnostics and
+is never forwarded across redirects. Alternatively, paste an already-signed pair into
+`skins.value` and `skins.signature`, or use a trusted `skins.proxy-url`. Unsigned PNG bytes or a
+value without a signature are never applied.
+
+You can also override the account names without editing any file, which is handy when a name
+turns out to be wrong and the server is already running:
 
 ```
 -Dnullarmy.skin.null=SomeName
@@ -79,25 +99,25 @@ wrong and the server is already running:
 
 ### How the skin is resolved
 
-`SkinResolver` tries four sources, cheapest first:
+`SkinChain` resolves skins in this order:
 
 | # | Source | Where | Notes |
 | --- | --- | --- | --- |
-| 1 | **Memory** | in-process | Already resolved this session |
-| 2 | **Disk cache** | `plugins/NullArmy/skins/<name>.skin` | Written after the first successful fetch. Server restarts are instant and work offline. |
-| 3 | **Bundled** | `skins/<name>.skin` inside the jar | Lets you ship the skin permanently — **zero network, ever**. This is why the jar may be large. |
-| 4 | **Network** | Mojang's API | **Async only.** Never on the main thread. |
+| 1 | **Signed config texture** | `skins.value` + `skins.signature` | Both are required; no network. |
+| 2 | **Custom PNG** | `plugins/NullArmy/skins/null.png` via MineSkin | Upload/poll is asynchronous; the signed result is cached. |
+| 3 | **Trusted proxy** | `skins.proxy-url` | Must return a signed texture pair. |
+| 4 | **Account skin** | `skins.nulls` / `skins.commander` via Mojang | Existing in-memory, disk and bundled caches are tried before network. |
 
-The network path is exactly the two calls every skin plugin makes:
+Mojang's account lookup uses two calls:
 
 ```
 GET https://api.mojang.com/users/profiles/minecraft/<name>            -> UUID
 GET https://sessionserver.mojang.com/session/minecraft/profile/<uuid> -> textures value + signature
 ```
 
-**Both halves are required.** A texture value without Mojang's signature is rejected by the
-client, so if either is missing the plugin leaves the profile alone rather than pretending it
-applied a skin (`IMPLEMENTATION_PLAN.md` A-05).
+**Both halves are required.** A texture value without a valid signature is rejected by the client;
+if either is missing the plugin leaves the profile alone rather than pretending it applied a skin.
+All network resolution happens off the main thread.
 
 ### Changing the skin owner
 
@@ -151,13 +171,14 @@ row 5 : [Clear]  [Save and close]  [Cancel]  [info]
 It is a **blueprint editor, never a duplicator**: the items come from your own inventory, and
 nothing is created out of nothing.
 
-### Known limitation, stated honestly
+### Item fidelity
 
-The loadout crosses into the version-neutral NMS layer as `{slot, material name, count}`
-(`nms:api` has no dependency on the server, so it cannot carry Bukkit `ItemStack`s). That means
-**material and count survive; enchantments, custom names and NBT do not.** Adding NBT support
-means either giving `nms:api` a server dependency or serialising item NBT as a string — both are
-reasonable, neither is done.
+The GUI and `commander.yml` store Bukkit `ItemStack`s, and the live Paper 1.21.11 path applies
+cloned full stacks directly to the Commander's inventory. Enchantments, potion metadata, names and
+other serializable item data therefore survive save/load on that path. The version-neutral
+`LoadoutSlot` fallback carries only slot, material and count; an adapter that cannot expose the
+Bukkit player handle cannot preserve the rest of an item's metadata. Armor trims are normalized on
+application: only the Commander's chestplate receives the configured white quartz trim.
 
 ---
 
@@ -187,9 +208,12 @@ The GUI mirrors that layout, so what you see is what the Commander actually carr
 
 ## Combat: mace and elytra
 
-The Commander picks techniques from `PvpArsenal` — **25 techniques** across three disciplines.
-The selector is **pure and deterministic**: same situation, same choice, every time. No
-randomness, no I/O, no Bukkit — so it is unit tested with nothing but a JRE.
+`PvpArsenal` contains **25 deterministic techniques** across mace, elytra and movement. The
+pure selector is covered by dependency-free core tests. In live combat, the Commander builds a
+situation from its inventory, target and fall state, then currently executes supported smash,
+Wind Burst, Density and elytra-dive mace choices through vanilla `Player#attack`. Shield-break,
+pearl, water-placement and flight-controller entries are still planning-library strategies, not
+implemented live actions.
 
 ### Mace (12)
 
@@ -276,20 +300,20 @@ optional.
 
 ---
 
-## What isn't done
+## Limits and verification
 
-Stated plainly so it isn't mistaken for working code:
+- The current working tree has not been rebuilt after its latest follow-up edits because this
+  workspace has no Java runtime. Earlier build and Paper smoke-test results are historical; see
+  `STATUS.md` and do not treat them as verification of the present diff.
+- The live Commander integration currently selects supported mace weapon choices only. Elytra
+  flight control, pearl movement, water placement, crossbow combos and other library entries are
+  not executed yet; they must not be presented as working tactics.
+- A real client should still verify the visible skin, chestplate trim, portal entrance and GUI
+  appearance after a successful build. Skin tests using local stubs do not prove external MineSkin
+  or Mojang availability.
 
-- ❌ **Nothing has been compiled.** Not once.
-- ❌ The GUI has never been opened; the click-handler slot maths is only checked by a small unit
-  test in `core`.
-- ❌ The skin has never been fetched — the sandbox has no route to `api.mojang.com`.
-- ❌ The Commander does not yet *call* the technique selector during real combat; `plan()` is
-  wired in but no AI tick drives it yet.
-- ❌ NBT/enchantments are not preserved in the loadout (see above).
-
-See [`BUILD_TUTORIAL.md`](BUILD_TUTORIAL.md) for how to produce the first real jar, and
-[`STATUS.md`](STATUS.md) for the feature-by-feature picture.
+See `BUILD.md` for the verification workflow and `STATUS.md` for the broader implementation
+snapshot and remaining blockers.
 
 ---
 

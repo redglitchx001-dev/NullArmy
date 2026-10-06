@@ -10,7 +10,7 @@ import java.util.Set;
 /**
  * Local validation for a {@link BlockPlan}.
  *
- * <p>This is the safety gate BuilderAgent's JSON must pass before a single
+ * <p>This is the safety gate a deterministic local build plan must pass before a single
  * Null moves. Spec 7: "The local builder checks inventory, support, placement,
  * protections, cost, and path before execution."</p>
  *

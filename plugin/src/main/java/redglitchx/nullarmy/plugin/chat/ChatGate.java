@@ -27,11 +27,11 @@ import java.util.logging.Logger;
  *   <li>the summon-count question and its confirm/cancel answers;</li>
  *   <li>the Commander's own conversation lines ({@link #commanderSay}).</li>
  * </ol>
- * <p>Everything else - deaths, arrivals, kit reports, missions, the Totem Of Null
- * shutdown, unstacking, portal clean-up - is an <b>event</b>: it goes to the
+ * <p>Everything else - arrivals, kit reports, missions, the Totem Of Null
+ * shutdown, unstacking and portal clean-up - is an <b>event</b>: it goes to the
  * console and to the {@code /null status} event log ({@link #event}) and never
- * to chat. Vanilla's own death and advancement broadcasts for Nulls are
- * cleared by the lifecycle listener and counted here.</p>
+ * to chat. Vanilla kill/death messages are intentionally preserved, just as
+ * they are for a player; Null advancements remain silenced.</p>
  *
  * <p>The counters exist so the self test can prove the law with numbers rather
  * than by reading code.</p>
@@ -49,6 +49,7 @@ public final class ChatGate {
     private final AtomicInteger commanderLines = new AtomicInteger();
     private final AtomicInteger eventCount = new AtomicInteger();
     private final AtomicInteger vanillaSilenced = new AtomicInteger();
+    private final AtomicInteger vanillaDeathMessages = new AtomicInteger();
     private final AtomicInteger vanillaLeaked = new AtomicInteger();
     private volatile String lastCommanderLine = "";
 
@@ -68,18 +69,16 @@ public final class ChatGate {
     }
 
     /**
-     * A public line spoken by the Commander: gradient brand, the Commander's
-     * plain name, the text. The Commander is in the tab list like a player, so
-     * this reads as a player talking.
+     * A public line spoken by the Commander as {@code Name: message}. The
+     * Commander is in the tab list like a player, so this reads like a player
+     * talking rather than a plugin announcement.
      */
     public void commanderSay(String commanderName, String text) {
         if (text == null || text.trim().isEmpty()) {
             return;
         }
         String name = commanderName == null || commanderName.isEmpty() ? "NullCommander" : commanderName;
-        Component line = PluginText.gradientComponent("[NullArmy]")
-                .append(Component.text(" "))
-                .append(Component.text(name, NamedTextColor.WHITE))
+        Component line = Component.text(name, NamedTextColor.WHITE)
                 .append(Component.text(": ", NamedTextColor.GRAY))
                 .append(Component.text(text.trim(), NamedTextColor.WHITE));
         commanderLines.incrementAndGet();
@@ -137,12 +136,17 @@ public final class ChatGate {
 
     // ---------------------------------------------------------- vanilla guard
 
-    /** A vanilla broadcast for a Null (death, advancement) was cleared. */
+    /** A vanilla broadcast for a Null advancement was cleared. */
     public void vanillaSilenced() {
         vanillaSilenced.incrementAndGet();
     }
 
-    /** A vanilla broadcast for a Null got through (checked at MONITOR). */
+    /** A Null's normal vanilla kill/death message was retained. */
+    public void vanillaDeathAllowed() {
+        vanillaDeathMessages.incrementAndGet();
+    }
+
+    /** A non-death vanilla broadcast for a Null got through (checked at MONITOR). */
     public void vanillaLeaked(String what) {
         vanillaLeaked.incrementAndGet();
         if (logger != null) {
@@ -165,6 +169,8 @@ public final class ChatGate {
     public int events() { return eventCount.get(); }
 
     public int vanillaSilencedCount() { return vanillaSilenced.get(); }
+
+    public int vanillaDeathMessageCount() { return vanillaDeathMessages.get(); }
 
     public int vanillaLeakedCount() { return vanillaLeaked.get(); }
 

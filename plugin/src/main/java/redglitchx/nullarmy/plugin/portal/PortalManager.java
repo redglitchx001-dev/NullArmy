@@ -193,7 +193,11 @@ public final class PortalManager implements Listener, Reloadable {
             return null;
         }
         try {
-            if (!adapter.isSpawnSafe(portal.worldName(), spot)) {
+            boolean insideMouth = portal.frame().containsBody(spot.x(), spot.y(), spot.z());
+            boolean safe = insideMouth
+                    ? adapter.isPortalSpawnSafe(portal.worldName(), spot)
+                    : adapter.isSpawnSafe(portal.worldName(), spot);
+            if (!safe) {
                 return null;
             }
             if (!adapter.isEntitySpaceFree(portal.worldName(), spot)) {

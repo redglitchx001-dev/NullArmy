@@ -479,7 +479,8 @@ public final class SquadManager implements Reloadable {
                 break;
             }
             try {
-                NullBody body = spawnWithRetry(owner, worldName, spot, airborne, used);
+                PortalBuilder.BuiltPortal door = pendingDoors.get(spot);
+                NullBody body = spawnWithRetry(owner, worldName, spot, airborne, door != null, used);
                 String problem = verifyBody(body);
                 if (problem != null) {
                     Guard.attempt(logger, "cleaning up an unusable Null", body::destroy);
@@ -488,7 +489,6 @@ public final class SquadManager implements Reloadable {
                 }
                 equip(body, squad);
                 squad.members.add(body);
-                PortalBuilder.BuiltPortal door = pendingDoors.get(spot);
                 if (door != null) {
                     door.assign(body.uuid());
                     if (plugin.brain() != null) {
@@ -534,9 +534,10 @@ public final class SquadManager implements Reloadable {
      * cells before giving up. A refusal never latches the spawn breaker: the next
      * cell, and the next summon, may be perfectly fine.
      */
-    NullBody spawnWithRetry(UUID owner, String worldName, Vec3d spot, boolean airborne, List<Vec3d> used) {
+    NullBody spawnWithRetry(UUID owner, String worldName, Vec3d spot, boolean airborne,
+                            boolean portalMouth, List<Vec3d> used) {
         try {
-            return spawnOne(owner, worldName, spot, airborne);
+            return spawnOne(owner, worldName, spot, airborne, portalMouth);
         } catch (VersionAdapter.SpawnRefusedException refusal) {
             for (Vec3d cell : neighbourRing(spot)) {
                 if (tooClose(used, cell, MIN_SPOT_SPACING)) {
@@ -695,6 +696,11 @@ public final class SquadManager implements Reloadable {
      * the breaker and the failure reporting all live here exactly once.</p>
      */
     public NullBody spawnOne(UUID owner, String worldName, Vec3d spot, boolean airborne) {
+        return spawnOne(owner, worldName, spot, airborne, false);
+    }
+
+    private NullBody spawnOne(UUID owner, String worldName, Vec3d spot, boolean airborne,
+                              boolean portalMouth) {
         if (!Bukkit.isPrimaryThread()) {
             throw new IllegalStateException("Nulls may only be created on the main server thread");
         }
@@ -722,7 +728,7 @@ public final class SquadManager implements Reloadable {
 
         VersionAdapter.SpawnRequest request = new VersionAdapter.SpawnRequest(
                 owner, uniqueProfileName(), worldName, spot, 36 * 64,
-                skinValue, skinSignature, airborne, crowdTest);
+                skinValue, skinSignature, airborne, crowdTest, portalMouth);
         try {
             NullBody body = adapter.spawnNull(request);
             if (body == null) {
@@ -845,10 +851,9 @@ public final class SquadManager implements Reloadable {
     /**
      * Names handed out since the last prune.
      *
-     * <p>{@code allMembers()} cannot be the only guard: a squad being spawned
-     * names its bodies one after another, and a body only joins the roster when
-     * it exists - so two members could be given the same word. This set is the
-     * memory of what has already been issued, pruned against the live army.</p>
+     * <p>{@code allMembers()} cannot be the only guard: a squad is spawned one
+     * body at a time. This set remembers names issued during that sequence and
+     * is pruned against the current roster so it cannot grow without bound.</p>
      */
     private final java.util.Set<String> issuedNames = new java.util.HashSet<>();
 
@@ -876,28 +881,14 @@ public final class SquadManager implements Reloadable {
             // Prune against reality rather than growing for ever.
             issuedNames.retainAll(taken);
         }
-        // v4 (P-03): the generator now knows what is taken, so a readable word
-        // list can guarantee uniqueness without falling back to a hex blob.
+        // The generator loops until it has a fresh 16-character alphanumeric
+        // candidate. Remember it immediately so bodies in this same spawn batch
+        // cannot collide before they join allMembers().
         java.util.Set<String> lowered = new java.util.HashSet<>(taken);
         lowered.addAll(issuedNames);
-        for (int attempt = 0; attempt < 24; attempt++) {
-            String candidate = NameGenerator.next(lowered);
-            if (candidate != null && !lowered.contains(candidate.toLowerCase(Locale.ROOT))) {
-                issuedNames.add(candidate.toLowerCase(Locale.ROOT));
-                return candidate;
-            }
-        }
-        // The whole word list is exhausted: suffixing keeps the name legal and
-        // unique rather than handing out one that is already taken, and it is
-        // still readable rather than a UUID fragment.
-        String base = NameGenerator.next(lowered);
-        if (base == null) {
-            base = "Null";
-        }
-        String stem = base.length() > 12 ? base.substring(0, 12) : base;
-        String last = stem + "_" + Long.toString(System.nanoTime() % 10000L);
-        issuedNames.add(last.toLowerCase(Locale.ROOT));
-        return last;
+        String candidate = NameGenerator.next(lowered);
+        issuedNames.add(candidate.toLowerCase(Locale.ROOT));
+        return candidate;
     }
 
     /** Plays the summon portal effects. Cosmetic, throttled, never fatal. */
@@ -1356,50 +1347,6 @@ public final class SquadManager implements Reloadable {
      * that would have to step off a ledge or into a wall simply stop and wait -
      * they never teleport and never clip.</p>
      */
-    /**
-     * Small signs of life: now and then a Null looks around, or turns to its
-     * owner when one walks past. Cosmetic, budgeted, and silent when the plugin
-     * config has it switched off.
-     */
-    private void idleGesture(Squad squad, long tickCounter) {
-        if (squad == null || squad.members.isEmpty()) {
-            return;
-        }
-        if (!plugin.pluginConfig().idleGesturesEnabled()) {
-            return;
-        }
-        // Roughly once every 12 seconds per squad, offset by owner so squads do
-        // not all turn at the same instant.
-        long phase = Math.floorMod(squad.owner.hashCode(), 240L);
-        if (Math.floorMod(tickCounter + phase, 240L) != 0L) {
-            return;
-        }
-        Player owner = Bukkit.getPlayer(squad.owner);
-        double radius = 24.0;
-        for (NullBody body : squad.members) {
-            try {
-                Vec3d here = body.bodyPosition();
-                if (owner != null && owner.getWorld() != null
-                        && owner.getWorld().getName().equals(squad.worldName)) {
-                    Location at = owner.getLocation();
-                    if (at != null) {
-                        Vec3d look = new Vec3d(at.getX(), at.getY() + 1.4, at.getZ());
-                        if (here.distanceTo(look) <= radius) {
-                            body.lookAt(look);
-                            continue;
-                        }
-                    }
-                }
-                // Otherwise glance at a nearby point, as a standing guard would.
-                double angle = Math.random() * Math.PI * 2.0;
-                body.lookAt(new Vec3d(here.x() + Math.cos(angle) * 6.0,
-                        here.y() + 0.4, here.z() + Math.sin(angle) * 6.0));
-            } catch (Throwable t) {
-                logger.log(Level.FINE, "[NullArmy] idle gesture skipped: " + Guard.describe(t));
-            }
-        }
-    }
-
     private void steer(Squad squad, long tickCounter) {
         if (squad.objective == Objective.NONE || squad.members.isEmpty()) {
             return;

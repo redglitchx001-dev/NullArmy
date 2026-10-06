@@ -1,0 +1,68 @@
+NULLARMY — IMPORTANT SETUP AND SAFETY NOTES
+Updated: 2026-10-06
+
+CUSTOM NULL SKIN
+1. On the Minecraft server, create: plugins/NullArmy/skins/
+2. Put the PNG at exactly: plugins/NullArmy/skins/null.png
+3. Minecraft will not accept unsigned PNG bytes as a skin texture. Configure a MineSkin
+   API key or provide an already-signed texture value/signature pair. Use env:NAME for
+   an environment-variable API key; do not paste or publish secrets in logs or chat.
+4. A missing/invalid custom skin must not prevent Nulls from spawning. Use /null skin
+   to inspect the resolved skin status.
+
+NULL IDENTITY AND BEHAVIOUR
+- Null profile names are random alphanumeric names, beginning with a letter and
+  containing at least one digit.
+- Nulls do not make random ambient glances or rotate their heads independently.
+  Intentional attention and explicit combat/formation looks turn head and body together.
+- Nulls do not pursue distant enemies unless explicitly ordered to attack, shoot, or hunt.
+- /null formation wall sets a spaced, front-facing walking rank; the AI action policy recognizes
+  the same formation names as the local formation planner.
+- Building is deterministic and local. AI endpoints do not design or execute builds.
+
+SUMMON DOORWAYS
+- At a safe site, a summon uses a temporary obsidian frame with real NETHER_PORTAL
+  blocks in its opening. Nulls are created inside and physically walk out; portal
+  travel events for the temporary doorway are cancelled, and all changed blocks are
+  restored. This summon path does not teleport Nulls or send them to another dimension.
+- Each doorway is limited to one or two Nulls (the configured maximum is clamped to 2).
+  If a safe doorway cannot be built, the plugin must use a verified safe-ground fallback
+  and report it honestly.
+
+COMMANDER KIT AND LIFECYCLE
+- The Commander is damageable and receives the shared kit plus Elytra; only the Commander's
+  chestplate gets a white trim. Ordinary Nulls get the shared kit without Elytra or trims.
+- Totem pop and shutdown are silent. Nulls die through the vanilla death pipeline, drop
+  their items, and show normal kill/death messages; /kill <NullName> is supported.
+
+COMMANDER CHAT AND RELOAD
+- /null chat private and /null chat public select the reply visibility for that player.
+  Public Commander replies use NAME: MESSAGE. /null chat off disables conversation
+  routing without disabling recognized squad orders.
+- /null reload reapplies reloadable plugin settings. It does not blindly turn on
+  protection-sensitive or destructive options.
+
+EXPLOSIVES, WIND CHARGES, AND SERVER LIST
+- Do not globally cancel ordinary vanilla actions, explosions, or Wind Charges.
+- Explosions may still affect entities when block damage is disabled; block griefing
+  remains separately protected and opt-in.
+- Leave the server-list MOTD, displayed player counts, max-player count, and sample alone.
+
+AI AND TELEPORT-CANNON SCOPE
+- Configure endpoints per explicitly AI-enabled role in config.yml / ENDPOINTS.md.
+  BuilderAgent is a legacy connectivity-only key, not a build planner.
+- `/null tp` is a separate, admin-permission-gated Ender Pearl cannon: it gives a
+  nearly-broken tagged fishing rod. Reeling after the hook sticks in a block launches
+  one real falling pearl per live Null (and the owner's Commander, if present), from
+  varied heights and spaced positions. Each Null spends its own pearl; all bodies and
+  the target must be in the same world, and landing columns must be loaded and safe.
+  It is not AI-controlled and does not alter physical summoning. Source behavior is
+  implemented but still needs Java compilation and Paper runtime verification.
+- The 471-item mechanics catalogue is not complete. See STATUS.md and TRACEABILITY.md;
+  historical `not started` labels are not a current per-item audit.
+
+BUILD / VALIDATION
+- Build and test with the Java version declared by the Gradle/Paper toolchain.
+- A source edit is not runtime-verified until the project builds and the relevant
+  Paper self-tests pass. Do not treat historical test results as validation of newer
+  unbuilt changes.

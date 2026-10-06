@@ -135,9 +135,10 @@ public final class ConfigMigration {
             }
 
             File backup = backup(file);
-            // A server that answered a pre-v4 switch keeps its answer: the v4
-            // key is appended carrying the old value, not the shipped default.
-            Map<String, Object> additions = ConfigMerge.foldLegacy(existing, result.additions());
+            // Explicit current keys always win in ConfigMerge.merge. Legacy
+            // death-suppression keys are inert: Null deaths now use vanilla
+            // drops by default, while an existing drops.enabled value remains.
+            Map<String, Object> additions = result.additions();
             String block = renderBlock(additions, version, backup);
             Files.write(file.toPath(), block.getBytes(StandardCharsets.UTF_8),
                     StandardOpenOption.APPEND, StandardOpenOption.CREATE);

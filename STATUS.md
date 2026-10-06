@@ -1,11 +1,12 @@
 # NullArmy — Status
 
-**Last updated:** 2026-10-05 · **Current state:** v4 — every dossier promise (P-01…P-12) and lore
-law (L-01…L-08) is implemented in place on top of v3. Core suite **92/92**. The live selftest
-(118 checks: 26 original + S-27…S-84 + S-85…S-115) is green on CI run **37322972345**:
-`RESULT: PASS 118 passed, 0 failed`. `./gradlew build` produced the verified Paper plugin jar
-`plugin/build/libs/NullArmy-0.1.0-dev.jar` and the live Paper 1.21.11 runtime smoke reported
-`RUNTIME SMOKE: PASS - verified on a live Paper server.`
+**Last updated:** 2026-10-06 · **Current state:** follow-up corrections are in progress. The historical
+CI results below predate the current edits. This Arena workspace has no Java runtime, so current
+changes (random names, chat modes, death/kill handling, shared kit/Commander trim, coupled yaw,
+explicit-only pursuit, supported Commander mace selection, unchanged server-list values, real
+summon portal blocks, the two-Null doorway cap, wall formation, the `/null tp` pearl cannon, and
+selftests S-95/S-116) have not been built or run yet. The prior snapshot's 118-check CI result and Paper 1.21.11 smoke result
+remain historical; they do not verify these follow-up edits.
 
 Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit + architecture) ·
 [`TRACEABILITY.md`](TRACEABILITY.md) (471-item register) ·
@@ -14,7 +15,7 @@ Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit +
 
 ---
 
-## Delta on `arena/01a10c41-nullarmy` (v4: an army, not a crowd)
+## Delta on `arena/01a10d0b-nullarmy` (v4: an army, not a crowd)
 
 Verified the same way as v3: the build ends with `runtimeSmoke`, a headless Paper 1.21.11 server
 that runs `/null selftest` and fails the build on any FAIL line, any NullArmy SEVERE line or a
@@ -25,28 +26,28 @@ tick-loop fault. Root causes, the full promise table and the settings are in
 | --- | --- | --- |
 | P-01 melee reach is exactly vanilla, never through a wall | S-85 S-86 | ✅ |
 | P-02 swing cadence ≥ 5 in 3 s, crits ×1.5 every 1-2 swings | S-87 S-88 | ✅ |
-| P-03 readable unique names ≤ 16 chars, real obsidian portals | S-89 S-90 | ✅ |
-| P-04 the owner and the Commander are never hit; a stranger's order moves nothing | S-91 S-92 | ✅ |
+| P-03 unique random 16-character alphanumeric names, real obsidian portals | S-89 S-90 | ✅ (current name check pending run) |
+| P-04 Nulls never target their owner, Commander, mates, or protected players; the Commander remains damageable by real players | S-91 S-92 | ✅ (current edits pending run) |
 | P-05 no friendly fire; imperfect aim (0.65 → 40-80 % at 15 blocks) | S-93 S-94 | ✅ (S-94 BLOCKED: 30 aimed arrows needs 45 s and a still target; the live aim model is sampled 3000× instead) |
-| P-06 the Commander's boss kit is complete; a saved loadout is never overwritten | S-95 | ✅ |
-| P-07 `a throne`, `bridge in front of me`, endpoint resolution and `/null ai test` | S-96 S-97 S-98 | ✅ |
+| P-06 shared kit, Commander Elytra/white trim, saved loadout preserved; supported mace selection in live combat | S-95 + new core selector check | ✅ in source (current kit, trim, and combat edits pending run) |
+| P-07 deterministic local construction; `a throne`, `bridge in front of me`, endpoint connectivity test | S-96 S-97 S-98 | ✅ (current builder edits pending run) |
 | P-08 wither-blue skulls, no TNT minecarts, opt-in + confirm, block damage off | S-99 S-100 | ✅ |
-| P-09 natural chat orders: build, bridge, destroy refused, stranger ignored | S-106 … S-109 | ✅ |
-| P-10 a dead Null drops its armour, hands and pack | S-110 | ✅ |
-| P-11 the army is in the server list: real + Nulls / 2026, MOTD, hover sample | S-111 S-112 | ✅ |
-| P-12 `/null name` renames the Commander live; @name and the name prefix work | S-113 | ✅ |
+| P-09 natural chat orders, refusal/ownership gates, `/null kill` pursues only valid targets | S-106 … S-109 | ✅ (current chat/kill edits pending run) |
+| P-10 a dead Null drops its armour, hands and pack and keeps vanilla death messages | S-110 | ✅ (current death/kill edits pending run) |
+| P-11 server-list MOTD, current/max player counts, and sample remain untouched by NullArmy | — | ✅ (plugin customization removed; pending build/run) |
+| P-12 `/null name` renames the Commander live; public replies use `NAME: MESSAGE` | S-113 | ✅ (current chat-mode edits pending run) |
+| P-13 `/null tp` tagged rod, per-Null pearl accounting, safe varied drops | — | ⚠️ Source added; Paper build and runtime impact checks pending |
 | L-01 march + drill on one shared cadence, locked formation, cycling shapes | S-101 | ✅ |
 | L-02 auto-bridge a gap shallower than 4 blocks out of its own pack | S-102 | ✅ |
-| L-03 patrol for ever, head sweeps, a salute when the owner comes home | S-103 | ✅ |
+| L-03 patrol for ever, no ambient head sweeps, salute when the owner comes home | S-103 | ✅ |
 | L-04 camp life: ≥ 3 behaviours in 100 idle ticks, zero damage | S-104 | ✅ |
 | L-06 sneak + horn is the recall, never a new summon prompt | S-105 | ✅ |
 | L-07 hunt to the end: ≤ 2 chasers, the rest hold, regroup on the kill | S-114 | ✅ |
-| L-08 loot discipline: drops are picked up and counted | S-115 | ✅ |
+| L-08 loot discipline: drops are picked up and counted | S-115 | ✅ (drop handling edits pending run) |
 
-New core tests (11): the reach gate and its occlusion walk, the swing cadence and crit maths, the
-aim-skill error model, readable-name generation, the natural-order parser, death drops, the ping
-numbers, the march cadence and drill cycle, the throne plan, the bridge-ahead plan and the barrage
-pattern maths.
+New core tests (12): the reach gate and its occlusion walk, the swing cadence and crit maths, the
+aim-skill error model, random alphanumeric-name generation, the natural-order parser, death drops, the march
+cadence and drill cycle, the throne plan, the bridge-ahead plan, barrage pattern maths, supported-versus-planning-only Commander mace selection, and the legacy BuilderAgent's connectivity-only restriction.
 
 ---
 
@@ -64,19 +65,19 @@ Root causes and the in-game test walk-through are in [`RELEASE_NOTES.md`](RELEAS
 | B-02 broken config.yml: line/column/snippet, last good kept, safe migration, `/null config` | S-30 … S-35 | ✅ |
 | B-03 skin chain (value+signature → proxy → Mojang → skin.png), signature in GameProfile, live re-apply | S-36 … S-39 | ✅ |
 | B-04 12 Nulls in 3x3 spread to ≥0.8, none floating, pile detector | S-40 … S-43 | ✅ |
-| B-05 hittable, death animation, no drops, zero chat | S-44 … S-48 | ✅ (S-44 BLOCKED: probe strikes instead of a player) |
-| B-06 head follows walking and glances at a nearby watcher | S-49 S-50 | ✅ (S-50 BLOCKED: watcher point instead of a player) |
+| B-05 hittable, death animation, full drops by default, vanilla death messages retained | S-44 … S-48 | ✅ (historical check; current drop repair pending run; S-44 BLOCKED: probe strikes instead of a player) |
+| B-06 head follows walking and intentional attention rotates head/body together | S-49 S-50 | ✅ (current S-50 rewrite pending run) |
 | B-07 rotated square matrix within 0.3, no shared cells, no jitter | S-51 S-52 S-53 | ✅ |
-| B-08 silent horn refresh, template scan, zero broadcasts for death + shutdown | S-54 S-55 S-84 | ✅ |
-| B-09 public Commander reply on wake word and on its name; silence otherwise | S-56 S-57 S-58 | ✅ |
+| B-08 silent horn refresh, template scan, vanilla death messages retained, silent shutdown | S-54 S-55 S-84 | ✅ (current silence/death edits pending run) |
+| B-09 per-player OFF/PRIVATE/PUBLIC Commander chat; public `NAME: MESSAGE` replies | S-56 S-57 S-58 | ✅ (current chat-mode edits pending run) |
 | B-10 loadout editor swap is worn and survives reload (nulls.yml) | S-62 S-63 | ✅ |
-| B-11 netherite Prot IV kit as real items, no duplication | S-59 S-60 S-61 | ✅ |
+| B-11 shared enchanted kit, Commander Elytra/white trim, ordinary Nulls trim-free | S-59 S-60 S-61 S-95 | ✅ (current kit edits pending run) |
 | B-12 speed variance, eating restores health | S-64 S-65 | ✅ |
 | B-13 20 mixed valid frames, one-way, full restore, step-out ≤ 60 ticks | S-66 S-67 S-69 S-70 S-72 | ✅ (S-69 BLOCKED: pig instead of a thrown player) |
 | B-14 everything inside the zone; no site → explained, nothing built | S-68 S-71 | ✅ |
 | B-15 jump Δy ≥ 1.0 and lands, sprint > walk, never inside a wall, gesture ack | S-73 … S-76 | ✅ |
-| B-16 stub endpoint plan accepted, placed by hand, paced, from inventory | S-77 … S-80 | ✅ |
-| B-17 falling crit ×1.5, shield → 0, arrow leads a moving target | S-81 S-82 S-83 | ✅ |
+| B-16 deterministic local build plan, placed by hand, paced, from inventory | S-77 … S-80 | pending (current builder rewrite cannot be run without Java) |
+| B-17 crits, shields, bow aim, explicit-only pursuit and Wind Charges | S-81 S-82 S-83 | ✅ (current combat edits pending run) |
 
 New core tests (15): kit serialisation (enchantments/potions/counts) and v3 kit contents, legacy
 kit upgrade, offline planner (bridge, hut, gather), plan parser, plan validator, zone bounds,
@@ -181,10 +182,10 @@ A server has no GPU. These still need a human on a real client:
 | --- | --- |
 | **Arrival portals** | `PortalBuilder` builds a real temporary doorway (obsidian frame + `NETHER_PORTAL` interior) only on a site whose blocks are **all already air**, records every block it changes, and restores them after `portals.lifetime-ticks`, on `/null portals`, and on disable. Physics off, so nothing catches fire, falls or flows, and no second portal is created. `PortalManager` cancels `PlayerPortalEvent`/`EntityPortalEvent` for those blocks, so a Null's doorway never sends anybody to the Nether. `PortalPlan` (pure, unit-tested) picks a random 1…`portals.max-per-summon` doorways per summon and splits the Nulls between them at random; a Null that gets no doorway uses the verified safe-ground path and is **reported**, never dropped. |
 | **Totem Of Null** | Named exactly `The Totem Of Null`, carries the **real Curse of Vanishing**, keeps the `nullarmy:totem_of_null` persistent-data tag so renaming or moving it cannot break recognition. `TotemWatcher` treats exactly three things as destruction — it pops, a dropped totem takes damage, a dropped totem despawns (configurable) — and never a slot move, a rename, a chest or a reload. `ShutdownDirector` then walks every Null out one at a time with `totem.shutdown-delay-ticks` between them, Commander last, cancelling queued prompts and refusing new summons until it finishes. |
-| **Default kit** | `loadout.default-kit` (iron chestplate, shield offhand, sword/bow/arrows/golden apples/cooked food/pickaxe/ender pearls/water bucket/torches) is applied in `spawnOne` — the one place an NPC is born — and **verified by reading the NMS inventory back**. Armour and offhand go to slots 38 and 40 through the dedicated setters, because `setItem(36..40)` silently does nothing. Re-applying only writes missing slots, so nothing duplicates and an owner's edit survives. The Commander gets it only when no `commander.yml` loadout exists. |
+| **Default kit** | `loadout.default-kit` gives regular Nulls and the Commander a shared enchanted netherite soldier kit with bow/potions/food, building materials, mace, totems, Wind Charges and rockets. The Commander additionally gets an Elytra and white chestplate trim; regular Nulls get no Elytra or trims. Commander loadouts are preserved when owner-edited, and unedited legacy defaults migrate safely. |
 | **Names and skins** | The configured skin account is the **texture source only**. Every Null gets its own unique random alphanumeric profile name of at most 16 characters; the Commander keeps its configured name, stripped to plain `A-Za-z0-9_` so it presents exactly like a normal player. `nulls.show-in-tab-list: false` keeps the info entry (needed for rendering) but omits `UPDATE_LISTED`. |
 | **Reload / config migration** | The reason `/null reload` looked broken: the file on disk never changed. `ConfigMigration` now compares the shipped `config.yml` with the owner's, **appends** only the missing keys as a labelled block (so every comment and value the owner wrote stays byte-for-byte), writes a timestamped backup next to it, and `/null reload` reports exactly which keys were added. |
-| **Chat** | Only the Commander holds a conversation; `/null chat null` says so and points at the orders Nulls do take. Nulls answer orders only. Commander lines print as `[NullArmy] <plain name>: <text>` — the brand prefix, then the name with no colours and no symbols. |
+| **Chat** | Per-player OFF/PRIVATE/PUBLIC modes are separate from private conversation history. `/null chat public` enables addressed public replies (`Name: message`), `/null chat private` opens a private session, and `/null chat off` closes routing. Nulls answer orders only. |
 | **AI coordination** | `SquadCoordinator` gives the Commander a live snapshot (every Null's health, position, stored role and kit state, the objective, formation, tactics, arrival note, portal/cannon/airdrop/mission/shutdown state) and accepts **only** a typed action from a closed allowlist (`report, follow, come, guard, formation, tactics, heal, roles, portal, mission-start, mission-stop, airdrop, cannon, dismiss`). `ActionPolicy` re-checks permissions, caps, policy gates and the shutdown state against values read from the server, and `cannon`/`airdrop`/`dismiss` always need `/null confirm`. A model can never run a console command, grant a permission, enable griefing, ban or kill. With no endpoint configured the deterministic local coordinator takes the safe subset and `/null ai` says plainly that model-backed help needs an endpoint. |
 | **Missions** | `MissionRunner` + `core.mission`: one objective for the whole army at a time (scout-outpost, corridor-rescue, banner-hold, null-trials, gate-vigil, ash-accord, supply-run), all original NullArmy content. Missions move, form up and report progress; they never destroy a block, spawn an explosive or attack a player. `/null mission start|stop|status`, permission `nullarmy.mission`. |
 | **Wither cannon** | The unused `SHOT_LIFETIME_TICKS` is now enforced, so a stuck shot ends instead of retrying forever. The launch site is validated as free air (a cart created inside a block never flies), delivery happens from the **highest point the cart actually reached** rather than the player's eye position, failed TNT spawns are counted and a shot gives up after three with an honest message, a shot that delivered nothing reports failure, and there is a cap of three concurrent shots. `/null status` and `/null debug` print the exact setting or permission that is missing when it cannot fire. |
@@ -208,8 +209,8 @@ still has no JDK. A Paper 1.21.11 live smoke test remains required before releas
 | **P2 — menu** | `/null menu` (`/null m`, `/null gui`) opens a themed 54-slot command center with a purple-to-cyan gradient title, live squad/system cards, permission-filtered actions and pagination. It has its own `InventoryHolder`, cancels every click and drag, and dispatches each action through the same `/null …` command executor path. Nothing in it can be taken. |
 | **P3 — spectacle (opt-in)** | `/null withercannon` (`/null cannon`) and `/null airdrop [count]` exist behind their own config blocks, the `policy.*` switches and a permission. Block damage needs a separate `blocks-damage` opt-in; without it the registered explosion handler empties each blast's block list. Every created entity is tracked so `/null stop`, `/null dismiss` and `onDisable` clean up. |
 | **P4 — commands** | The full tree is implemented with permission checks, usage lines and tab completion: `menu gui help status version features debug horn totem commander respawn loadout skin follow guard formation attack attackx come tp bring stop dismiss list info name heal equip drop portals clearskins reload wand build chat withercannon cannon airdrop ban kill`. Features that are not implemented say so and change nothing. |
-| **P5 — chat is an interface** | Wake-word orders in ordinary chat (`null attack Steve`, `null kill Steve`, `null eliminate Steve`, `null come`, `null stop`, `null heal` …) are stripped out of public chat and dispatched through the same `NullCommand` executor, so permissions, caps and policy gates are identical; per-player rate limit of 20 orders a minute; a player answering a summon prompt is never interrupted. `/null chat <null\|commander>` opens a private channel and `ChatBrain` drives the existing `ai.endpoints`/`ai.agents` config over the JDK HTTP client, off-thread, with the reply delivered on the main thread - and with no model configured the characters answer locally and `/null ai` says why. |
-| **P5 — movement and behaviour** | `/null portal [player]` walks Nulls through a visible portal (effects at both ends, verified arrival, opt-in via `mechanics.portal-travel`); `/null tactics` changes the real standoff (1.2/2.0/4.5 blocks); `/null emote`, `/null greet` and `/null inv` add body language and honesty; Nulls glance around and turn to face their owner on their own (`mechanics.idle-gestures`). |
+| **P5 — chat is an interface** | Wake-word orders in ordinary chat are dispatched through the same `NullCommand` executor, with permissions, caps and rate limits; summon answers are never interrupted. `/null chat public|private|off` selects each player's reply visibility independently of private conversation history. `ChatBrain` uses configured role endpoints for conversation only; construction remains deterministic and local. |
+| **P5 — movement and behaviour** | `/null portal [player]` walks Nulls through a visible portal (effects at both ends, verified arrival, opt-in via `mechanics.portal-travel`); `/null tactics` changes the real standoff (1.2/2.0/4.5 blocks); `/null emote`, `/null greet` and `/null inv` add body language and honesty; idle glances are removed, and explicit attention turns head/body together. |
 
 **Still unverified:** This checkout has no JDK, but GitHub Actions now compiles and packages the
 branch and passes the core checks. A Paper 1.21.11 live spawn/tick/packet-broadcast smoke test is
@@ -219,7 +220,9 @@ a live server to verify. The earlier NMS additions include `SpawnRequest.airborn
 
 ---
 
-## Phase state
+## Historical Phase 0 phase-state table — superseded
+
+The phase table below records the initial audit's handoff; it predates the later v3/v4 implementation and is not current.
 
 | Phase | Focus | Status |
 | --- | :---: | --- |
@@ -239,7 +242,7 @@ a live server to verify. The earlier NMS additions include `SpawnRequest.airborn
 ## 🔴 Blockers
 
 ### B-1 — Build environment unavailable (partially mitigated)
-No JDK or Gradle in this sandbox, and direct access to `repo.papermc.io` (Paper dev bundle), Maven Central, Gradle distributions and JDK downloads is unavailable. **A full build cannot run locally here.** GitHub Actions can resolve the Paper dev bundle and is now the only full compile; a green CI build still does not verify runtime behaviour. → Owner decision **D-2** in the plan.
+This sandbox has no `java` executable or configured `JAVA_HOME`; `./gradlew test` fails before Gradle can start. A JDK download probe also failed, so the wrapper cannot build locally here. **No compile or test result exists for the current edits.** Hosted GitHub Actions is the only full compile path; a green CI build still does not verify runtime behaviour. → Owner decision **D-2** in the plan.
 
 > **Partial mitigation (2026-10-04).** A local type-check now exists: the Eclipse batch
 > compiler (ECJ, from the VS Code Java language server bundle) running on a bundled JRE,
@@ -263,7 +266,12 @@ Paper 1.21.11 support ended **2026-06-15**; 1.21.10 ended **2026-01-17**. Every 
 
 ---
 
-## Core feature traceability
+## Historical Phase 0 core-feature traceability — stale
+
+> This 47-item table and its `not started` values were written during the initial Phase 0 audit,
+> before substantial source and runtime-test work. They are preserved as history, not current status.
+> Use the v3/v4 deltas at the top of this file and the stale-register warning in `TRACEABILITY.md`
+> until the per-feature audit is refreshed.
 
 Status vocabulary per spec: `implemented` · `partial` · `experimental` · `blocked by vanilla` · `version-specific` · `not started`
 
@@ -317,7 +325,7 @@ Status vocabulary per spec: `implemented` · `partial` · `experimental` · `blo
 | 32 | `/schematics` parser | 4 | `not started` | 7 |
 | 33 | Debug rejection-reason reporting | 9 | `not started` | 1 |
 
-**0 of 47 core features implemented. 0 of 471 catalogue mechanics implemented.**
+**Historical Phase 0 count only: 0 of 47 core features and 0 of 471 catalogue mechanics.** This is superseded and must not be read as the current implementation total.
 
 > **Why nothing is marked `implemented` yet.** The spec defines `implemented` as
 > *"complete and tested on a declared target version"*. Source now exists for a
@@ -333,7 +341,9 @@ Status vocabulary per spec: `implemented` · `partial` · `experimental` · `blo
 
 ---
 
-## Acceptance criteria (§10)
+## Historical Phase 0 acceptance-criteria snapshot — stale
+
+The unchecked rows below are the Phase 0 snapshot, not the later implementation/test ledger. Use the current v3/v4 tables at the top of this file.
 
 | # | Criterion | Status |
 | ---: | --- | :---: |
@@ -344,7 +354,7 @@ Status vocabulary per spec: `implemented` · `partial` · `experimental` · `blo
 | 5 | Skin/name/profile limits + collision-safe spawns | ⬜ |
 | 6 | `/null gui` never duplicates; deficits visible | ⬜ |
 | 7 | Item accounting correct across save/restart | ⬜ |
-| 8 | No teleport / clip / phase / illegal accel / chunk force-load | ⬜ |
+| 8 | No unintended teleport / clip / phase / illegal accel / chunk force-load (explicit pearl-cannon exception) | ⬜ |
 | 9 | Formations hold at doors, stairs, bridges, boats, crowds | ⬜ |
 | 10 | Combat respects cooldown, LOS, shields, ammo, durability, allies | ⬜ |
 | 11 | Clutches need a real item; failed clutches have consequences | ⬜ |
@@ -356,13 +366,13 @@ Status vocabulary per spec: `implemented` · `partial` · `experimental` · `blo
 | 17 | Restart/unload/disconnect/death never duplicate items | ⬜ |
 | 18 | Load test meets published budget **with measurements** | ⬜ |
 
-**0 of 18 passing.**
+**Historical Phase 0 snapshot: 0 of 18 passing; superseded by later test ledgers above.**
 
 ---
 
-## Phase 0 handoff
+## Historical Phase 0 handoff
 
-Per §11 *"Required handoff at every phase"* — all six items:
+This records the initial audit deliverable only; its environment and implementation claims are not current. Per §11 *"Required handoff at every phase"* — all six items:
 
 ### (a) Files changed
 | File | Change |
