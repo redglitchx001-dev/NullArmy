@@ -1,8 +1,14 @@
-Echo the results the annotations can carry
+Record the verified follow-up pass in the status documents
 
-The check-run annotations keep only part of the smoke log, and the part
-they keep is shaped like the script's own "RUNTIME SMOKE:" output. Every
-failure, the verdict and the three checks this pass was about (the /null tp
-cannon, the doorway containment, the loot pickup) are now echoed once at
-the end in that shape, so the numbers behind a pass are readable from
-outside the runner.
+STATUS.md, RELEASE_NOTES.md, README.md, COMMANDER.md and the implementation
+plan said the follow-up edits were unbuilt and unverified, which stopped
+being true when the smoke run went green. They now carry the exact
+evidence: CI run 37432208719 (commit d0200c1, branch
+arena/c18d2228-nullarmy), RESULT: PASS 120 passed, 0 failed, RUNTIME SMOKE:
+PASS - verified on a live Paper server.
+
+The stale "(current ... pending run)" qualifiers are gone from both promise
+tables, P-13 has its S-117 row, and a follow-up section names each repaired
+check with its root cause and the line that proves it - including S-69,
+whose containment had never actually been exercised, and the honest
+BLOCKED notes that remain for the live-client half of S-44, S-69 and S-94.

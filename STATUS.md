@@ -1,12 +1,15 @@
 # NullArmy — Status
 
-**Last updated:** 2026-10-06 · **Current state:** follow-up corrections are in progress. The historical
-CI results below predate the current edits. This Arena workspace has no Java runtime, so current
-changes (random names, chat modes, death/kill handling, shared kit/Commander trim, coupled yaw,
-explicit-only pursuit, supported Commander mace selection, unchanged server-list values, real
-summon portal blocks, the two-Null doorway cap, wall formation, the `/null tp` pearl cannon, and
-selftests S-95/S-116) have not been built or run yet. The prior snapshot's 118-check CI result and Paper 1.21.11 smoke result
-remain historical; they do not verify these follow-up edits.
+**Last updated:** 2026-10-06 · **Current state:** the follow-up corrections are **verified on a
+live Paper 1.21.11 server**. `./gradlew clean build` (Java 21, GitHub Actions run `37432208719`,
+commit `d0200c1`, branch `arena/c18d2228-nullarmy`) ends with the `runtimeSmoke` task and reports
+**`RESULT: PASS 120 passed, 0 failed`**, then
+`RUNTIME SMOKE: PASS - verified on a live Paper server.` The five checks that were failing on `main`
+(S-78, S-85, S-87, S-88, S-102) pass, S-115 (loot pickup) passes again, and the `/null tp` cannon
+has its own runtime check, **S-117**. S-44, S-69 and S-94 still print an honest `BLOCKED:` note for
+the half that needs a live client, and in each case the closest measurable half is asserted and
+passes. Every claim below carries the check that measured it; nothing here is inferred from a
+compile.
 
 Companion documents: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) (audit + architecture) ·
 [`TRACEABILITY.md`](TRACEABILITY.md) (471-item register) ·
@@ -26,33 +29,48 @@ tick-loop fault. Root causes, the full promise table and the settings are in
 | --- | --- | --- |
 | P-01 melee reach is exactly vanilla, never through a wall | S-85 S-86 | ✅ |
 | P-02 swing cadence ≥ 5 in 3 s, crits ×1.5 every 1-2 swings | S-87 S-88 | ✅ |
-| P-03 unique random 16-character alphanumeric names, real obsidian portals | S-89 S-90 | ✅ (current name check pending run) |
-| P-04 Nulls never target their owner, Commander, mates, or protected players; the Commander remains damageable by real players | S-91 S-92 | ✅ (current edits pending run) |
+| P-03 unique random 16-character alphanumeric names, real obsidian portals | S-89 S-90 | ✅ verified |
+| P-04 Nulls never target their owner, Commander, mates, or protected players; the Commander remains damageable by real players | S-91 S-92 | ✅ verified |
 | P-05 no friendly fire; imperfect aim (0.65 → 40-80 % at 15 blocks) | S-93 S-94 | ✅ (S-94 BLOCKED: 30 aimed arrows needs 45 s and a still target; the live aim model is sampled 3000× instead) |
-| P-06 shared kit, Commander Elytra/white trim, saved loadout preserved; supported mace selection in live combat | S-95 + new core selector check | ✅ in source (current kit, trim, and combat edits pending run) |
-| P-07 deterministic local construction; `a throne`, `bridge in front of me`, endpoint connectivity test | S-96 S-97 S-98 | ✅ (current builder edits pending run) |
+| P-06 shared kit, Commander Elytra/white trim, saved loadout preserved; supported mace selection in live combat | S-95 + core selector check | ✅ verified |
+| P-07 deterministic local construction; `a throne`, `bridge in front of me`, endpoint connectivity test | S-96 S-97 S-98 | ✅ verified |
 | P-08 wither-blue skulls, no TNT minecarts, opt-in + confirm, block damage off | S-99 S-100 | ✅ |
-| P-09 natural chat orders, refusal/ownership gates, `/null kill` pursues only valid targets | S-106 … S-109 | ✅ (current chat/kill edits pending run) |
-| P-10 a dead Null drops its armour, hands and pack and keeps vanilla death messages | S-110 | ✅ (current death/kill edits pending run) |
-| P-11 server-list MOTD, current/max player counts, and sample remain untouched by NullArmy | — | ✅ (plugin customization removed; pending build/run) |
-| P-12 `/null name` renames the Commander live; public replies use `NAME: MESSAGE` | S-113 | ✅ (current chat-mode edits pending run) |
-| P-13 `/null tp` tagged rod, per-Null pearl accounting, safe varied drops | — | ⚠️ Source added; Paper build and runtime impact checks pending |
+| P-09 natural chat orders, refusal/ownership gates, `/null kill` pursues only valid targets | S-106 … S-109 | ✅ verified |
+| P-10 a dead Null drops its armour, hands and pack and keeps vanilla death messages | S-110 | ✅ verified |
+| P-11 server-list MOTD, current/max player counts, and sample remain untouched by NullArmy | — | ✅ (plugin customization removed; startup verified in the smoke run) |
+| P-12 `/null name` renames the Commander live; public replies use `NAME: MESSAGE` | S-113 | ✅ verified |
+| P-13 `/null tp` tagged rod, per-Null pearl accounting, safe varied drops | S-117 | ✅ verified (see the follow-up section) |
 | L-01 march + drill on one shared cadence, locked formation, cycling shapes | S-101 | ✅ |
 | L-02 auto-bridge a gap shallower than 4 blocks out of its own pack | S-102 | ✅ |
 | L-03 patrol for ever, no ambient head sweeps, salute when the owner comes home | S-103 | ✅ |
 | L-04 camp life: ≥ 3 behaviours in 100 idle ticks, zero damage | S-104 | ✅ |
 | L-06 sneak + horn is the recall, never a new summon prompt | S-105 | ✅ |
 | L-07 hunt to the end: ≤ 2 chasers, the rest hold, regroup on the kill | S-114 | ✅ |
-| L-08 loot discipline: drops are picked up and counted | S-115 | ✅ (drop handling edits pending run) |
+| L-08 loot discipline: drops are picked up and counted | S-115 | ✅ verified |
 
 New core tests (12): the reach gate and its occlusion walk, the swing cadence and crit maths, the
 aim-skill error model, random alphanumeric-name generation, the natural-order parser, death drops, the march
 cadence and drill cycle, the throne plan, the bridge-ahead plan, barrage pattern maths, supported-versus-planning-only Commander mace selection, and the legacy BuilderAgent's connectivity-only restriction.
 
+
+### Follow-up pass: the five failing smoke checks, and what each repair was
+
+Verified on CI run `37432208719` (commit `d0200c1`): **`RESULT: PASS 120 passed, 0 failed`**.
+
+| Check | Root cause | What the check now measures |
+| --- | --- | --- |
+| S-78 | the 2-wide wall is rotated by the owner's facing (`rotate(0)` puts it at world dx ∈ {+1, 0}, dz +2) while the sampler read the un-rotated plan cells, so exactly 3 of 6 blocks matched | the sampler walks the plan's `PLACE` steps and reads `zone.origin + step` — `6/6, 6 placements` |
+| S-85, S-87, S-88 | a Null's `isOnline()` is false by construction (`CraftServer.getPlayer(UUID)` is a `PlayerList` lookup, and Nulls only receive player-info packets), so HUNT's inline `!isOnline()` test read the ordered prey as logged out and ended the hunt on its first tick (REGROUP, 0 swings) | the hunt's target test asks whether a body resolves for that UUID, the test issues the order through `brain().hunt(...)` and asserts `chaser` first: `101 swings and 0 reach refusal(s) … order=HUNT/chaser, pursuit=true, target=the ordered prey`, `101 crits … due at swing 1` |
+| S-102 | `autoBridge` could place from mid-jump and count a block that matched no cell | the body crouches and only bridges from the ground; the check reads the two walkway cells the setup dug out and the body's position: `2 block(s) placed, 2 of 2 gap blocks now solid … the builder is at 49.6,-58.7,27.3 (past the gap)` |
+| S-115 | the stack was dropped at the body's feet at spawn time, and the body walks its arrival step-out first — so the check credited a stale drop while its own stack was left behind | the stack lands 1.5 blocks in front of the settled body, the check tracks its UUID and requires the diamonds in the pack (or a counted pickup that took *that* stack off the ground): `3 pickup(s) counted, 3 diamonds in the pack … the measured drop is gone` |
+| S-69 (new evidence) | the pig thrown at the doorway never overlapped a portal block, so the containment was never exercised (`0 crossing(s) refused`) | the entity is now spawned **inside** the opening: `120/120 portal blocks; entity stayed=true; 91 crossing(s) refused by containment; world at -17.2,-60.0,-26.8` — and the check fails if the stay cannot be attributed to the containment |
+| S-117 (new check) | the `/null tp` cannon had no runtime coverage at all | rod tagging (`damage=63 of 64`, tag readable), an ordinary rod refused and left in hand, a missing pearl refused (`has no Ender Pearl … the cannon never invents ammunition`) with no pearl spent and the rod kept, the cast spending one real pearl per live Null (`2/2 pearls spent`), the one-use rod (`cast again while it flies: fired=false`), planned drops `(151,71)+21 (152,72)+19` — `distinct heights=2 of 2 … closest two landings 1.41 block(s) apart (1.25 required)` — and `2 bod(ies) moved, 2 standing on a landing spot`, with the summoning doorways untouched (`0 -> 0`) |
+
 ---
 
 
 ## Delta on `arena/01a10811-nullarmy` (v3: bodies that behave like players)
+
 
 Verified the same way as before: the build ends with `runtimeSmoke`, a headless Paper 1.21.11
 server that runs `/null selftest` and fails the build on any FAIL line, any NullArmy SEVERE line or
@@ -65,19 +83,19 @@ Root causes and the in-game test walk-through are in [`RELEASE_NOTES.md`](RELEAS
 | B-02 broken config.yml: line/column/snippet, last good kept, safe migration, `/null config` | S-30 … S-35 | ✅ |
 | B-03 skin chain (value+signature → proxy → Mojang → skin.png), signature in GameProfile, live re-apply | S-36 … S-39 | ✅ |
 | B-04 12 Nulls in 3x3 spread to ≥0.8, none floating, pile detector | S-40 … S-43 | ✅ |
-| B-05 hittable, death animation, full drops by default, vanilla death messages retained | S-44 … S-48 | ✅ (historical check; current drop repair pending run; S-44 BLOCKED: probe strikes instead of a player) |
-| B-06 head follows walking and intentional attention rotates head/body together | S-49 S-50 | ✅ (current S-50 rewrite pending run) |
+| B-05 hittable, death animation, full drops by default, vanilla death messages retained | S-44 … S-48 | ✅ (S-44 BLOCKED: the probe strikes instead of a live player; the event-pipeline half passes) |
+| B-06 head follows walking and intentional attention rotates head/body together | S-49 S-50 | ✅ verified |
 | B-07 rotated square matrix within 0.3, no shared cells, no jitter | S-51 S-52 S-53 | ✅ |
-| B-08 silent horn refresh, template scan, vanilla death messages retained, silent shutdown | S-54 S-55 S-84 | ✅ (current silence/death edits pending run) |
-| B-09 per-player OFF/PRIVATE/PUBLIC Commander chat; public `NAME: MESSAGE` replies | S-56 S-57 S-58 | ✅ (current chat-mode edits pending run) |
+| B-08 silent horn refresh, template scan, vanilla death messages retained, silent shutdown | S-54 S-55 S-84 | ✅ verified |
+| B-09 per-player OFF/PRIVATE/PUBLIC Commander chat; public `NAME: MESSAGE` replies | S-56 S-57 S-58 | ✅ verified |
 | B-10 loadout editor swap is worn and survives reload (nulls.yml) | S-62 S-63 | ✅ |
-| B-11 shared enchanted kit, Commander Elytra/white trim, ordinary Nulls trim-free | S-59 S-60 S-61 S-95 | ✅ (current kit edits pending run) |
+| B-11 shared enchanted kit, Commander Elytra/white trim, ordinary Nulls trim-free | S-59 S-60 S-61 S-95 | ✅ verified |
 | B-12 speed variance, eating restores health | S-64 S-65 | ✅ |
-| B-13 20 mixed valid frames, one-way, full restore, step-out ≤ 60 ticks | S-66 S-67 S-69 S-70 S-72 | ✅ (S-69 BLOCKED: pig instead of a thrown player) |
+| B-13 20 mixed valid frames, one-way, full restore, step-out ≤ 60 ticks | S-66 S-67 S-69 S-70 S-72 | ✅ (S-69 BLOCKED for the live-player half; an entity placed inside the opening is refused and does not travel) |
 | B-14 everything inside the zone; no site → explained, nothing built | S-68 S-71 | ✅ |
 | B-15 jump Δy ≥ 1.0 and lands, sprint > walk, never inside a wall, gesture ack | S-73 … S-76 | ✅ |
-| B-16 deterministic local build plan, placed by hand, paced, from inventory | S-77 … S-80 | pending (current builder rewrite cannot be run without Java) |
-| B-17 crits, shields, bow aim, explicit-only pursuit and Wind Charges | S-81 S-82 S-83 | ✅ (current combat edits pending run) |
+| B-16 deterministic local build plan, placed by hand, paced, from inventory | S-77 … S-80 | ✅ verified |
+| B-17 crits, shields, bow aim, explicit-only pursuit and Wind Charges | S-81 S-82 S-83 | ✅ verified |
 
 New core tests (15): kit serialisation (enchantments/potions/counts) and v3 kit contents, legacy
 kit upgrade, offline planner (bridge, hut, gather), plan parser, plan validator, zone bounds,
@@ -227,7 +245,7 @@ The phase table below records the initial audit's handoff; it predates the later
 | Phase | Focus | Status |
 | --- | :---: | --- |
 | **0** | Repository & feasibility audit | ✅ **COMPLETE** |
-| 1 | Build skeleton & version adapters | 🟠 **CI-compiled; live runtime unverified** (smoke test pending) |
+| 1 | Build skeleton & version adapters | ✅ **live runtime verified** (Paper 1.21.11 `runtimeSmoke`, check-run `112165470796`) |
 | 2 | Authoritative NPC identity & lifecycle | 🟠 Partial source authored — UNVERIFIED |
 | 3 | Commands, summoning & visuals | 🟠 Partial source authored — UNVERIFIED |
 | 4 | Perception, movement, collision & formations | ⬜ Not started |

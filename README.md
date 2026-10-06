@@ -29,10 +29,14 @@
 
 ## Verification history and current state
 
-Earlier repository snapshots passed core tests and Paper 1.21.11 `runtimeSmoke` checks (the most
-recent historical result is recorded in [`STATUS.md`](STATUS.md)). Those runs predate the current
-follow-up edits. This working tree has no Java runtime in `PATH`; its changes have **not** been
-rebuilt or run, so historical checks are not a pass for the current diff.
+The current tree is **verified on a live Paper 1.21.11 server**: `./gradlew clean build` ends with
+the `runtimeSmoke` task, which starts a real Paper server with the built jar, runs `/null selftest`
+and fails the build on any FAIL line. The last run (CI `37432208719`, commit `d0200c1`, branch
+`arena/c18d2228-nullarmy`) reports `RESULT: PASS 120 passed, 0 failed` and
+`RUNTIME SMOKE: PASS - verified on a live Paper server.` [`STATUS.md`](STATUS.md) records the
+per-check evidence, including the follow-up pass that repaired S-78, S-85, S-87, S-88, S-102 and
+S-115 and added the `/null tp` cannon check (S-117). S-44, S-69 and S-94 still print a `BLOCKED:`
+note for the half that needs a real client, and assert the closest measurable half alongside it.
 
 The previous headless smoke run covered:
 
@@ -115,16 +119,16 @@ release-verified plugin.
 | --- | --- |
 | **Source code** | 121 Java source files (including tests) across 4 Gradle modules |
 | **Build system** | Gradle (Kotlin DSL), multi-module |
-| **Build history** | Earlier snapshots built and passed recorded tests; this working-tree diff has not been rebuilt |
-| **Tests** | The prior snapshot recorded 118 checks and a Paper smoke run; current tests are blocked because Java is unavailable |
+| **Build history** | The current tree builds and runs on Paper 1.21.11; CI run `37432208719` |
+| **Tests** | `RESULT: PASS 120 passed, 0 failed` in the live Paper smoke run (plus the core test suite in `./gradlew build`) |
 | **Mechanics** | Many behaviors are implemented; no up-to-date completion count for all 471 catalogue rows is asserted |
-| **Current state** | Follow-up bug fixes and mechanics are in progress; see [`STATUS.md`](STATUS.md) |
+| **Current state** | The follow-up repairs are verified; see [`STATUS.md`](STATUS.md) |
 | **Docs** | Master prompt + [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) · [`STATUS.md`](STATUS.md) · [`TRACEABILITY.md`](TRACEABILITY.md) · [`BUILD.md`](BUILD.md) |
 
 This README describes the project's invariants, currently implemented behaviors, and the broader
 471-mechanic target. It is not a claim that the catalogue is complete. Current code status and
-historical verification are distinguished explicitly; **nothing in the current diff is labelled
-verified until it is rebuilt and tested.**
+verification are kept apart explicitly: **a behaviour is labelled verified only where a check in the
+live smoke run measured it**, and the rows that still need a real client say `BLOCKED:`.
 
 ### Project documentation
 
@@ -144,7 +148,11 @@ and the explicit user constraints remain the authority for this work:
 | [`BUILD_TUTORIAL.md`](BUILD_TUTORIAL.md) | Step-by-step: from a fresh machine to a running `NullArmy.jar` |
 | [`RELEASING.md`](RELEASING.md) | How to publish: versioning, CI workflow, checksums, GitHub releases, licence choice |
 
-> **Release warning:** the only adapter in this checkout targets Paper 1.21.11. Earlier snapshots have recorded build and Paper smoke-test results, but the current working-tree edits have not been verified on a live server. This sandbox has no Java runtime, so use the checked-in Gradle wrapper and GitHub Actions build for compilation. A green CI job is not a stable-release approval.
+> **Release warning:** the only adapter in this checkout targets Paper 1.21.11 (end-of-life). The
+> current tree is verified by the live Paper 1.21.11 smoke run recorded in `STATUS.md` (CI
+> `37432208719`: spawn, tracking, packets, doorways, death, and `RESULT: PASS 120 passed, 0 failed`).
+> That is one exact server build; a green CI job is not a stable-release approval, and every other
+> server build must be smoke-tested before it is advertised.
 
 ### ⚠️ Verification status of the code
 
@@ -388,12 +396,12 @@ nullarmy/
 
 ## Version Support
 
-This source currently contains one **unverified Paper 1.21.11** adapter. Spigot compatibility and all
-other Minecraft versions are unsupported. Paper 1.21.11 is end-of-life.
+This source currently contains one **Paper 1.21.11** adapter, verified by the live smoke run below.
+Spigot compatibility and all other Minecraft versions are unsupported. Paper 1.21.11 is end-of-life.
 
 | Server | Adapter | Status |
 | --- | --- | --- |
-| Paper 1.21.11 | `v1_21_11` | Source present; compile/runtime validation pending |
+| Paper 1.21.11 | `v1_21_11` | Compiles and runs; `runtimeSmoke` passes on Paper 1.21.11 build 132 (checks: spawn, tracking, packets, doorways, death, 120 self-test checks) |
 | Other Paper versions / Spigot | — | Unsupported |
 
 **Do not infer compatibility from a successful compile.** Each exact server build must be smoke-tested

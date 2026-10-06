@@ -2,8 +2,8 @@
 
 ## v4 — "an army, not a crowd" (branch `arena/01a10c41-nullarmy`)
 
-Everything in the v4 dossier (P-01 … P-12, L-01 … L-08) is implemented **in place** on top of v3
-and ships with a live regression check (`S-85` … `S-115`) that runs on a real Paper 1.21.11 server
+Everything in the v4 dossier (P-01 … P-13, L-01 … L-08) is implemented **in place** on top of v3
+and ships with a live regression check (`S-85` … `S-117`) that runs on a real Paper 1.21.11 server
 inside `./gradlew build`. The v3 checks (S-27 … S-84), the original 26 and the core suite still run
 and still pass.
 
@@ -12,6 +12,16 @@ The core suite is green (**92/92**) and the live Paper 1.21.11 selftest reports
 `RESULT: PASS 118 passed, 0 failed`. `./gradlew build` also verified the distributable jar at
 `plugin/build/libs/NullArmy-0.1.0-dev.jar` and ended with
 `RUNTIME SMOKE: PASS - verified on a live Paper server.`
+
+**Follow-up (same day, branch `arena/c18d2228-nullarmy`).** Five of the v4 live checks were failing
+on `main` and are repaired: S-78 (wall sampler read un-rotated cells), S-85/S-87/S-88 (a Null's
+`isOnline()` is false by construction, so the ordered hunt ended on its first tick), S-102
+(`autoBridge` could place from mid-jump), S-115 (the loot stack was dropped at spawn and left behind),
+plus S-69's containment, which had never actually been exercised. The `/null tp` cannon now has its
+own runtime check, **S-117**. The last run, CI **37432208719** (commit `d0200c1`), reports
+**`RESULT: PASS 120 passed, 0 failed`** and
+`RUNTIME SMOKE: PASS - verified on a live Paper server.` Every root cause and the exact evidence
+line per check are in [`STATUS.md`](STATUS.md#follow-up-pass-the-five-failing-smoke-checks-and-what-each-repair-was).
 
 The last timing-sensitive v4 smoke failures are fixed here:
 
@@ -53,6 +63,7 @@ walked to, swung at, placed or broken by hand, one per swing).
 | **L-05** | One scoreboard team per squad, friendly fire off, shared trim. | S-93 |
 | **L-06** | Sneak + horn is the **recall** — the squad comes home in formation on the march cadence, never a new summon prompt. | S-105 |
 | **L-07** | Hunt to the end: the order persists, at most two chasers, the rest hold, everyone regroups when the target is gone. | S-114 |
+| **P-13** | `/null tp` is one owner-triggered, same-world Ender Pearl barrage: the cast hands out a tagged, nearly broken, one-use rod; an ordinary fishing rod is refused and left alone; a missing pearl refuses the cast without spending anything; each live Null (and the Commander when he is the owner's) spends **its own** real pearl from a plan of varied drop heights (12-30 blocks) onto spaced landings (≥ 1.25 blocks) in loaded, collision-safe ground; the summoning doorways are untouched. | S-117 |
 | **L-08** | Loot discipline — pick up the drops of the players they defeat. | S-115 |
 
 ### New commands
