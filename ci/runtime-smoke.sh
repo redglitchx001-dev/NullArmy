@@ -205,6 +205,17 @@ fi
 # ---------------------------------------------------------------- verdict
 echo "----------------------- self test output -----------------------"
 grep -E '\[NullArmy\]\[SELFTEST\]' server.log || echo "(no self test output at all)"
+# Publish the full check list as the job summary: the step log is long and the
+# check-run annotations only carry a window of it, which hides which check
+# failed and why.
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  {
+    echo "### NullArmy self test (Paper ${MC_VERSION})"
+    echo '```'
+    grep -E '\[NullArmy\]\[SELFTEST\]' server.log || echo "(no self test output at all)"
+    echo '```'
+  } >> "$GITHUB_STEP_SUMMARY"
+fi
 echo "----------------------- nullarmy log lines ---------------------"
 grep -E '\[NullArmy\]|NullArmy' server.log | head -n 120 || true
 echo "----------------------- server errors --------------------------"

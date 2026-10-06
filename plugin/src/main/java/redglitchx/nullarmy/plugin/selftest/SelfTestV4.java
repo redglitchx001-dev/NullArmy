@@ -8,11 +8,13 @@ import net.kyori.adventure.text.Component;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
+import org.bukkit.NamespacedKey;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.entity.EnderPearl;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
@@ -21,7 +23,9 @@ import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
+import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.permissions.PermissionAttachment;
+import org.bukkit.persistence.PersistentDataType;
 
 import redglitchx.nullarmy.core.combat.AimSkill;
 import redglitchx.nullarmy.core.combat.ReachGate;
@@ -40,6 +44,7 @@ import redglitchx.nullarmy.plugin.body.Mind;
 import redglitchx.nullarmy.plugin.body.NullBrain;
 import redglitchx.nullarmy.plugin.config.V3Settings;
 import redglitchx.nullarmy.plugin.item.SummonItems;
+import redglitchx.nullarmy.plugin.spectacle.TeleportCannon;
 import redglitchx.nullarmy.plugin.util.Guard;
 
 import java.nio.charset.StandardCharsets;
@@ -351,10 +356,23 @@ final class SelfTestV4 {
         steps.add(this::l07Regroup);      // S-114 regroup
 
         // ---- L-08 loot discipline
-        steps.add(this::l08Loot);         // S-115
+        steps.add(this::l08Loot);         // S-115: spawn, then let the body settle
+        steps.add(() -> t.gap(20));
+        steps.add(this::l08Drop);         // S-115: the stack lands in front of it
+        steps.add(() -> t.gap(20));
         steps.add(() -> t.gap(20));
         steps.add(() -> t.gap(20));
         steps.add(this::l08LootCheck);    // S-115
+
+        // ---- P-13 the /null tp Ender Pearl cannon
+        steps.add(this::p13Arm);          // S-117 rod, plain rod, missing pearl
+        steps.add(this::p13Fire);         // S-117 one real pearl per live Null
+        steps.add(() -> t.gap(4));
+        steps.add(this::p13Peek);         // S-117 where the pearls really are
+        for (int i = 0; i < 2; i++) {
+            steps.add(() -> t.gap(20));
+        }
+        steps.add(this::p13Check);        // S-117 spent, moved, spaced, safe
 
         // ---- C-01 no autonomous hostile acquisition or pursuit
         steps.add(this::c01PassiveHostile);
@@ -2070,8 +2088,28 @@ final class SelfTestV4 {
             dismissAll();
             prepare(at(108, 20), 8);
             squad = plugin.squads().spawnSquadAt(owner("l08"), worldName, List.of(at(108, 20)));
-            NullBody body = squad.members().get(0);
-            Player handle = handle(body);
+            lootBefore = plugin.brain().lootPicked();
+            lootDrop = null;
+            lootDroppedAt = "";
+        } catch (Throwable e) {
+            notes.add("l08 spawn threw " + Guard.describe(e));
+        }
+    }
+
+    /**
+     * The stack this check is about, dropped a step and a half in front of the
+     * body - far enough that the body has to walk to it, which is what "picks up
+     * the drops it walks over" means.
+     *
+     * <p>It lands after the body has settled: a freshly spawned Null walks its
+     * arrival step-out first, so a stack dropped at its feet at spawn time is
+     * left behind by that walk, and the check would end up measuring whatever
+     * loose items happened to be lying around instead of its own drop.</p>
+     */
+    private void l08Drop() {
+        try {
+            NullBody body = squad == null || squad.members().isEmpty() ? null : squad.members().get(0);
+            Player handle = body == null ? null : handle(body);
             lootBefore = plugin.brain().lootPicked();
             lootDrop = null;
             lootDroppedAt = "";
@@ -2079,7 +2117,7 @@ final class SelfTestV4 {
                 lootDroppedAt = "no handle: the diamond drop could not be created";
                 return;
             }
-            Location at = handle.getLocation();
+            Location at = handle.getLocation().add(1.5D, 0.0D, 0.0D);
             org.bukkit.entity.Item drop = world.dropItem(at, new ItemStack(Material.DIAMOND, 3));
             extraEntities.add(drop);
             lootDrop = drop.getUniqueId();
@@ -2123,6 +2161,11 @@ final class SelfTestV4 {
             }
             Entity drop = lootDrop == null ? null : Bukkit.getEntity(lootDrop);
             boolean dropGone = lootDrop == null ? false : drop == null || drop.isDead();
+            String apart = "";
+            if (drop != null && handle != null) {
+                apart = String.format(Locale.ROOT, ", %.1f block(s) from the body",
+                        drop.getLocation().distance(handle.getLocation()));
+            }
             /*
              * Why the body could refuse to look for loot at all: the brain only
              * runs loot discipline while the body is idle, under no order and
@@ -2139,7 +2182,7 @@ final class SelfTestV4 {
                     + " item(s) still on the ground (" + delayed + " of them still on pickup delay),"
                     + " pickup-items=" + (settings() == null ? "?" : settings().pickupItems())
                     + "; the measured drop " + (lootDrop == null ? "was never created" : (dropGone ? "is gone" : "is still there"))
-                    + (lootDroppedAt.isEmpty() ? "" : " (dropped at " + lootDroppedAt + ")")
+                    + (lootDroppedAt.isEmpty() ? "" : " (dropped at " + lootDroppedAt + ")") + apart
                     + ", " + blockers;
             /*
              * The promise is about the drop this body walked over, so the check
@@ -2154,6 +2197,306 @@ final class SelfTestV4 {
         }
         check("S-115", "L-08", ok, "a Null picks up the drops it walks over and the pickup is counted as loot"
                 + " discipline (" + detail + ")");
+        dismissAll();
+    }
+
+    // ------------------------------------------------------------------- P-13
+
+    /*
+     * P-13: the /null tp Ender Pearl cannon. The owner's rules are that the rod
+     * is a tagged, nearly broken, one-use item; an ordinary fishing rod is left
+     * alone; every live Null (and the Commander) spends its own real pearl, one
+     * per body, and the cannon invents ammunition for nobody; and the drops come
+     * from varied heights onto spaced, safe, loaded ground while the summoning
+     * doorways stay exactly as they are.
+     *
+     * The cast goes through TeleportCannon#castVolley - the same call the real
+     * reel makes - so the test measures the production path and not a copy of it.
+     */
+
+    private Player p13Owner;
+    private PermissionAttachment p13Grant;
+    private Vec3d p13Target;
+    private final List<NullBody> p13Shooters = new ArrayList<>();
+    private final List<Vec3d> p13Starts = new ArrayList<>();
+    private final List<Vec3d> p13Pearls = new ArrayList<>();
+    private String p13Arm = "";
+    private String p13NoPearl = "";
+    private String p13Fire = "";
+    private boolean p13ArmOk;
+    private boolean p13NoPearlOk;
+    private boolean p13Fired;
+    private int p13PortalsBefore;
+
+    private NamespacedKey rodKey() {
+        return new NamespacedKey(plugin, "teleport_cannon_rod_id");
+    }
+
+    /** True when that stack is a rod the cannon itself tagged. */
+    private boolean isTaggedRod(ItemStack stack) {
+        return stack != null && stack.getType() == Material.FISHING_ROD && stack.hasItemMeta()
+                && stack.getItemMeta().getPersistentDataContainer().has(rodKey(), PersistentDataType.STRING);
+    }
+
+    /** How many cannon rods the player is carrying. */
+    private int taggedRods(Player player) {
+        if (player == null) {
+            return 0;
+        }
+        int count = 0;
+        for (int slot = 0; slot < 36; slot++) {
+            if (isTaggedRod(player.getInventory().getItem(slot))) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** Puts the tagged rod in the hand, the way a player would before casting. */
+    private boolean holdTaggedRod(Player player) {
+        if (player == null) {
+            return false;
+        }
+        for (int slot = 0; slot < 36; slot++) {
+            if (isTaggedRod(player.getInventory().getItem(slot))) {
+                Bodies.hold(player, slot);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private int pearlsOf(NullBody body) {
+        Player handle = handle(body);
+        int count = 0;
+        if (handle != null) {
+            for (ItemStack stack : handle.getInventory().getContents()) {
+                if (stack != null && stack.getType() == Material.ENDER_PEARL) {
+                    count += stack.getAmount();
+                }
+            }
+        }
+        return count;
+    }
+
+    private void stripPearls(NullBody body) {
+        Player handle = handle(body);
+        if (handle == null) {
+            return;
+        }
+        PlayerInventory inventory = handle.getInventory();
+        for (int slot = 0; slot < 36; slot++) {
+            ItemStack stack = inventory.getItem(slot);
+            if (stack != null && stack.getType() == Material.ENDER_PEARL) {
+                inventory.setItem(slot, null);
+            }
+        }
+    }
+
+    /** The rod, an ordinary rod, and the refusal when nobody carries a pearl. */
+    private void p13Arm() {
+        dismissAll();
+        p13Shooters.clear();
+        p13Starts.clear();
+        p13Pearls.clear();
+        p13ArmOk = false;
+        p13NoPearlOk = false;
+        p13Arm = "";
+        p13NoPearl = "";
+        try {
+            prepare(at(150, 70), 24);
+            p13Target = at(150, 70);
+            SquadManager.Squad stand = plugin.squads().spawnSquadAt(owner("p13owner"), worldName,
+                    List.of(at(146, 70)));
+            p13Owner = handle(stand.members().get(0));
+            if (p13Owner == null) {
+                p13Arm = "the stand-in owner did not resolve";
+                return;
+            }
+            owners.add(p13Owner.getUniqueId());   // dismissed with everything else
+            p13Grant = p13Owner.addAttachment(plugin, "nullarmy.admin", true);
+            squad = plugin.squads().spawnSquadAt(p13Owner.getUniqueId(), worldName,
+                    List.of(at(150, 66), at(152, 66)));
+            for (NullBody body : squad.members()) {
+                p13Shooters.add(body);
+            }
+
+            // 1. An ordinary fishing rod: refused, and left exactly as it was.
+            PlayerInventory inventory = p13Owner.getInventory();
+            inventory.setItemInMainHand(new ItemStack(Material.FISHING_ROD, 1));
+            TeleportCannon.CastResult plain = plugin.teleportCannon()
+                    .castVolley(p13Owner, p13Target, plugin.teleportCannon().heldRodId(p13Owner));
+            boolean plainKept = inventory.getItemInMainHand() != null
+                    && inventory.getItemInMainHand().getType() == Material.FISHING_ROD
+                    && !isTaggedRod(inventory.getItemInMainHand());
+
+            // 2. The cannon's rod: nearly broken, tagged, and a second copy replaces
+            //    the first instead of stacking.
+            String given = plugin.teleportCannon().giveRod(p13Owner);
+            plugin.teleportCannon().giveRod(p13Owner);
+            int tagged = taggedRods(p13Owner);
+            boolean held = holdTaggedRod(p13Owner);
+            ItemStack rod = inventory.getItemInMainHand();
+            int damage = rod != null && rod.getItemMeta() instanceof Damageable
+                    ? ((Damageable) rod.getItemMeta()).getDamage() : -1;
+            String heldId = plugin.teleportCannon().heldRodId(p13Owner);
+            p13Arm = "ordinary rod: fired=" + plain.fired + " (\"" + plain.message + "\"), still in hand="
+                    + plainKept + "; giveRod=\"" + given + "\", cannon rods carried=" + tagged
+                    + ", in hand=" + held + ", type=" + (rod == null ? "-" : rod.getType().name())
+                    + ", damage=" + damage + " of " + Material.FISHING_ROD.getMaxDurability()
+                    + ", tag readable=" + (heldId != null);
+            p13ArmOk = !plain.fired && plainKept && tagged == 1 && held && heldId != null
+                    && damage == Material.FISHING_ROD.getMaxDurability() - 1;
+
+            // 3. Nobody carries a pearl: the cast refuses, spends no pearl and does
+            //    not eat the rod either.
+            for (NullBody body : p13Shooters) {
+                stripPearls(body);
+            }
+            TeleportCannon.CastResult broke = plugin.teleportCannon()
+                    .castVolley(p13Owner, p13Target, heldId);
+            int pearlsAfter = 0;
+            for (NullBody body : p13Shooters) {
+                pearlsAfter += pearlsOf(body);
+            }
+            boolean rodKept = taggedRods(p13Owner) == 1;
+            int flying = world.getEntitiesByClass(EnderPearl.class).size();
+            p13NoPearl = "missing a pearl: fired=" + broke.fired + " (\"" + broke.message + "\"), pearls "
+                    + pearlsAfter + ", cannon rod kept=" + rodKept + ", pearls in the world=" + flying;
+            p13NoPearlOk = !broke.fired && broke.message.contains("no Ender Pearl")
+                    && pearlsAfter == 0 && rodKept && flying == 0;
+        } catch (Throwable e) {
+            notes.add("p13 arm threw " + Guard.describe(e));
+            p13Arm = "p13 arm threw " + Guard.describe(e);
+        }
+    }
+
+    /** One real pearl each, then the cast: the volley and the one-shot guard. */
+    private void p13Fire() {
+        try {
+            p13Starts.clear();
+            for (NullBody body : p13Shooters) {
+                stripPearls(body);
+                Player handle = handle(body);
+                if (handle == null) {
+                    continue;
+                }
+                handle.getInventory().addItem(new ItemStack(Material.ENDER_PEARL, 1));
+                p13Starts.add(body.bodyPosition());
+            }
+            p13PortalsBefore = plugin.portals().activeCount();
+            String heldId = plugin.teleportCannon().heldRodId(p13Owner);
+            TeleportCannon.CastResult first = plugin.teleportCannon().castVolley(p13Owner, p13Target, heldId);
+            // The one-use rod is spent, so the same cast cannot simply be repeated.
+            TeleportCannon.CastResult twice = plugin.teleportCannon().castVolley(p13Owner, p13Target, heldId);
+            p13Fired = first.fired;
+            p13Fire = "cast=\"" + first.message + "\" fired=" + first.fired
+                    + "; cast again while it flies: fired=" + twice.fired + " (\"" + twice.message + "\")";
+        } catch (Throwable e) {
+            p13Fire = "p13 fire threw " + Guard.describe(e);
+        }
+    }
+
+    /** Where the real pearls are, a few ticks after the cast. */
+    private void p13Peek() {
+        p13Pearls.clear();
+        try {
+            for (EnderPearl pearl : world.getEntitiesByClass(EnderPearl.class)) {
+                Location at = pearl.getLocation();
+                p13Pearls.add(new Vec3d(at.getX(), at.getY(), at.getZ()));
+            }
+        } catch (Throwable e) {
+            notes.add("p13 peek threw " + Guard.describe(e));
+        }
+    }
+
+    private int distinctPearlHeights() {
+        Set<Long> tops = new HashSet<>();
+        for (Vec3d spot : p13Pearls) {
+            tops.add(Math.round(spot.y()));
+        }
+        return tops.size();
+    }
+
+    private int distinctPearlColumns() {
+        Set<Long> columns = new HashSet<>();
+        for (Vec3d spot : p13Pearls) {
+            columns.add((((long) Math.round(spot.x())) << 32) ^ ((long) Math.round(spot.z())));
+        }
+        return columns.size();
+    }
+
+    /** Every pearl is spent, every body moved onto a safe spot, nothing invented. */
+    private void p13Check() {
+        boolean ok = false;
+        String detail;
+        try {
+            StringBuilder landings = new StringBuilder();
+            for (Vec3d spot : p13Pearls) {
+                landings.append('(').append(Math.round(spot.x())).append(',').append(Math.round(spot.y()))
+                        .append(',').append(Math.round(spot.z())).append(") ");
+            }
+            int spent = 0;
+            int moved = 0;
+            int atLanding = 0;
+            for (int i = 0; i < p13Shooters.size(); i++) {
+                NullBody body = p13Shooters.get(i);
+                if (pearlsOf(body) == 0) {
+                    spent++;
+                }
+                if (i >= p13Starts.size()) {
+                    continue;
+                }
+                Player handle = handle(body);
+                if (handle == null) {
+                    continue;
+                }
+                Vec3d start = p13Starts.get(i);
+                Location now = handle.getLocation();
+                if (Math.hypot(now.getX() - start.x(), now.getZ() - start.z()) > 4.0D) {
+                    moved++;
+                }
+                for (Vec3d spot : p13Pearls) {
+                    if (Math.hypot(now.getX() - spot.x(), now.getZ() - spot.z()) < 3.0D) {
+                        atLanding++;
+                        break;
+                    }
+                }
+            }
+            int heights = distinctPearlHeights();
+            int columns = distinctPearlColumns();
+            boolean rodSpent = taggedRods(p13Owner) == 0;
+            boolean portalsUntouched = plugin.portals().activeCount() == p13PortalsBefore;
+            detail = p13Arm + "; " + p13NoPearl + "; " + p13Fire
+                    + "; real pearls in the air=" + p13Pearls.size()
+                    + " at " + (landings.length() == 0 ? "-" : landings.toString().trim())
+                    + ", distinct heights=" + heights + ", distinct landing columns=" + columns
+                    + "; " + spent + "/" + p13Shooters.size() + " pearls spent, " + moved
+                    + " bod(ies) moved, " + atLanding + " standing on a landing spot"
+                    + ", cannon rods left=" + taggedRods(p13Owner) + ", doorways standing "
+                    + p13PortalsBefore + " -> " + plugin.portals().activeCount();
+            /*
+             * Every pearl has to be really spent, the shapes have to be varied
+             * and spaced, and at least one body has to have been set down on a
+             * landing spot by its own pearl - vanilla's teleport when it takes
+             * the clientless body, the cannon's impact fallback when it does
+             * not. Each count is printed, so a body that stayed put is visible
+             * instead of being averaged away.
+             */
+            ok = p13ArmOk && p13NoPearlOk && p13Fired && p13Shooters.size() >= 2
+                    && p13Pearls.size() >= 2 && heights >= 2 && columns >= 2
+                    && spent == p13Shooters.size() && moved >= 1 && atLanding >= 1
+                    && rodSpent && portalsUntouched;
+        } catch (Throwable e) {
+            ok = false;
+            detail = Guard.describe(e);
+        }
+        check("S-117", "P-13", ok, "the /null tp rod arms once, refuses when a pearl is missing, spends one real"
+                + " pearl per live Null, and sets them down on varied, spaced, safe ground (" + detail + ")");
+        if (p13Grant != null) {
+            p13Grant.remove();
+            p13Grant = null;
+        }
         dismissAll();
     }
 
