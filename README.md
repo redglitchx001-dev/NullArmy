@@ -31,7 +31,7 @@
 
 The current tree is **verified on a live Paper 1.21.11 server**: `./gradlew clean build` ends with
 the `runtimeSmoke` task, which starts a real Paper server with the built jar, runs `/null selftest`
-and fails the build on any FAIL line. The last run (CI `37432208719`, commit `d0200c1`, branch
+and fails the build on any FAIL line. The last run (CI `37433416087`, commit `4d20296`, branch
 `arena/c18d2228-nullarmy`) reports `RESULT: PASS 120 passed, 0 failed` and
 `RUNTIME SMOKE: PASS - verified on a live Paper server.` [`STATUS.md`](STATUS.md) records the
 per-check evidence, including the follow-up pass that repaired S-78, S-85, S-87, S-88, S-102 and
@@ -119,7 +119,7 @@ release-verified plugin.
 | --- | --- |
 | **Source code** | 121 Java source files (including tests) across 4 Gradle modules |
 | **Build system** | Gradle (Kotlin DSL), multi-module |
-| **Build history** | The current tree builds and runs on Paper 1.21.11; CI run `37432208719` |
+| **Build history** | The current tree builds and runs on Paper 1.21.11; CI run `37433416087` |
 | **Tests** | `RESULT: PASS 120 passed, 0 failed` in the live Paper smoke run (plus the core test suite in `./gradlew build`) |
 | **Mechanics** | Many behaviors are implemented; no up-to-date completion count for all 471 catalogue rows is asserted |
 | **Current state** | The follow-up repairs are verified; see [`STATUS.md`](STATUS.md) |
@@ -150,7 +150,7 @@ and the explicit user constraints remain the authority for this work:
 
 > **Release warning:** the only adapter in this checkout targets Paper 1.21.11 (end-of-life). The
 > current tree is verified by the live Paper 1.21.11 smoke run recorded in `STATUS.md` (CI
-> `37432208719`: spawn, tracking, packets, doorways, death, and `RESULT: PASS 120 passed, 0 failed`).
+> `37433416087`: spawn, tracking, packets, doorways, death, and `RESULT: PASS 120 passed, 0 failed`).
 > That is one exact server build; a green CI job is not a stable-release approval, and every other
 > server build must be smoke-tested before it is advertised.
 

@@ -41,7 +41,7 @@ Verified: **471 items, numbers 1–471, no gaps, no duplicates, no title collisi
 **This is not a current implementation count.** The `0 of 471` table above was generated for the
 Phase 0 planning snapshot before the later v3/v4 implementation. The `not started` labels below
 were not refreshed against that code and must not be read as current findings. `STATUS.md` records
-the verified live-run evidence for the promises and laws that do carry a check (CI `37432208719`:
+the verified live-run evidence for the promises and laws that do carry a check (CI `37433416087`:
 `RESULT: PASS 120 passed, 0 failed`); a per-mechanic source/test audit of all 471 catalogue rows is
 still pending, so this register does not claim a current implemented total.
 
