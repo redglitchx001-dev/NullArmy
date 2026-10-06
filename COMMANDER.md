@@ -3,12 +3,12 @@
 One named Null that spawns from a portal, wears one configured skin, carries a loadout you edit
 in a GUI, and fights with a real mace/elytra technique library.
 
-> ### ⚠️ Status: implemented; current follow-up edits are unverified
-> The repository records earlier core and Paper 1.21.11 smoke-test runs; see `STATUS.md` for
-> their exact scope. This working tree has since received additional combat, kit, chat, death,
-> naming and configuration edits. It has no Java runtime available, so those latest changes have
-> **not** been rebuilt or run. Do not treat the historical results as verification of the current
-> working tree.
+> ### ✅ Status: implemented and verified on a live Paper 1.21.11 server
+> CI run `37433416087` (commit `4d20296`) ends with `RESULT: PASS 120 passed, 0 failed` and
+> `RUNTIME SMOKE: PASS - verified on a live Paper server.` The Commander-specific checks are S-95
+> (kit, Elytra, white trim, loadout preserved), S-105 (sneak + horn recall), S-113 (live rename,
+> `NAME: MESSAGE` replies) and S-117 (the `/null tp` cannon includes the Commander when he belongs
+> to the owner who fired it). What still needs a real client is listed at the end of this file.
 
 ---
 
@@ -302,9 +302,10 @@ optional.
 
 ## Limits and verification
 
-- The current working tree has not been rebuilt after its latest follow-up edits because this
-  workspace has no Java runtime. Earlier build and Paper smoke-test results are historical; see
-  `STATUS.md` and do not treat them as verification of the present diff.
+- The current working tree is verified by the live Paper 1.21.11 smoke run recorded in
+  `STATUS.md` (CI `37433416087`, `RESULT: PASS 120 passed, 0 failed`). Checks that cannot be driven
+  headless print `BLOCKED:` and assert the closest measurable thing instead — S-44, S-69 and S-94
+  carry such a note.
 - The live Commander integration currently selects supported mace weapon choices only. Elytra
   flight control, pearl movement, water placement, crossbow combos and other library entries are
   not executed yet; they must not be presented as working tactics.

@@ -131,15 +131,52 @@ public final class TeleportCannon implements Listener {
         }
     }
 
+    /**
+     * What one cast did, in the words the angler is told and one flag: whether
+     * the rod was spent. The event handler and the self test both go through
+     * {@link #castVolley}, so a test measures the same path a real reel takes.
+     */
+    public static final class CastResult {
+        /** True when a volley was scheduled and the rod was consumed. */
+        public final boolean fired;
+        /** The one line the angler is sent. */
+        public final String message;
+
+        CastResult(boolean fired, String message) {
+            this.fired = fired;
+            this.message = message == null ? "" : message;
+        }
+    }
+
     public TeleportCannon(NullArmyPlugin plugin) {
         this.plugin = plugin;
         this.rodIdKey = new NamespacedKey(plugin, "teleport_cannon_rod_id");
     }
 
+    /*
+     * What the last ready volley planned, kept for the self test: the drop
+     * heights the pearls were launched from and the landing spots they were
+     * aimed at. This is the planner's own output - the same numbers the volley
+     * task fires from - so a test can measure the variety of the barrage
+     * instead of inferring it from falling pearls.
+     */
+    private final List<Integer> lastPlannedHeights = new ArrayList<>();
+    private final List<Vec3d> lastPlannedLandings = new ArrayList<>();
+
+    /** The drop heights of the last ready volley, in launch order. */
+    public List<Integer> lastPlannedHeights() {
+        return java.util.Collections.unmodifiableList(new ArrayList<>(lastPlannedHeights));
+    }
+
+    /** The landing spots of the last ready volley, in launch order. */
+    public List<Vec3d> lastPlannedLandings() {
+        return java.util.Collections.unmodifiableList(new ArrayList<>(lastPlannedLandings));
+    }
+
     /** Gives the one-use aiming rod, replacing any previous unspent copy. */
     public String giveRod(Player player) {
-        if (player == null || !player.isOnline()) {
-            return "Only an online player can receive the teleport-cannon rod.";
+        if (!isLive(player)) {
+            return "Only a player who is really in the world can receive the teleport-cannon rod.";
         }
         if (!player.hasPermission(PERMISSION)) {
             return "You need " + PERMISSION + " to use the teleport cannon.";
@@ -196,35 +233,13 @@ public final class TeleportCannon implements Listener {
                 String rodId = armed != null && player.getUniqueId().equals(armed.owner)
                         ? armed.rodId : rodId(itemInHand(event));
                 if (rodId == null) {
-                    return;
+                    return; // an ordinary fishing rod: nothing to do, nothing touched
                 }
-                if (!player.hasPermission(PERMISSION)) {
-                    player.sendMessage(PluginText.PREFIX + "You need " + PERMISSION
-                            + " to use the teleport cannon.");
-                    return;
+                CastResult result = castVolley(player, hook.getLocation(), rodId);
+                player.sendMessage(PluginText.PREFIX + result.message);
+                if (result.fired) {
+                    hook.remove();
                 }
-                if (activeVolleyOwners.contains(player.getUniqueId())) {
-                    player.sendMessage(PluginText.PREFIX + "Your previous pearl volley is still in progress.");
-                    return;
-                }
-
-                VolleyPlan plan = prepare(player, hook.getLocation());
-                if (!plan.ready()) {
-                    player.sendMessage(PluginText.PREFIX + plan.failure);
-                    return;
-                }
-                if (!scheduleVolley(player, plan)) {
-                    player.sendMessage(PluginText.PREFIX
-                            + "The pearl barrage could not be scheduled; no Null inventory was changed.");
-                    return;
-                }
-                activeVolleyOwners.add(player.getUniqueId());
-
-                consumeRod(player, rodId);
-                player.sendMessage(PluginText.PREFIX + "The line snaps — " + plan.shots.size()
-                        + " real Ender Pearl(s) are falling from varied heights and positions. "
-                        + "Summoning portals remain physical and unchanged.");
-                hook.remove();
                 return;
             }
 
@@ -324,6 +339,82 @@ public final class TeleportCannon implements Listener {
         if (event != null && event.getPlayer() != null) {
             clearArmedHooks(event.getPlayer().getUniqueId());
         }
+    }
+
+    /**
+     * The cast behind a stuck hook: permission, one-volley-at-a-time, the plan,
+     * the schedule and the one-use rod. This is the whole decision, so the event
+     * handler and the self test cannot drift apart - a real reel and the test
+     * both come through here.
+     *
+     * <p>Nothing is spent before the plan is ready: a cast that is refused
+     * leaves every Null's pearls and the rod exactly where they were.</p>
+     *
+     * @param player the angler
+     * @param target where the hook stuck
+     * @param rodId  the tagged rod's id, or null for a rod that is not a cannon rod
+     * @return what the angler is told, and whether the volley was scheduled
+     */
+    public CastResult castVolley(Player player, Location target, String rodId) {
+        if (player == null) {
+            return new CastResult(false, "Only a player can fire the teleport cannon.");
+        }
+        if (rodId == null || rodId.isEmpty()) {
+            return new CastResult(false, "That is an ordinary fishing rod, not a Null Teleport"
+                    + " Cannon rod; it is left exactly as it was.");
+        }
+        if (!player.hasPermission(PERMISSION)) {
+            return new CastResult(false, "You need " + PERMISSION + " to use the teleport cannon.");
+        }
+        if (activeVolleyOwners.contains(player.getUniqueId())) {
+            return new CastResult(false, "Your previous pearl volley is still in progress.");
+        }
+        VolleyPlan plan = prepare(player, target);
+        if (!plan.ready()) {
+            return new CastResult(false, plan.failure);
+        }
+        lastPlannedHeights.clear();
+        lastPlannedLandings.clear();
+        for (Shot shot : plan.shots) {
+            lastPlannedHeights.add(shot.height);
+            lastPlannedLandings.add(shot.landing);
+        }
+        if (!scheduleVolley(player, plan)) {
+            lastPlannedHeights.clear();
+            lastPlannedLandings.clear();
+            return new CastResult(false, "The pearl barrage could not be scheduled;"
+                    + " no Null inventory was changed.");
+        }
+        activeVolleyOwners.add(player.getUniqueId());
+        consumeRod(player, rodId);
+        return new CastResult(true, "The line snaps — " + plan.shots.size()
+                + " real Ender Pearl(s) are falling from varied heights and positions. "
+                + "Summoning portals remain physical and unchanged.");
+    }
+
+    /** The cannon-rod id in that player's held item, or null for any other rod. */
+    public String heldRodId(Player player) {
+        if (player == null || player.getInventory() == null) {
+            return null;
+        }
+        return rodId(player.getInventory().getItemInMainHand());
+    }
+
+    /**
+     * True while that player is really in the world. A real player who quit is
+     * not online any more; a Null body is a live server-side player with no
+     * client attached, so {@code isOnline()} answers "no" for a Null by
+     * construction - which must not read as "the owner logged out". The adapter
+     * is what tells the two apart.
+     */
+    private boolean isLive(Player player) {
+        if (player == null || !player.isValid() || player.isDead()) {
+            return false;
+        }
+        if (player.isOnline()) {
+            return true;
+        }
+        return plugin.adapter() != null && plugin.adapter().isNullEntity(player.getUniqueId());
     }
 
     private VolleyPlan prepare(Player owner, Location target) {
@@ -490,7 +581,7 @@ public final class TeleportCannon implements Listener {
                 @Override
                 public void run() {
                     try {
-                        if (!owner.isOnline() || !owner.getWorld().equals(plan.world)) {
+                        if (!isLive(owner) || !owner.getWorld().equals(plan.world)) {
                             skipped += plan.shots.size() - index;
                             finish();
                             return;

@@ -205,6 +205,17 @@ fi
 # ---------------------------------------------------------------- verdict
 echo "----------------------- self test output -----------------------"
 grep -E '\[NullArmy\]\[SELFTEST\]' server.log || echo "(no self test output at all)"
+# Publish the full check list as the job summary: the step log is long and the
+# check-run annotations only carry a window of it, which hides which check
+# failed and why.
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  {
+    echo "### NullArmy self test (Paper ${MC_VERSION})"
+    echo '```'
+    grep -E '\[NullArmy\]\[SELFTEST\]' server.log || echo "(no self test output at all)"
+    echo '```'
+  } >> "$GITHUB_STEP_SUMMARY"
+fi
 echo "----------------------- nullarmy log lines ---------------------"
 grep -E '\[NullArmy\]|NullArmy' server.log | head -n 120 || true
 echo "----------------------- server errors --------------------------"
@@ -235,4 +246,23 @@ if [ "$status" -eq 0 ]; then
 else
   echo "RUNTIME SMOKE: FAIL - see the log sections above"
 fi
+
+# The check-run annotations keep only some of this log, and the lines they do
+# keep look like the script's own "RUNTIME SMOKE:" output. So the results a
+# reader has to be able to see - every failure, the verdict, and the checks
+# this pass was about - are echoed once more in that shape, last.
+echo "----------------------- verdict detail -------------------------"
+annotate() {
+  local label="$1"
+  local pattern="$2"
+  local count="${3:-1}"
+  grep -E "$pattern" server.log | tail -n "$count" \
+    | sed -E "s/^.*\[SELFTEST\] /RUNTIME SMOKE: ${label} /" || true
+}
+annotate "FAILED CHECK:" '\[NullArmy\]\[SELFTEST\] .*FAIL' 5
+annotate "RESULT:" '\[NullArmy\]\[SELFTEST\] RESULT:' 1
+annotate "cannon check:" '\[NullArmy\]\[SELFTEST\] (PASS|FAIL) S-117' 2
+annotate "doorway check:" '\[NullArmy\]\[SELFTEST\] (PASS|FAIL|BLOCKED) S-69' 3
+annotate "loot check:" '\[NullArmy\]\[SELFTEST\] (PASS|FAIL) S-115' 1
+echo "----------------------------------------------------------------"
 exit "$status"

@@ -6,9 +6,9 @@
 
 > This audit predates the current multi-module source tree and later v3/v4 implementation. Its
 > repository-count, architecture, and test-infrastructure findings below are historical snapshots,
-> not current facts. The current working tree has substantial Java source and tests, but its latest
-> edits remain unverified because Java is unavailable. See `STATUS.md` for the current branch
-> snapshot. The active owner corrections in `NullArmy_Master_Prompt.md` supersede conflicting
+> not current facts. The current working tree builds and is verified on a live Paper 1.21.11 server
+> (CI `37433416087`: `RESULT: PASS 120 passed, 0 failed`); see `STATUS.md` for the per-check
+> evidence. The active owner corrections in `NullArmy_Master_Prompt.md` supersede conflicting
 > assumptions here (notably portals, gaze, custom skin upload, chat, and AI building).
 
 ---

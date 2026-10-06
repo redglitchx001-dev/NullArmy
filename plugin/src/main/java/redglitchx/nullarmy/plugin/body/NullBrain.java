@@ -136,6 +136,14 @@ public final class NullBrain implements Reloadable {
     private int lootPicked;
     private int huntEngagements;
     private final Set<String> campBehaviours = new LinkedHashSet<>();
+    /**
+     * L-02: the block coordinates of the most recent bridge placements, newest
+     * last. A count alone ("3 placed") cannot show WHERE a Null bridged, and a
+     * check that samples coordinates the body never used cannot tell a real
+     * bridge from a hole that was filled in. Kept bounded: this is evidence,
+     * not a log.
+     */
+    private final List<Vec3d> bridgePlacements = new ArrayList<>();
 
     /** L-03: how many times a Null saluted its owner. */
     public int salutes() { return salutes; }
@@ -143,6 +151,10 @@ public final class NullBrain implements Reloadable {
     public int patrolLaps() { return patrolLaps; }
     /** L-02: how many blocks were placed by hand to bridge a gap. */
     public int blocksBridged() { return blocksBridged; }
+    /** L-02: where the most recent bridge blocks were placed (newest last). */
+    public List<Vec3d> bridgePlacements() { return new ArrayList<>(bridgePlacements); }
+    /** Self test: forget the recorded bridge placements before a measured window. */
+    public void clearBridgePlacements() { bridgePlacements.clear(); }
     /** P-09: how many blocks a destroy order really broke. */
     public int blocksDestroyed() { return blocksDestroyed; }
     /** L-08: how many dropped items a Null picked up. */
@@ -161,6 +173,7 @@ public final class NullBrain implements Reloadable {
         blocksDestroyed = 0;
         lootPicked = 0;
         campBehaviours.clear();
+        bridgePlacements.clear();
     }
 
     /** L-08: a Null picked something up. */
@@ -666,9 +679,7 @@ public final class NullBrain implements Reloadable {
                 // L-07: hunt the ordered target to the end. The chasers fight;
                 // the rest hold the line. When the target is gone, regroup.
                 Entity hunted = order.entity == null ? null : Bukkit.getEntity(order.entity);
-                boolean finished = hunted == null || hunted.isDead()
-                        || (hunted instanceof Player && !((Player) hunted).isOnline());
-                if (finished) {
+                if (huntTargetGone(hunted)) {
                     UUID owner = order.issuer;
                     mind.order = new Mind.Order(Mind.Verb.REGROUP, order.point, owner, owner, now, 1);
                     return Intent.stop();
@@ -698,6 +709,31 @@ public final class NullBrain implements Reloadable {
         }
     }
 
+    /**
+     * True when the thing a hunt is after is really gone: out of the world,
+     * dead, or a human player who has logged out.
+     *
+     * <p>A Null is a real server-side player with no client attached, so
+     * {@link Player#isOnline()} is false for it by construction (it is never in
+     * the login player list). That must not read as "the target logged out", or
+     * an order to hunt another Null would end before the first swing. A real
+     * player who quits is removed from the world anyway, so the removal check
+     * above still ends the hunt for him.</p>
+     */
+    private boolean huntTargetGone(Entity hunted) {
+        if (hunted == null || hunted.isDead()) {
+            return true;
+        }
+        if (!(hunted instanceof Player)) {
+            return false;
+        }
+        Player player = (Player) hunted;
+        if (plugin.adapter() != null && plugin.adapter().bodyOf(player.getUniqueId()) != null) {
+            return false; // a Null, not a client that logged out
+        }
+        return !player.isOnline();
+    }
+
     /** L-07: turns a finished hunt into the march home. */
     private void refreshHunt(NullBody body, Mind mind, Player handle) {
         Mind.Order order = mind.order;
@@ -705,9 +741,7 @@ public final class NullBrain implements Reloadable {
             return;
         }
         Entity hunted = Bukkit.getEntity(order.entity);
-        boolean finished = hunted == null || hunted.isDead()
-                || (hunted instanceof Player && !((Player) hunted).isOnline());
-        if (!finished) {
+        if (!huntTargetGone(hunted)) {
             return;
         }
         mind.combatTarget = null;
@@ -862,9 +896,25 @@ public final class NullBrain implements Reloadable {
         if (material == null) {
             return;
         }
+        /*
+         * A player bridges crouched, from the edge, with both feet on solid
+         * ground. The crouch is what stops vanilla from walking - or
+         * auto-jumping - him into the gap before the block is down, and it is
+         * why the block lands at the level he is standing on: a block placed
+         * from mid-air lands at whatever height the body happened to be at, not
+         * on the walkway. So the crouch goes on for the placement attempt and a
+         * body that is off the ground waits for its next landing.
+         */
         intent.sneak = true;
+        if (!body.onGround()) {
+            return;
+        }
         if (Bodies.placeOne(handle, floor, material)) {
             blocksBridged++;
+            bridgePlacements.add(new Vec3d(fx, fy - 1, fz));
+            while (bridgePlacements.size() > 16) {
+                bridgePlacements.remove(0);
+            }
             mind.nextBridgeTick = now + 6L;
         } else {
             mind.nextBridgeTick = now + 20L;
