@@ -246,4 +246,13 @@ if [ "$status" -eq 0 ]; then
 else
   echo "RUNTIME SMOKE: FAIL - see the log sections above"
 fi
+
+# The check-run annotations only keep a window of this log, and it is the tail,
+# so the lines that have to be readable there are printed again, last: every
+# FAIL with its detail, the /null tp cannon check, and the verdict.
+echo "----------------------- verdict detail -------------------------"
+grep -E '\[NullArmy\]\[SELFTEST\] .*FAIL' server.log | tail -n 5 || true
+grep -E '\[NullArmy\]\[SELFTEST\] (PASS|FAIL) S-117' server.log | tail -n 1 || true
+grep -E '\[NullArmy\]\[SELFTEST\] RESULT:' server.log | tail -n 1 || true
+echo "----------------------------------------------------------------"
 exit "$status"
