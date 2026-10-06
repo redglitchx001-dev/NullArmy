@@ -1,8 +1,10 @@
 # NullArmy — Status
 
 **Last updated:** 2026-10-06 · **Current state:** the follow-up corrections are **verified on a
-live Paper 1.21.11 server**. `./gradlew clean build` (Java 21, GitHub Actions run `37433416087`,
-commit `4d20296`, branch `arena/c18d2228-nullarmy`) ends with the `runtimeSmoke` task and reports
+live Paper 1.21.11 server**. The code tree of this pass is commit `4d20296` on branch
+`arena/c18d2228-nullarmy` (CI run `37433416087`, check-run `112169357725`); the commits after it
+touch only these documents, and each of their CI runs was green as well (latest: run `37434523123`).
+`./gradlew clean build` (Java 21) ends with the `runtimeSmoke` task and reports
 **`RESULT: PASS 120 passed, 0 failed`**, then
 `RUNTIME SMOKE: PASS - verified on a live Paper server.` The five checks that were failing on `main`
 (S-78, S-85, S-87, S-88, S-102) pass, S-115 (loot pickup) passes again, and the `/null tp` cannon

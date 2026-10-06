@@ -31,8 +31,9 @@
 
 The current tree is **verified on a live Paper 1.21.11 server**: `./gradlew clean build` ends with
 the `runtimeSmoke` task, which starts a real Paper server with the built jar, runs `/null selftest`
-and fails the build on any FAIL line. The last run (CI `37433416087`, commit `4d20296`, branch
-`arena/c18d2228-nullarmy`) reports `RESULT: PASS 120 passed, 0 failed` and
+and fails the build on any FAIL line. The code tree of this pass is commit `4d20296` (CI run
+`37433416087`, branch `arena/c18d2228-nullarmy`; later commits touch only these documents and their
+runs are green too) and reports `RESULT: PASS 120 passed, 0 failed` and
 `RUNTIME SMOKE: PASS - verified on a live Paper server.` [`STATUS.md`](STATUS.md) records the
 per-check evidence, including the follow-up pass that repaired S-78, S-85, S-87, S-88, S-102 and
 S-115 and added the `/null tp` cannon check (S-117). S-44, S-69 and S-94 still print a `BLOCKED:`
