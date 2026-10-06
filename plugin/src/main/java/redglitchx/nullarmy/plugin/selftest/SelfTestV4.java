@@ -238,6 +238,7 @@ final class SelfTestV4 {
 
         // ---- P-01 melee reach
         steps.add(this::p01Setup);
+        steps.add(this::p01OrderWatch);   // the order must reach the combat brain
         for (int i = 0; i < 12; i++) {
             steps.add(() -> t.gap(20));
         }
@@ -252,6 +253,7 @@ final class SelfTestV4 {
 
         // ---- P-02 swing cadence + crits
         steps.add(this::p02Setup);
+        steps.add(this::p01OrderWatch);   // same explicit order, same verification
         for (int i = 0; i < 9; i++) {
             steps.add(() -> t.gap(20));
         }
@@ -382,15 +384,102 @@ final class SelfTestV4 {
             attacker = squad.members().get(0);
             victim = squadB.members().get(0);
             plugin.brain().combat().resetCounters();
-            plugin.brain().order(List.of(attacker), Mind.Verb.HUNT, null, victim.uuid(),
-                    plugin.squads().ownerOf(attacker), 1);
-            Mind mind = plugin.brain().mind(attacker);
-            if (mind != null && mind.order != null) {
-                mind.order.chaser = true;
-            }
+            issueExplicitHunt(attacker, victim);
         } catch (Throwable e) {
             notes.add("p01 setup threw " + Guard.describe(e));
         }
+    }
+
+    /** Recorded by each explicit hunt order, so the checks can quote it. */
+    private String watchNote = "";
+
+    /**
+     * The explicit hunt order P-01/P-02 measure: issued through the plugin's own
+     * ordered-hunt entry point (which is what decides chaser versus line), then
+     * checked in the mind it was meant for. The owner's rule is that a Null
+     * pursues only after an order, so the measurement is only meaningful when
+     * the order really reached the brain.
+     */
+    private boolean issueExplicitHunt(NullBody hunter, NullBody prey) {
+        if (hunter == null || prey == null) {
+            watchNote = "hunt order not issued: " + (hunter == null ? "no hunter" : "no prey");
+            return false;
+        }
+        String answer = plugin.brain().hunt(List.of(hunter), prey.uuid(),
+                plugin.squads().ownerOf(hunter), 1);
+        Mind mind = plugin.brain().mind(hunter);
+        boolean landed = mind != null && mind.order != null && mind.order.verb == Mind.Verb.HUNT
+                && mind.order.chaser;
+        watchNote = "explicit hunt \"" + answer + "\" landed=" + landed
+                + " (order=" + (mind == null || mind.order == null
+                ? "-" : mind.order.verb.name().toLowerCase(Locale.ROOT))
+                + ", chaser=" + (mind != null && mind.order != null && mind.order.chaser) + ")";
+        return landed;
+    }
+
+    /**
+     * True when the measured fight is the fight the order asked for: either the
+     * ordered pursuit is in the brain right now, or the ordered prey went down
+     * while the fight was swinging. Anything else - no target, pursuit off, a
+     * different target - means the order did not reach the combat brain, which
+     * is exactly what the owner's "pursue only after an order" rule makes
+     * measurable.
+     */
+    private boolean orderedFightIsLive() {
+        Mind mind = attacker == null ? null : plugin.brain().mind(attacker);
+        if (mind == null || victim == null) {
+            return false;
+        }
+        if (mind.combatPursuit() && victim.uuid().equals(mind.combatTarget())) {
+            return true;
+        }
+        return !victim.isAlive() && plugin.brain().combat().swings() > 0;
+    }
+
+    /**
+     * One line of evidence about an ordered fight: the order the brain holds,
+     * whether it is a pursuit, the target it took, and whether the prey can be
+     * resolved at all. This is what a failing P-01/P-02 check prints, so the
+     * next failure says which link in the chain broke.
+     */
+    private String fightState(NullBody hunter, NullBody prey) {
+        Mind mind = hunter == null ? null : plugin.brain().mind(hunter);
+        Entity entity = prey == null ? null : Bukkit.getEntity(prey.uuid());
+        double apart = -1.0D;
+        if (hunter != null && prey != null) {
+            try {
+                apart = Math.hypot(prey.bodyPosition().x() - hunter.bodyPosition().x(),
+                        prey.bodyPosition().z() - hunter.bodyPosition().z());
+            } catch (Throwable ignored) {
+                // Positions are evidence only; the check keeps its own verdict.
+            }
+        }
+        return "order=" + (mind == null || mind.order == null ? "-"
+                : mind.order.verb + (mind.order.chaser ? "/chaser" : "/holder"))
+                + ", pursuit=" + (mind != null && mind.combatPursuit())
+                + ", fightUntil=" + (mind == null ? 0L : mind.combatUntil())
+                + ", target=" + (mind == null || mind.combatTarget() == null ? "-"
+                : (prey != null && mind.combatTarget().equals(prey.uuid()) ? "the ordered prey"
+                : mind.combatTarget().toString()))
+                + ", preyResolved=" + (entity != null) + ", preyAlive=" + (prey != null && prey.isAlive())
+                + ", apart=" + String.format(Locale.ROOT, "%.1f", apart)
+                + ", regroups=" + plugin.brain().regroups();
+    }
+
+    /**
+     * A few ticks into the measurement: record where the explicit order went.
+     *
+     * <p>This only observes. A lost order is not re-issued here - if the brain
+     * dropped it, the S-85/S-87 checks have to see that, not have it hidden by
+     * a second identical order.</p>
+     */
+    private void p01OrderWatch() {
+        if (attacker == null || victim == null) {
+            return;
+        }
+        watchNote = "shortly after the order: " + fightState(attacker, victim)
+                + ", orderedFight=" + orderedFightIsLive();
+        t.say("P-01/P-02 hunt watch: " + watchNote);
     }
 
     private void p01Hit() {
@@ -406,8 +495,20 @@ final class SelfTestV4 {
         check("S-85", "P-01", hurt, "a Null really damages a target it can reach (health "
                 + (victim == null ? "?" : String.format(Locale.ROOT, "%.1f", victim.health())) + ", "
                 + plugin.brain().combat().swings() + " swing(s), "
-                + plugin.brain().combat().reachRefusals() + " refused by the reach gate, last tick: "
+                + plugin.brain().combat().reachRefusals() + " refused by the reach gate, "
+                + fightState(attacker, victim) + ", last tick: "
                 + plugin.brain().combat().lastNote() + ")");
+        boolean ordered;
+        String orderedDetail;
+        try {
+            ordered = orderedFightIsLive();
+            orderedDetail = "the explicit hunt order reached the combat brain (" + watchNote
+                    + "; " + fightState(attacker, victim) + ")";
+        } catch (Throwable e) {
+            ordered = false;
+            orderedDetail = "the ordered fight could not be read: " + Guard.describe(e);
+        }
+        check("S-85", "P-01", ordered, orderedDetail);
     }
 
     /**
@@ -463,12 +564,7 @@ final class SelfTestV4 {
                     victimMind.order = new Mind.Order(Mind.Verb.HOLD, victim.bodyPosition(), null,
                             plugin.squads().ownerOf(victim), plugin.currentTick(), 200);
                 }
-                plugin.brain().order(List.of(attacker), Mind.Verb.HUNT, null, victim.uuid(),
-                        plugin.squads().ownerOf(attacker), 1);
-                Mind attackerMind = plugin.brain().mind(attacker);
-                if (attackerMind != null && attackerMind.order != null) {
-                    attackerMind.order.chaser = true;
-                }
+                issueExplicitHunt(attacker, victim);
             }
             mark = plugin.currentTick() + 1L;
             plugin.brain().combat().resetCounters();
@@ -575,12 +671,7 @@ final class SelfTestV4 {
             attacker = squad.members().get(0);
             victim = squadB.members().get(0);
             plugin.brain().combat().resetCounters();
-            plugin.brain().order(List.of(attacker), Mind.Verb.HUNT, null, victim.uuid(),
-                    plugin.squads().ownerOf(attacker), 1);
-            Mind mind = plugin.brain().mind(attacker);
-            if (mind != null && mind.order != null) {
-                mind.order.chaser = true;
-            }
+            issueExplicitHunt(attacker, victim);
             counter = 0;
         } catch (Throwable e) {
             notes.add("p02 setup threw " + Guard.describe(e));
@@ -596,8 +687,20 @@ final class SelfTestV4 {
         }
         check("S-87", "P-02", swings >= 5, "a Null in a fight swings at the cooldown, not once a second ("
                 + swings + " swings and " + plugin.brain().combat().reachRefusals()
-                + " reach refusal(s) in ~3 s of fighting, at least 5 needed; last tick: "
+                + " reach refusal(s) in ~3 s of fighting, at least 5 needed; "
+                + fightState(attacker, victim) + "; last tick: "
                 + plugin.brain().combat().lastNote() + ")");
+        boolean ordered;
+        String orderedDetail;
+        try {
+            ordered = orderedFightIsLive();
+            orderedDetail = "the explicit hunt order reached the combat brain (" + watchNote
+                    + "; " + fightState(attacker, victim) + ")";
+        } catch (Throwable e) {
+            ordered = false;
+            orderedDetail = "the ordered fight could not be read: " + Guard.describe(e);
+        }
+        check("S-87", "P-02", ordered, orderedDetail);
         boolean critMaths = SwingCadence.damage(10.0D, true) == 15.0D
                 && SwingCadence.damage(10.0D, false) == 10.0D;
         int dueIn = 0;
@@ -1328,12 +1431,16 @@ final class SelfTestV4 {
     // ------------------------------------------------------------------- L-02
 
     private final List<Material> dugMaterials = new ArrayList<>();
+    /** The two cells the gap took away: what a bridge has to put back. */
+    private final List<Block> gapCells = new ArrayList<>();
     private volatile int gapSurfaceY;
     private volatile int planksBefore;
 
     private void l02Setup() {
         dismissAll();
         try {
+            gapCells.clear();
+            plugin.brain().clearBridgePlacements();
             // A real 2-block-deep, 2-block-wide gap in flat ground: the sort a
             // squad walks into and bridges without being told to.
             Vec3d spot = at(50, 20);
@@ -1347,6 +1454,9 @@ final class SelfTestV4 {
                 for (int dy = 0; dy <= 1; dy++) {
                     Block block = world.getBlockAt(bx, by - dy, bz + dz);
                     dugMaterials.add(block.getType());
+                    if (dy == 0) {
+                        gapCells.add(block); // the walkway the bridge has to restore
+                    }
                     block.setType(Material.AIR, false);
                     placedBlocks.add(block);
                 }
@@ -1387,21 +1497,55 @@ final class SelfTestV4 {
                     }
                 }
             }
-            // The block it placed has to really be there: count solid ground in the gap.
-            Vec3d spot = at(50, 20);
-            int bx = (int) Math.floor(spot.x());
-            int bz = (int) Math.floor(spot.z());
-            int by = world.getHighestBlockYAt(bx, bz);
+            /*
+             * The block it placed has to really be there. Measure the exact
+             * blocks the setup dug out - the walkway cells - rather than
+             * re-deriving a height next to them, and report where the recorded
+             * placements actually landed, so a placement that filled the hole
+             * one level down cannot be mistaken for a bridge.
+             */
             int solid = 0;
-            for (int dz = 1; dz <= 2; dz++) {
-                if (!world.getBlockAt(bx, by, bz + dz).getType().isAir()) {
+            StringBuilder cells = new StringBuilder();
+            for (Block cell : gapCells) {
+                if (!cell.getType().isAir()) {
                     solid++;
                 }
+                cells.append("(").append(cell.getX()).append(",").append(cell.getY()).append(",")
+                        .append(cell.getZ()).append(")=")
+                        .append(cell.getType().name().toLowerCase(Locale.ROOT)).append(' ');
             }
-            gapSurfaceY = by;
-            detail = bridged + " block(s) placed, " + solid + " of 2 gap blocks now solid, "
-                    + carried + " item(s) left in the pack (was " + planksBefore + ")";
-            ok = bridged >= 1 && solid >= 2 && carried < planksBefore;
+            StringBuilder placed = new StringBuilder();
+            for (Vec3d position : plugin.brain().bridgePlacements()) {
+                Block block = world.getBlockAt((int) Math.floor(position.x()), (int) Math.floor(position.y()),
+                        (int) Math.floor(position.z()));
+                placed.append("(").append((int) Math.floor(position.x())).append(',')
+                        .append((int) Math.floor(position.y())).append(',')
+                        .append((int) Math.floor(position.z())).append(")=")
+                        .append(block.getType().name().toLowerCase(Locale.ROOT)).append(' ');
+            }
+            gapSurfaceY = gapCells.isEmpty() ? world.getHighestBlockYAt((int) Math.floor(at(50, 20).x()),
+                    (int) Math.floor(at(50, 20).z())) : gapCells.get(0).getY();
+            String where = "";
+            if (body != null) {
+                try {
+                    Vec3d bodyAt = body.bodyPosition();
+                    where = "; the builder is at " + String.format(Locale.ROOT, "%.1f", bodyAt.x()) + ","
+                            + String.format(Locale.ROOT, "%.1f", bodyAt.y()) + ","
+                            + String.format(Locale.ROOT, "%.1f", bodyAt.z())
+                            + (gapCells.size() == 2
+                            ? (bodyAt.z() > gapCells.get(1).getZ() + 0.5D ? " (past the gap)"
+                            : " (not past the gap)")
+                            : "");
+                } catch (Throwable ignored) {
+                    // Evidence only; the check keeps its own verdict.
+                }
+            }
+            detail = bridged + " block(s) placed, " + solid + " of " + gapCells.size()
+                    + " gap blocks now solid, " + carried + " item(s) left in the pack (was " + planksBefore + ")"
+                    + "; cells " + cells.toString().trim()
+                    + (placed.length() == 0 ? "; no bridge placement was recorded" : "; bridged at "
+                    + placed.toString().trim()) + where;
+            ok = bridged >= 1 && gapCells.size() == 2 && solid >= 2 && carried < planksBefore;
         } catch (Throwable e) {
             ok = false;
             detail = Guard.describe(e);

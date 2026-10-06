@@ -186,6 +186,7 @@ public final class Mind {
                 : String.format(java.util.Locale.ROOT, "%.1f,%.1f,%.1f", exitPoint.x(), exitPoint.y(), exitPoint.z()))
                 + " exitUntil=" + exitUntil + " slide=" + (slideTo != null) + " fight=" + (combatTarget == null ? "-"
                 : describeEntity(combatTarget))
+                + " pursuit=" + combatPursuit + " fightUntil=" + combatUntil
                 + " detour=" + (detour != null) + " blocked=" + blockedTicks + " atCell=" + atCell
                 + " resting=" + resting + " eating=" + eating();
     }
@@ -200,6 +201,13 @@ public final class Mind {
     public double speedFactor() { return speedFactor; }
     public Order order() { return order; }
     public UUID combatTarget() { return combatTarget; }
+
+    /** True only while an explicit attack/hunt order is driving the fight. */
+    public boolean combatPursuit() { return combatPursuit; }
+
+    /** The tick the current fight lapses at, 0 when there is none. */
+    public long combatUntil() { return combatUntil; }
+
     public boolean resting() { return resting; }
     public boolean eating() { return eatingUntil >= 0; }
 }

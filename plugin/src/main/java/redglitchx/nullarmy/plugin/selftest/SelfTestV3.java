@@ -1083,6 +1083,7 @@ final class SelfTestV3 {
         }
         blocked("S-69", "B-13", "the headless smoke uses a pig to exercise EntityPortalEvent; a real player's"
                 + " separate PlayerPortalEvent still needs a live client to verify end-to-end");
+        plugin.portals().resetRefusals();
         double[] out = groundPortal.frame().stepOutPoint();
         Vec3d c = groundPortal.center();
         Location from = new Location(world, out[0], out[1] + 0.2D, out[2]);
@@ -1115,9 +1116,20 @@ final class SelfTestV3 {
             }
         }
         int expectedPortalBlocks = portals.size() * PortalBuilder.INTERIOR_WIDTH * PortalBuilder.INTERIOR_HEIGHT;
+        /*
+         * The portal blocks are real, so the test has to show the containment
+         * doing the work, not just that the pig happened to wander elsewhere:
+         * the refusal counter is the containment's own tally of crossings it
+         * stopped. Where the pig ended up is printed either way, so a pig that
+         * travelled cannot be read as a pig that never tried.
+         */
+        String where = pig == null ? "the pig is gone"
+                : pig.getWorld().getName() + " at " + String.format(Locale.ROOT, "%.1f,%.1f,%.1f",
+                pig.getLocation().getX(), pig.getLocation().getY(), pig.getLocation().getZ());
         check("S-69", "B-13", stayed && portalBlocks == expectedPortalBlocks,
                 "the doorway contains real NETHER_PORTAL blocks but travel events are cancelled"
-                        + " (" + portalBlocks + "/" + expectedPortalBlocks + " portal blocks; entity stayed=" + stayed + ")");
+                        + " (" + portalBlocks + "/" + expectedPortalBlocks + " portal blocks; entity stayed=" + stayed
+                        + "; " + plugin.portals().refusals() + " crossing(s) refused by containment; " + where + ")");
         if (pig != null) {
             pig.remove();
         }
@@ -1376,21 +1388,40 @@ final class SelfTestV3 {
         check("S-77", "B-16", localPlan, "the deterministic local planner makes a 6-block wall without an AI call ("
                 + (built == null ? "no job" : built.source() + ", " + plannedPlacements + " placements")
                 + "; " + String.join(" | ", notes) + ")");
+        /*
+         * S-78: the measurement has to read the coordinates the plan NAMED, not
+         * a hand-picked rectangle that happens to sit near the build. The plan
+         * is zone-relative and the executor places at zone origin + step, so
+         * reading the same sum is what makes "6 placements" and "6 blocks" the
+         * same statement. Every planned cell must hold the planned material:
+         * a placement at the wrong cell, or of the wrong block, is a failure.
+         */
         int present = 0;
+        int planned = 0;
+        List<String> wrong = new ArrayList<>();
         if (built != null) {
-            for (int x = -1; x <= 0; x++) {
-                for (int y = 0; y <= 2; y++) {
-                    Block block = world.getBlockAt(built.zone().originX() + x, built.zone().originY() + y,
-                            built.zone().originZ() + 2);
-                    if (block.getType() == Material.COBBLESTONE) {
-                        present++;
-                        placedBlocks.add(block);
-                    }
+            for (BuildStep step : built.steps()) {
+                if (step.action() != BuildStep.Action.PLACE) {
+                    continue;
+                }
+                planned++;
+                Block block = world.getBlockAt(built.zone().originX() + step.x(),
+                        built.zone().originY() + step.y(), built.zone().originZ() + step.z());
+                Material wanted = Material.matchMaterial(step.block());
+                if (wanted != null && block.getType() == wanted) {
+                    present++;
+                    placedBlocks.add(block);
+                } else if (wrong.size() < 6) {
+                    wrong.add("(" + step.x() + "," + step.y() + "," + step.z() + ") wants " + step.block()
+                            + ", found " + block.getType().name().toLowerCase(Locale.ROOT));
                 }
             }
         }
-        check("S-78", "B-16", present == 6, "the Null placed the 6 local-plan blocks by hand (" + present + "/6, "
-                + (built == null ? "?" : built.placed()) + " placements" + (built == null || built.skips().isEmpty()
+        check("S-78", "B-16", built != null && planned == 6 && present == planned,
+                "every block of the local plan stands at its planned cell (" + present + "/" + planned + ", "
+                + (built == null ? "?" : built.placed()) + " placements"
+                + (wrong.isEmpty() ? "" : ", wrong: " + String.join("; ", wrong))
+                + (built == null || built.skips().isEmpty()
                 ? "" : ", skipped: " + built.skips()) + ")");
         int rate = plugin.pluginConfig().v3().builderPlaceRateTicks();
         boolean paced = built != null && built.placeTicks().size() >= 2;

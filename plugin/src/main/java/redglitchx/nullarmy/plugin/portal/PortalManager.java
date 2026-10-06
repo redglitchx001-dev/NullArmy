@@ -8,8 +8,10 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityPortalEnterEvent;
 import org.bukkit.event.entity.EntityPortalEvent;
 import org.bukkit.event.player.PlayerPortalEvent;
+import org.bukkit.util.BoundingBox;
 
 import redglitchx.nullarmy.core.math.Vec3d;
 import redglitchx.nullarmy.core.portal.PortalPlan;
@@ -53,6 +55,8 @@ public final class PortalManager implements Listener, Reloadable {
     private final PortalBuilder builder;
     private final List<PortalBuilder.BuiltPortal> active = new ArrayList<>();
     private final Random random = new Random();
+    /** How many times an entity's crossing into one of our doorways was refused. */
+    private int refusals;
 
     private PluginConfig config;
 
@@ -302,7 +306,36 @@ public final class PortalManager implements Listener, Reloadable {
                 + " standing, up to " + max + " per summon, lifetime " + (life / 20) + "s";
     }
 
+    /** Self test / diagnostics: crossings into our doorways refused so far. */
+    public int refusals() { return refusals; }
+
+    /** Self test: start counting refusals from zero. */
+    public void resetRefusals() { refusals = 0; }
+
     // ---------------------------------------------------------------- containment
+
+    /**
+     * Contact containment: the block an entity touches is one of ours.
+     *
+     * <p>This is the reliable half of the lock, and it is checked first because
+     * it carries the fact the travel events do not: Paper fires this event with
+     * the exact portal block the body overlaps, and cancelling it stops vanilla
+     * from starting the crossing at all. The travel events below remain the
+     * second line of defence, for an entity that was already inside a doorway
+     * when it went up.</p>
+     */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onEntityPortalEnter(EntityPortalEnterEvent event) {
+        Guard.attempt(plugin.getLogger(), "portal contact containment", () -> {
+            if (event == null || active.isEmpty()) {
+                return;
+            }
+            if (ours(event.getLocation())) {
+                event.setCancelled(true);
+                refusals++;
+            }
+        });
+    }
 
     /**
      * Nobody travels through a Null's doorway.
@@ -319,8 +352,9 @@ public final class PortalManager implements Listener, Reloadable {
             if (event == null || active.isEmpty()) {
                 return;
             }
-            if (ours(event.getFrom())) {
+            if (ours(event.getFrom()) || isInOurPortal(event.getPlayer())) {
                 event.setCancelled(true);
+                refusals++;
                 Player player = event.getPlayer();
                 if (player != null && config != null && !config.portalTravelAllowed()) {
                     player.sendMessage(PREFIX + "That is a Null arrival doorway, not a Nether"
@@ -337,8 +371,9 @@ public final class PortalManager implements Listener, Reloadable {
             if (event == null || active.isEmpty()) {
                 return;
             }
-            if (ours(event.getFrom())) {
+            if (ours(event.getFrom()) || isInOurPortal(event.getEntity())) {
                 event.setCancelled(true);
+                refusals++;
             }
         });
     }
@@ -356,8 +391,35 @@ public final class PortalManager implements Listener, Reloadable {
         return false;
     }
 
-    /** True when any entity near this location is standing in one of our blocks. */
+    /** True when any part of that entity's body overlaps one of our portal blocks. */
     public boolean isInOurPortal(Entity entity) {
-        return entity != null && ours(entity.getLocation());
+        if (entity == null || active.isEmpty()) {
+            return false;
+        }
+        World world = entity.getWorld();
+        if (world == null) {
+            return false;
+        }
+        BoundingBox body;
+        try {
+            body = entity.getBoundingBox();
+        } catch (Throwable t) {
+            body = null;
+        }
+        if (body == null) {
+            return ours(entity.getLocation());
+        }
+        for (PortalBuilder.BuiltPortal portal : active) {
+            if (!world.getName().equals(portal.worldName())) {
+                continue;
+            }
+            for (int[] cell : portal.frame().interiorCells()) {
+                if (body.overlaps(new BoundingBox(cell[0], cell[1], cell[2],
+                        cell[0] + 1.0D, cell[1] + 1.0D, cell[2] + 1.0D))) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }
