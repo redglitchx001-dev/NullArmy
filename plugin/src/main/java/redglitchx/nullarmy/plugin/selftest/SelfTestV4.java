@@ -2223,6 +2223,9 @@ final class SelfTestV4 {
     private String p13Arm = "";
     private String p13NoPearl = "";
     private String p13Fire = "";
+    /** What the volley planned: the drop heights and landing spots it fired from. */
+    private final List<Integer> p13PlanHeights = new ArrayList<>();
+    private final List<Vec3d> p13PlanLandings = new ArrayList<>();
     private boolean p13ArmOk;
     private boolean p13NoPearlOk;
     private boolean p13Fired;
@@ -2388,6 +2391,10 @@ final class SelfTestV4 {
             p13PortalsBefore = plugin.portals().activeCount();
             String heldId = plugin.teleportCannon().heldRodId(p13Owner);
             TeleportCannon.CastResult first = plugin.teleportCannon().castVolley(p13Owner, p13Target, heldId);
+            p13PlanHeights.clear();
+            p13PlanHeights.addAll(plugin.teleportCannon().lastPlannedHeights());
+            p13PlanLandings.clear();
+            p13PlanLandings.addAll(plugin.teleportCannon().lastPlannedLandings());
             // The one-use rod is spent, so the same cast cannot simply be repeated.
             TeleportCannon.CastResult twice = plugin.teleportCannon().castVolley(p13Owner, p13Target, heldId);
             p13Fired = first.fired;
@@ -2411,7 +2418,39 @@ final class SelfTestV4 {
         }
     }
 
-    private int distinctPearlHeights() {
+    /** How many different drop heights the volley fired from. */
+    private int distinctPlanHeights() {
+        Set<Integer> heights = new HashSet<>(p13PlanHeights);
+        return heights.size();
+    }
+
+    /** How many different landing columns the volley aimed at. */
+    private int distinctPlanColumns() {
+        Set<Long> columns = new HashSet<>();
+        for (Vec3d spot : p13PlanLandings) {
+            columns.add((((long) Math.floor(spot.x())) << 32) ^ ((long) Math.floor(spot.z())));
+        }
+        return columns.size();
+    }
+
+    /** The closest two planned landings come to each other, or -1 with fewer than two. */
+    private double closestPlannedLandings() {
+        double closest = -1.0D;
+        for (int i = 0; i < p13PlanLandings.size(); i++) {
+            for (int j = i + 1; j < p13PlanLandings.size(); j++) {
+                Vec3d a = p13PlanLandings.get(i);
+                Vec3d b = p13PlanLandings.get(j);
+                double d = Math.hypot(a.x() - b.x(), a.z() - b.z());
+                if (closest < 0.0D || d < closest) {
+                    closest = d;
+                }
+            }
+        }
+        return closest;
+    }
+
+    /** The heights of the real pearls when they were first seen, for the record. */
+    private int firstSeenPearlHeights() {
         Set<Long> tops = new HashSet<>();
         for (Vec3d spot : p13Pearls) {
             tops.add(Math.round(spot.y()));
@@ -2464,14 +2503,27 @@ final class SelfTestV4 {
                     }
                 }
             }
-            int heights = distinctPearlHeights();
-            int columns = distinctPearlColumns();
+            int observedHeights = firstSeenPearlHeights();
+            int observedColumns = distinctPearlColumns();
+            int planHeights = distinctPlanHeights();
+            int planColumns = distinctPlanColumns();
+            double closest = closestPlannedLandings();
+            StringBuilder planned = new StringBuilder();
+            for (int i = 0; i < p13PlanLandings.size(); i++) {
+                Vec3d spot = p13PlanLandings.get(i);
+                planned.append('(').append(Math.round(spot.x())).append(',').append(Math.round(spot.z()))
+                        .append(")+").append(i < p13PlanHeights.size() ? p13PlanHeights.get(i) : -1).append(' ');
+            }
             boolean rodSpent = taggedRods(p13Owner) == 0;
             boolean portalsUntouched = plugin.portals().activeCount() == p13PortalsBefore;
             detail = p13Arm + "; " + p13NoPearl + "; " + p13Fire
+                    + "; planned drops at (x,z)+height " + (planned.length() == 0 ? "-" : planned.toString().trim())
+                    + ", distinct heights=" + planHeights + " of " + p13PlanHeights.size()
+                    + ", distinct columns=" + planColumns + ", closest two landings "
+                    + String.format(Locale.ROOT, "%.2f", closest) + " block(s) apart (1.25 required)"
                     + "; real pearls in the air=" + p13Pearls.size()
                     + " at " + (landings.length() == 0 ? "-" : landings.toString().trim())
-                    + ", distinct heights=" + heights + ", distinct landing columns=" + columns
+                    + " (heights when first seen=" + observedHeights + ", columns=" + observedColumns + ")"
                     + "; " + spent + "/" + p13Shooters.size() + " pearls spent, " + moved
                     + " bod(ies) moved, " + atLanding + " standing on a landing spot"
                     + ", cannon rods left=" + taggedRods(p13Owner) + ", doorways standing "
@@ -2484,8 +2536,17 @@ final class SelfTestV4 {
              * not. Each count is printed, so a body that stayed put is visible
              * instead of being averaged away.
              */
+            /*
+             * "Varied heights, spaced positions" is a property of the barrage
+             * that was planned - the pearls are aimed from 12-30 blocks up and
+             * at least 1.25 blocks apart - so it is read from the plan the
+             * volley actually fired, not guessed from falling pearls that have
+             * all fallen the same distance. The pearls themselves still have to
+             * exist, be spent, and put the bodies on the ground.
+             */
             ok = p13ArmOk && p13NoPearlOk && p13Fired && p13Shooters.size() >= 2
-                    && p13Pearls.size() >= 2 && heights >= 2 && columns >= 2
+                    && p13Pearls.size() >= 2 && planHeights >= 2 && planColumns >= 1
+                    && closest >= 1.25 && p13PlanHeights.size() == p13Shooters.size()
                     && spent == p13Shooters.size() && moved >= 1 && atLanding >= 1
                     && rodSpent && portalsUntouched;
         } catch (Throwable e) {

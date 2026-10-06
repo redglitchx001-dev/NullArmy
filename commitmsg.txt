@@ -1,0 +1,11 @@
+Measure the barrage's height variety from the plan it fired
+
+The pearls all fall at the same speed from the same sky, so their
+positions a few ticks later say nothing about the heights they started
+from - the first run caught both at y=-43 and read that as "one height".
+
+The volley now remembers the heights and landings of the last ready plan,
+and the cannon check asserts what the promise is about: at least two
+different drop heights, landings at least 1.25 blocks apart, one planned
+shot per live Null - while the real pearls still have to exist, be spent,
+and put the bodies on the ground.

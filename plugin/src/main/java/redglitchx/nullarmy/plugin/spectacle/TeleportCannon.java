@@ -153,6 +153,26 @@ public final class TeleportCannon implements Listener {
         this.rodIdKey = new NamespacedKey(plugin, "teleport_cannon_rod_id");
     }
 
+    /*
+     * What the last ready volley planned, kept for the self test: the drop
+     * heights the pearls were launched from and the landing spots they were
+     * aimed at. This is the planner's own output - the same numbers the volley
+     * task fires from - so a test can measure the variety of the barrage
+     * instead of inferring it from falling pearls.
+     */
+    private final List<Integer> lastPlannedHeights = new ArrayList<>();
+    private final List<Vec3d> lastPlannedLandings = new ArrayList<>();
+
+    /** The drop heights of the last ready volley, in launch order. */
+    public List<Integer> lastPlannedHeights() {
+        return java.util.Collections.unmodifiableList(new ArrayList<>(lastPlannedHeights));
+    }
+
+    /** The landing spots of the last ready volley, in launch order. */
+    public List<Vec3d> lastPlannedLandings() {
+        return java.util.Collections.unmodifiableList(new ArrayList<>(lastPlannedLandings));
+    }
+
     /** Gives the one-use aiming rod, replacing any previous unspent copy. */
     public String giveRod(Player player) {
         if (!isLive(player)) {
@@ -353,7 +373,15 @@ public final class TeleportCannon implements Listener {
         if (!plan.ready()) {
             return new CastResult(false, plan.failure);
         }
+        lastPlannedHeights.clear();
+        lastPlannedLandings.clear();
+        for (Shot shot : plan.shots) {
+            lastPlannedHeights.add(shot.height);
+            lastPlannedLandings.add(shot.landing);
+        }
         if (!scheduleVolley(player, plan)) {
+            lastPlannedHeights.clear();
+            lastPlannedLandings.clear();
             return new CastResult(false, "The pearl barrage could not be scheduled;"
                     + " no Null inventory was changed.");
         }
