@@ -402,12 +402,19 @@ public final class TeleportCannon implements Listener {
 
     /**
      * True while that player is really in the world. A real player who quit is
-     * removed from the level, and a Null body is a live server-side player with
-     * no client attached - {@code isOnline()} answers "no" for a Null by
-     * construction, which must not read as "the owner logged out".
+     * not online any more; a Null body is a live server-side player with no
+     * client attached, so {@code isOnline()} answers "no" for a Null by
+     * construction - which must not read as "the owner logged out". The adapter
+     * is what tells the two apart.
      */
-    private static boolean isLive(Player player) {
-        return player != null && player.isValid() && !player.isDead();
+    private boolean isLive(Player player) {
+        if (player == null || !player.isValid() || player.isDead()) {
+            return false;
+        }
+        if (player.isOnline()) {
+            return true;
+        }
+        return plugin.adapter() != null && plugin.adapter().isNullEntity(player.getUniqueId());
     }
 
     private VolleyPlan prepare(Player owner, Location target) {
