@@ -369,7 +369,7 @@ final class SelfTestV4 {
         steps.add(this::p13Fire);         // S-117 one real pearl per live Null
         steps.add(() -> t.gap(4));
         steps.add(this::p13Peek);         // S-117 where the pearls really are
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < 6; i++) {
             steps.add(() -> t.gap(20));
         }
         steps.add(this::p13Check);        // S-117 spent, moved, spaced, safe
@@ -2216,7 +2216,7 @@ final class SelfTestV4 {
 
     private Player p13Owner;
     private PermissionAttachment p13Grant;
-    private Vec3d p13Target;
+    private Location p13Target;
     private final List<NullBody> p13Shooters = new ArrayList<>();
     private final List<Vec3d> p13Starts = new ArrayList<>();
     private final List<Vec3d> p13Pearls = new ArrayList<>();
@@ -2305,7 +2305,8 @@ final class SelfTestV4 {
         p13NoPearl = "";
         try {
             prepare(at(150, 70), 24);
-            p13Target = at(150, 70);
+            Vec3d spot = at(150, 70);
+            p13Target = new Location(world, spot.x(), spot.y(), spot.z());
             SquadManager.Squad stand = plugin.squads().spawnSquadAt(owner("p13owner"), worldName,
                     List.of(at(146, 70)));
             p13Owner = handle(stand.members().get(0));
