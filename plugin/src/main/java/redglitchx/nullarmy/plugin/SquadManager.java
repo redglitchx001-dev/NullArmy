@@ -893,8 +893,9 @@ public final class SquadManager implements Reloadable {
 
     /** Plays the summon portal effects. Cosmetic, throttled, never fatal. */
     public void playPortals(String worldName, Vec3d at) {
-        int effects = Math.max(Caps.minPortalEffects(),
-                caps == null ? Caps.minPortalEffects() : caps.portalEffectsPerSummon());
+        boolean particles = config == null || config.portalParticlesEnabled();
+        int effects = particles ? Math.max(Caps.minPortalEffects(),
+                caps == null ? Caps.minPortalEffects() : caps.portalEffectsPerSummon()) : 0;
         Guard.attempt(logger, "portal effects",
                 () -> adapter.playPortalEffects(worldName, at, effects));
     }

@@ -49,11 +49,15 @@ import java.util.UUID;
  *   <li><b>Wind charges.</b> On an explicit attack order, a real charge is
  *       thrown at medium range, consumed from inventory, and subject to a
  *       per-body cooldown. Its vanilla wind burst is not cancelled.</li>
+ *   <li><b>Commander mobility.</b> Explicit mid-range pursuits may deploy the
+ *       Commander's real Elytra and spend real firework rockets. The exact
+ *       previous chest item is restored on landing or when the pursuit ends;
+ *       ordinary Nulls and retaliatory fights never initiate flight.</li>
  *   <li><b>Commander mace planning.</b> The live selector reads the actual
  *       inventory, target armour and fall state. Supported smash, Wind Burst,
  *       Density and elytra-dive choices select a real mace for vanilla
- *       {@code Player#attack}; shield-break, pearl, water-placement and
- *       flight-controller plans remain planning-only.</li>
+ *       {@code Player#attack}; shield-break, pearl and water-placement plans
+ *       remain planning-only.</li>
  *   <li><b>Bows.</b> Beyond 8 blocks it draws, aims with lead and arc
  *       ({@link Ballistics}) and releases a real arrow.</li>
  *   <li><b>Retreat.</b> Below 30 % health it backs off and eats or drinks.</li>
@@ -75,6 +79,7 @@ public final class CombatBrain {
 
     private final NullArmyPlugin plugin;
     private final NullBrain brain;
+    private final ElytraFlightController flight;
     private final Random random = new Random();
 
     /** How many swings were taken, and how many of them were criticals (P-02). */
@@ -90,6 +95,7 @@ public final class CombatBrain {
     CombatBrain(NullArmyPlugin plugin, NullBrain brain) {
         this.plugin = plugin;
         this.brain = brain;
+        this.flight = new ElytraFlightController(plugin);
     }
 
     public int swings() { return swings; }
@@ -110,6 +116,26 @@ public final class CombatBrain {
 
     /** Last supported melee technique selected for the Commander, for diagnostics. */
     public PvpArsenal.Technique lastCommanderTechnique() { return lastCommanderTechnique; }
+
+    /** Whether this Commander currently has a managed Elytra pursuit in progress. */
+    public boolean elytraFlightActive(NullBody body) {
+        return body != null && flight.active(body.uuid());
+    }
+
+    /** Restores a body's chest equipment immediately when its order is cancelled. */
+    void stopFlight(NullBody body, Player handle) {
+        flight.stop(body, handle);
+    }
+
+    /** Stops flight from a death event that has the entity UUID rather than a body wrapper. */
+    void stopFlight(UUID id, Player handle) {
+        flight.stop(id, handle);
+    }
+
+    /** Restores all active flight equipment before the brain is discarded. */
+    void stopAllFlight() {
+        flight.stopAll();
+    }
 
     /** Self test: clears the swing / crit counters before a measured window. */
     public void resetCounters() {
@@ -161,8 +187,7 @@ public final class CombatBrain {
     boolean active(Mind mind, Player handle) {
         V3Settings v3 = brain.settings();
         if (v3 == null || !v3.combatEnabled() || handle == null) {
-            mind.combatTarget = null;
-            mind.combatPursuit = false;
+            endFight(mind, handle);
             return false;
         }
         if (mind.combatTarget == null) {
@@ -193,6 +218,7 @@ public final class CombatBrain {
             handle.clearActiveItem();
         }
         mind.bowDrawStart = -1L;
+        flight.stop(mind.id, handle);
         brain.raiseShield(handle, mind, false);
     }
 
@@ -206,6 +232,8 @@ public final class CombatBrain {
         double dx = targetPos.x() - pos.x();
         double dz = targetPos.z() - pos.z();
         double dist = Math.hypot(dx, dz);
+        double distance3d = handle.getLocation().distance(targetAt);
+        boolean commanderBody = isCommander(body);
         NullBrain.Intent intent = new NullBrain.Intent();
         if (mind.combatPursuit) {
             intent.look = new Vec3d(eyeAt.getX(), eyeAt.getY() - 0.2D, eyeAt.getZ());
@@ -214,6 +242,7 @@ public final class CombatBrain {
         // Retreat and heal when badly hurt.
         double max = NullBrain.maxHealth(handle);
         if (body.health() < max * 0.3D) {
+            flight.stop(mind.id, handle);
             lastNote = "retreating";
             brain.raiseShield(handle, mind, false);
             cancelBow(mind, handle);
@@ -227,13 +256,33 @@ public final class CombatBrain {
             return intent;
         }
 
-        // A retaliatory target is never a pursuit order. Defend only if it is
-        // already inside melee reach; do not face or close the gap otherwise.
+        // A retaliatory target is never a pursuit order. It must not inherit a
+        // previously deployed Elytra or start a new flight.
+        if (!commanderBody || !mind.combatPursuit) {
+            flight.stop(mind.id, handle);
+        }
+        // Defend only if the retaliatory target is already inside melee reach;
+        // do not face or close the gap otherwise.
         if (!mind.combatPursuit && dist > reach()) {
             lastNote = "holding position: no attack order";
             brain.raiseShield(handle, mind, false);
             cancelBow(mind, handle);
             return intent;
+        }
+
+        // Long explicit Commander pursuits use the real Elytra before falling
+        // back to a bow or a sprint. Ordinary Nulls and retaliation never enter
+        // the flight controller.
+        if (mind.combatPursuit && commanderBody) {
+            NullBrain.Intent flightIntent = flight.pursue(body, handle, target, distance3d, dx, dz, now);
+            if (flightIntent != null) {
+                brain.raiseShield(handle, mind, false);
+                mind.shieldUp = false;
+                cancelBow(mind, handle);
+                lastNote = handle.isGliding() ? "Commander Elytra glide at " + (int) distance3d
+                        : "Commander Elytra takeoff at " + (int) distance3d;
+                return flightIntent;
+            }
         }
 
         // A Wind Charge is a real, non-blocking vanilla projectile. It is
@@ -256,7 +305,6 @@ public final class CombatBrain {
             return bow(body, mind, handle, target, pos, intent, now);
         }
         cancelBow(mind, handle);
-        boolean commanderBody = isCommander(body);
         PvpArsenal.Technique technique = commanderBody
                 ? planCommanderTechnique(handle, target, dist) : PvpArsenal.Technique.DISENGAGE;
         if (commanderBody) {

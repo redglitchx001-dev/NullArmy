@@ -787,10 +787,12 @@ public final class NullPlayer extends ServerPlayer implements NullBody {
      *
      * <p>The intent becomes the same strafe/forward input a client sends, in the
      * body's own frame; {@code travel} then applies friction, gravity,
-     * collisions, step height, water and ladders exactly as for a player.
+     * collisions, step height, water and ladders exactly as for a player. When
+     * the server's real Elytra state is active, that same vanilla travel call
+     * runs fall-flying physics; no flight position or velocity is scripted here.
      * Fall damage is checked the way a real player's movement packet triggers
-     * it. A Null therefore cannot fly, cannot clip into a block and cannot
-     * outrun a sprinting player.</p>
+     * it. Without that explicit Elytra state, a Null cannot fly, clip into a
+     * block or outrun a sprinting player.</p>
      */
     private void applyMovement() {
         if (intentAge <= INTENT_TTL) {

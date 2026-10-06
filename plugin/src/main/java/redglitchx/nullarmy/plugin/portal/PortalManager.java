@@ -140,8 +140,12 @@ public final class PortalManager implements Listener, Reloadable {
         long now = plugin.currentTick();
         redglitchx.nullarmy.plugin.config.V3Settings v3 = current.v3();
         for (int i = 0; i < allowed; i++) {
+            // Keep the configured expiry on each doorway even while persistence
+            // is enabled. The tick sweep suppresses it while the opt-in is on;
+            // if an owner reloads it off, overdue frames can then restore safely.
             PortalBuilder.Request request = new PortalBuilder.Request(zone, (int) Math.floor(origin.y()),
-                    v3.floatingChance(), v3.airHeightMin(), v3.airHeightMax(), v3.portalLifetimeTicks(), active);
+                    v3.floatingChance(), v3.airHeightMin(), v3.airHeightMax(), v3.portalLifetimeTicks(), active,
+                    current.portalParticlesEnabled());
             PortalBuilder.Result result = builder.build(plugin.adapter(), world, origin, request, now);
             if (result.succeeded()) {
                 active.add(result.portal());
@@ -174,13 +178,22 @@ public final class PortalManager implements Listener, Reloadable {
         return builder.validate(world, portal, min, max);
     }
 
-    /** Closes one doorway now and restores its blocks. */
+    /**
+     * Closes one doorway now and restores its blocks.
+     *
+     * @return number of blocks restored in this pass; an incomplete doorway
+     *         remains tracked and is retried by the tick sweep
+     */
     public int close(PortalBuilder.BuiltPortal portal) {
         if (portal == null) {
             return 0;
         }
-        active.remove(portal);
-        return restore(portal);
+        portal.requestRestore();
+        int blocks = restore(portal);
+        if (portal.isRestored()) {
+            active.remove(portal);
+        }
+        return blocks;
     }
 
     public Vec3d takeExit(PortalBuilder.BuiltPortal portal, int wanted) {
@@ -222,27 +235,39 @@ public final class PortalManager implements Listener, Reloadable {
             return;
         }
         PluginConfig current = config;
+        boolean persistent = current != null && current.portalsPersistUntilClear();
         boolean afterExit = current == null || current.v3().restoreAfterExit();
         Iterator<PortalBuilder.BuiltPortal> it = active.iterator();
         while (it.hasNext()) {
             PortalBuilder.BuiltPortal portal = it.next();
-            boolean expired = portal.expiresAtTick() <= tickCounter;
-            boolean allOut = afterExit && !portal.assigned().isEmpty()
+            boolean expired = !persistent && portal.expiresAtTick() <= tickCounter;
+            boolean allOut = !persistent && afterExit && !portal.assigned().isEmpty()
                     && tickCounter - portal.builtTick() > 60 && everyoneOut(portal);
-            if (expired || allOut) {
-                it.remove();
-                int blocks = restore(portal);
-                if (plugin.chatGate() != null) {
-                    Vec3d c = portal.center();
-                    plugin.chatGate().event("portal.restored", "where",
-                            Math.round(c.x()) + "," + Math.round(c.y()) + "," + Math.round(c.z()), "blocks", blocks);
+            if (expired || allOut || portal.restorationRequested()) {
+                portal.requestRestore();
+                restore(portal);
+                if (portal.isRestored()) {
+                    it.remove();
+                    if (plugin.chatGate() != null) {
+                        Vec3d c = portal.center();
+                        plugin.chatGate().event("portal.restored", "where",
+                                Math.round(c.x()) + "," + Math.round(c.y()) + "," + Math.round(c.z()),
+                                "blocks", portal.blockCount());
+                    }
+                } else {
+                    // Keep the portal tracked and retry next tick. Counting an
+                    // attempted but incomplete restore as closed would hide the
+                    // remaining world edits from the owner and from disable().
+                    plugin.getLogger().fine("[NullArmy] portal restoration is incomplete; "
+                            + portal.pendingRestoreCount() + " block(s) remain at " + portal.center());
                 }
                 continue;
             }
             if (tickCounter % 10 == 0) {
                 World world = Bukkit.getWorld(portal.worldName());
                 if (world != null) {
-                    PortalBuilder.effects(world, portal, tickCounter % 80 == 0);
+                    PortalBuilder.effects(world, portal, tickCounter % 80 == 0,
+                            current == null || current.portalParticlesEnabled());
                 }
             }
         }
@@ -280,16 +305,21 @@ public final class PortalManager implements Listener, Reloadable {
     /**
      * Restores every active doorway now.
      *
-     * @return how many doorways were undone
+     * @return how many doorways were completely restored; incomplete ones remain
+     *         tracked so another cleanup pass can retry them
      */
     public int restoreAll() {
         int count = 0;
         for (PortalBuilder.BuiltPortal portal : new ArrayList<>(active)) {
-            if (restore(portal) >= 0) {
+            portal.requestRestore();
+            if (!portal.isRestored()) {
+                restore(portal);
+            }
+            if (portal.isRestored()) {
+                active.remove(portal);
                 count++;
             }
         }
-        active.clear();
         return count;
     }
 
@@ -300,10 +330,15 @@ public final class PortalManager implements Listener, Reloadable {
     public String describe() {
         PluginConfig current = config;
         int max = current == null ? 0 : current.portalsMaxPerSummon();
-        long life = current == null ? 0 : current.portalsLifetimeTicks();
+        long life = current == null ? 0L : current.v3().portalLifetimeTicks();
         boolean enabled = current != null && current.portalsEnabled();
+        boolean persistent = current != null && current.portalsPersistUntilClear();
+        boolean particles = current == null || current.portalParticlesEnabled();
+        String lifetime = persistent ? "persistent until /null portals clear or plugin shutdown"
+                : "lifetime " + (life / 20) + "s";
         return (enabled ? "on" : "off (portals.enabled)") + ", " + active.size()
-                + " standing, up to " + max + " per summon, lifetime " + (life / 20) + "s";
+                + " standing, up to " + max + " per summon, " + lifetime
+                + ", particles " + (particles ? "on" : "off");
     }
 
     /** Self test / diagnostics: crossings into our doorways refused so far. */

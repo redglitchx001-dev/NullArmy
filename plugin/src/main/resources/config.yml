@@ -51,8 +51,12 @@ limits:
 visuals:
   # Spec 3 requires AT LEAST 15 portal effects per summon. Values below 15 are
   # raised to 15 at startup, so the visual floor can never be configured away.
-  # These particles are ON TOP OF the real portal doorways below, never instead.
+  # This particle count is ON TOP OF the real portal doorways below, never instead.
+  # The minimum of 15 is still enforced whenever particles are enabled.
   portal-effects-per-summon: 16
+  # Set false to suppress cosmetic portal particles. Frames, walk-out, cleanup and
+  # the optional portal sounds continue to work normally.
+  portal-particles-enabled: true
 
 summoning:
   # Ticks before an unanswered "how many Nulls?" prompt expires (20 ticks = 1s).
@@ -72,7 +76,8 @@ summoning:
 #    * a site is only used when every block the frame needs is already air -
 #      one existing block and the site is refused;
 #    * every block placed is recorded with its original data and put back when
-#      the doorway's lifetime ends, on /null portals, and on plugin disable;
+#      the doorway expires/exits, on /null portals clear, and on plugin disable;
+#      persist-until-clear is an explicit opt-in to keep it standing meanwhile;
 #    * blocks are written with physics off, so nothing catches fire, falls or
 #      flows, and no second portal is ever created;
 #    * portal travel through these blocks is cancelled, so nobody is sent to the
@@ -97,6 +102,9 @@ portals:
   # last assigned Null has stepped clear (see below).
   lifetime-s: 30
   restore-after-exit: true
+  # Opt-in: keep frames after lifetime and walk-out until /null portals clear.
+  # Plugin disable still restores them. This overrides lifetime-s and restore-after-exit.
+  persist-until-clear: false
   # Share of doorways that hang in the air instead of standing on the ground.
   # Nulls drop out of a floating doorway and take real fall damage.
   floating-chance: 0.35
@@ -447,8 +455,9 @@ ai:
   auto-coordinate: true
   coordinate-interval-ticks: 400
 
-  # Which endpoint a role uses when it has no explicit binding below.
-  # Leave empty ("") to auto-pick the first enabled endpoint.
+  # Primary endpoint when no role-specific binding is provided. Leave empty
+  # to pick the first enabled endpoint. Remaining enabled entries are automatic
+  # fallbacks in YAML order. A missing/disabled id warns and uses the first enabled.
   default-endpoint: ""
 
   defaults:
@@ -457,9 +466,9 @@ ai:
     max-json-bytes: 8192
 
   # ===================================================================
-  #  ENDPOINTS - enable the ones you actually have credentials for.
-  #  An enabled endpoint with no key just fails and falls back, so they
-  #  are all disabled here even though the master switch above is on.
+  #  ENDPOINTS - these examples are disabled until you enable/configure one.
+  #  For your own entries, enabled defaults to true when omitted. Each endpoint
+  #  must speak the OpenAI Chat Completions request/response format.
   # ===================================================================
   endpoints:
     openai:
@@ -468,10 +477,12 @@ ai:
       api-key: "env:OPENAI_API_KEY"
       enabled: false
 
+    # Anthropic via an OpenAI-compatible gateway. The native Anthropic
+    # /v1/messages API uses a different protocol and is not accepted here.
     anthropic:
-      endpoint: "https://api.anthropic.com/v1"
-      model-id: "claude-3-5-sonnet-latest"
-      api-key: "env:ANTHROPIC_API_KEY"
+      endpoint: "https://openrouter.ai/api/v1"
+      model-id: "anthropic/claude-3.5-sonnet"
+      api-key: "env:OPENROUTER_API_KEY"
       enabled: false
 
     openrouter:

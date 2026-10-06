@@ -8,10 +8,11 @@ import java.util.List;
  * Binds one {@link AgentRole} to one primary endpoint plus an optional ordered
  * fallback chain.
  *
- * <p>If the primary endpoint is missing, unreachable, rate-limited or its
- * circuit breaker is open, NullArmy walks the fallback chain and finally falls
- * back to deterministic local logic. Spec 7: "A missing or unreachable endpoint
- * must never stall the server or stop basic Null behaviour."</p>
+ * <p>If the primary endpoint is missing, unreachable or rate-limited, the
+ * client may walk the fallback chain and finally fall back to deterministic
+ * local logic. The HTTP client currently applies bounded retries but does not
+ * retain circuit-breaker state across separate requests. A missing or
+ * unreachable endpoint must never stall the server or stop basic Null behaviour.</p>
  *
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
  */

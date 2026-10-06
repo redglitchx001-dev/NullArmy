@@ -29,15 +29,16 @@
 
 ## Verification history and current state
 
-The current tree is **verified on a live Paper 1.21.11 server**: `./gradlew clean build` ends with
-the `runtimeSmoke` task, which starts a real Paper server with the built jar, runs `/null selftest`
-and fails the build on any FAIL line. The code tree of this pass is commit `4d20296` (CI run
-`37433416087`, branch `arena/c18d2228-nullarmy`; later commits touch only these documents and their
-runs are green too) and reports `RESULT: PASS 120 passed, 0 failed` and
-`RUNTIME SMOKE: PASS - verified on a live Paper server.` [`STATUS.md`](STATUS.md) records the
-per-check evidence, including the follow-up pass that repaired S-78, S-85, S-87, S-88, S-102 and
-S-115 and added the `/null tp` cannon check (S-117). S-44, S-69 and S-94 still print a `BLOCKED:`
-note for the half that needs a real client, and assert the closest measurable half alongside it.
+The latest **recorded historical** live Paper 1.21.11 smoke run is commit `4d20296` (CI run
+`37433416087`, branch `arena/c18d2228-nullarmy`): `RESULT: PASS 120 passed, 0 failed` and
+`RUNTIME SMOKE: PASS - verified on a live Paper server.` [`STATUS.md`](STATUS.md) records that
+run's per-check evidence. It is not verification of this session's branch or working-tree changes.
+
+The current branch's endpoint routing, portal particle/persistence, and Commander flight edits have
+not been rebuilt or runtime-tested. This authoring environment has no Java/JDK installed, so no
+current build or test result is available. Treat the historical smoke evidence below as context,
+not as a fresh pass. S-44, S-69 and S-94 in that older run also print a `BLOCKED:` note for the half
+that needs a real client and assert the closest measurable half alongside it.
 
 The previous headless smoke run covered:
 
@@ -120,10 +121,10 @@ release-verified plugin.
 | --- | --- |
 | **Source code** | 121 Java source files (including tests) across 4 Gradle modules |
 | **Build system** | Gradle (Kotlin DSL), multi-module |
-| **Build history** | The current tree builds and runs on Paper 1.21.11; CI run `37433416087` |
-| **Tests** | `RESULT: PASS 120 passed, 0 failed` in the live Paper smoke run (plus the core test suite in `./gradlew build`) |
+| **Build history** | Historical Paper 1.21.11 smoke run on prior commit `4d20296`; CI run `37433416087` |
+| **Tests** | `RESULT: PASS 120 passed, 0 failed` was reported for that historical smoke run; it does not cover current edits |
 | **Mechanics** | Many behaviors are implemented; no up-to-date completion count for all 471 catalogue rows is asserted |
-| **Current state** | The follow-up repairs are verified; see [`STATUS.md`](STATUS.md) |
+| **Current state** | Current endpoint, portal, and Commander flight edits are not build-verified; see [`BUILD.md`](BUILD.md) |
 | **Docs** | Master prompt + [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) · [`STATUS.md`](STATUS.md) · [`TRACEABILITY.md`](TRACEABILITY.md) · [`BUILD.md`](BUILD.md) |
 
 This README describes the project's invariants, currently implemented behaviors, and the broader
@@ -150,10 +151,9 @@ and the explicit user constraints remain the authority for this work:
 | [`RELEASING.md`](RELEASING.md) | How to publish: versioning, CI workflow, checksums, GitHub releases, licence choice |
 
 > **Release warning:** the only adapter in this checkout targets Paper 1.21.11 (end-of-life). The
-> current tree is verified by the live Paper 1.21.11 smoke run recorded in `STATUS.md` (CI
-> `37433416087`: spawn, tracking, packets, doorways, death, and `RESULT: PASS 120 passed, 0 failed`).
-> That is one exact server build; a green CI job is not a stable-release approval, and every other
-> server build must be smoke-tested before it is advertised.
+> historical live smoke run in `STATUS.md` (CI `37433416087`) covered an earlier commit, not the
+> current working tree. A green CI job is not a stable-release approval, and every other server
+> build must be smoke-tested before it is advertised.
 
 ### ⚠️ Verification status of the code
 
@@ -221,9 +221,9 @@ The most important table in this document. These are ideas that sound great and 
 | **Throw a Wither Skull as a projectile** | ❌ | A Wither Skeleton Skull is a *placeable block item*, not a throwable. If Wither content is explicitly enabled, Nulls physically assemble the real soul sand/soul soil + 3 skulls structure from owned items. Off by default. |
 | **Wither cannon** | ⚠️ | Only a real, physically built, inventory-funded contraption. Failure is reported honestly — a failed launch is never silently replaced with a scripted projectile. |
 | **Removing armor makes you invisible** | ❌ | Reduces visible armor/glint and *also removes protection*. Invisibility requires an actual owned invisibility potion, with all its normal telltales (particles, held items, armor). |
-| **Wind Charges = flight** | ❌ | A Wind Charge gives a genuine one-off impulse. Sustained gliding requires a real equipped Elytra plus real firework rockets, with durability, launch, collision, and landing handled normally. |
+| **Wind Charges = flight** | ❌ | Wind Charges remain a genuine one-off impulse, never sustained flight. The working tree now has a Commander-only, explicit-pursuit Elytra controller that swaps real gear and consumes real rockets; the glide path still needs build and Paper runtime verification, and advanced Elytra tactics remain planning-only. |
 | **Packet-only fake player** | ❌ | A packet-only entity can't reliably fight, collide, place blocks, hold an inventory, or obey world physics. NullArmy uses a **server-authoritative NMS-backed entity** for anything that affects the world; packets are for appearance, profile/list presentation, and animation only. |
-| **Temporary summon portal doorways** | ✅ | Wherever a safe site exists, Nulls physically walk through temporary obsidian/`NETHER_PORTAL` doorways; modified blocks are restored after use and custom portal travel is cancelled. There is no teleport. If no safe doorway site exists, a Null emerges at verified open ground with effects and the fallback is reported. |
+| **Summon portal doorways** | ✅ | Wherever a safe site exists, Nulls physically walk through real obsidian/`NETHER_PORTAL` doorways; modified blocks restore after exit/lifetime, or stay until `/null portals clear` when the explicit persistence option is enabled. Plugin disable still restores them, and custom portal travel is cancelled. There is no teleport. If no safe site exists, a Null emerges at verified open ground and the fallback is reported. |
 | **Potion combining / mixing** | ❌ | Vanilla has no potion-mixing action. Legal brewing and tactical *sequencing* of separate potions only. |
 | **Ender pearls / chorus fruit to reposition** | ⚠️ | The explicit owner-only `/null tp` cannon is the sole Ender Pearl exception: each live Null must spend its own real pearl, and a vanilla projectile falls into a same-world, loaded, collision-safe area. No pearls are created, no AI/path recovery can teleport, and chorus fruit is not used. |
 
@@ -478,9 +478,10 @@ Endpoints are an upgrade, not a requirement: **[`ENDPOINTS.md`](ENDPOINTS.md)**.
 `/null commander` summons one named Null that steps through a temporary portal doorway when a
 safe site is available. It can use an account skin, signed texture or custom PNG signed through
 MineSkin; carries a full Bukkit-item loadout editable in `/null loadout`; and is damageable like
-other Nulls. `PvpArsenal` has 25 planning entries, but the current live integration executes only
-supported mace weapon choices through vanilla combat. Elytra flight controls, pearl movement,
-water placement and other tactics are not yet implemented.
+other Nulls. `PvpArsenal` has 25 planning entries, and the live combat integration supports only the
+mace weapon choices. The working tree adds a separate Commander-only Elytra controller for explicit
+mid-range combat pursuits from 18 blocks (real Elytra swap and firework use); it is not build/runtime verified yet.
+Pearl movement, water placement and the remaining advanced tactics are still planning-only.
 
 Built with **no dependencies**: the skin lookup uses the JDK's own HTTP client, the GUI is a plain
 chest inventory, persistence is Bukkit's YAML, and the technique library is pure Java in `core`.
@@ -552,7 +553,7 @@ Automated tests for pure logic, plus a reproducible Paper-server checklist for N
 9. ⬜ Formation changes work at doors, stairs, bridges, boats, combat crowds, and mixed terrain without stacking.
 10. ⬜ Combat respects cooldown, line of sight, shields, ammunition, effects, durability, allies, and PvP/world rules.
 11. ⬜ Water/cobweb/hay/slime/powder-snow clutches are attempted only with a real item and legal timing; **failed clutches still have normal consequences.**
-12. ⬜ Elytra flight consumes real rockets and respects durability, collision, takeoff, and landing. Wind Charges never create sustained flight.
+12. ⬜ The Commander-only 18–32-block pursuit controller uses a real Elytra/rockets; verify durability, vanilla glide physics, collision, takeoff and landing on Paper. Wind Charges never create sustained flight.
 13. ⬜ TNT does not break obsidian; obsidian mining uses a valid pickaxe and real time; bedrock is never bypassed.
 14. ⬜ Wither skulls are never thrown; Wither spawning is off by default and requires real ingredients + permission + confirmation.
 15. ⬜ Trap/redstone reasoning uses only visible information; no hidden blocks or player inventories are exposed to the AI.

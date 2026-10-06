@@ -267,6 +267,7 @@ final class SelfTestV4 {
         // ---- P-03 random alphanumeric usernames and real portals
         steps.add(this::p03Names);        // S-89
         steps.add(this::p03Portals);      // S-90
+        steps.add(this::p03PortalSettings); // S-118
 
         // ---- P-04 the totem holder is the only commander
         steps.add(this::p04Loyalty);      // S-91
@@ -278,8 +279,9 @@ final class SelfTestV4 {
         steps.add(this::p05Team);         // S-93
         steps.add(this::p05Aim);          // S-94
 
-        // ---- P-06 Commander boss kit
+        // ---- P-06 Commander boss kit and reversible Elytra flight gear
         steps.add(this::p06Kit);          // S-95
+        steps.add(this::p06FlightEquipment); // S-119
 
         // ---- P-07 builder, owner-relative goals, endpoints
         steps.add(this::p07Throne);       // S-96
@@ -908,6 +910,37 @@ final class SelfTestV4 {
         }
     }
 
+    /** Portal display is independently configurable; persistence is opt-in. */
+    private void p03PortalSettings() {
+        boolean ok = false;
+        String detail = "";
+        try {
+            redglitchx.nullarmy.plugin.config.PluginConfig defaults =
+                    new redglitchx.nullarmy.plugin.config.PluginConfig(
+                            new org.bukkit.configuration.file.YamlConfiguration(), plugin.getLogger());
+            boolean safeDefaults = defaults.portalParticlesEnabled() && !defaults.portalsPersistUntilClear();
+            org.bukkit.configuration.file.YamlConfiguration sample =
+                    new org.bukkit.configuration.file.YamlConfiguration();
+            sample.loadFromString(String.join(System.lineSeparator(),
+                    "visuals:",
+                    "  portal-particles-enabled: false",
+                    "portals:",
+                    "  persist-until-clear: true",
+                    ""));
+            redglitchx.nullarmy.plugin.config.PluginConfig parsed =
+                    new redglitchx.nullarmy.plugin.config.PluginConfig(sample, plugin.getLogger());
+            ok = safeDefaults && !parsed.portalParticlesEnabled() && parsed.portalsPersistUntilClear()
+                    && parsed.portalsEnabled();
+            detail = "safe defaults=" + safeDefaults + " particles=" + parsed.portalParticlesEnabled()
+                    + " persistent=" + parsed.portalsPersistUntilClear()
+                    + " physical=" + parsed.portalsEnabled();
+        } catch (Throwable e) {
+            detail = Guard.describe(e);
+        }
+        check("S-118", "P-03", ok, "portal particles can be suppressed without disabling real frames,"
+                + " and persistent frames are an explicit opt-in (" + detail + ")");
+    }
+
     // ------------------------------------------------------------------- P-04
 
     /** A Null never damages its owner, and never damages the Commander. */
@@ -1122,6 +1155,123 @@ final class SelfTestV4 {
                 + " the regular kit stays trim-free (" + detail + ")");
     }
 
+    /** Flight is pursuit-only, and the reversible gear swap preserves full item data and Elytra wear. */
+    private void p06FlightEquipment() {
+        boolean gate = redglitchx.nullarmy.plugin.body.ElytraFlightController.wantsFlight(
+                    true, true, 24.0D, true)
+                && !redglitchx.nullarmy.plugin.body.ElytraFlightController.wantsFlight(
+                    false, true, 24.0D, true)
+                && !redglitchx.nullarmy.plugin.body.ElytraFlightController.wantsFlight(
+                    true, false, 24.0D, true)
+                && !redglitchx.nullarmy.plugin.body.ElytraFlightController.wantsFlight(
+                    true, true, 8.0D, true)
+                && !redglitchx.nullarmy.plugin.body.ElytraFlightController.wantsFlight(
+                    true, true, 24.0D, false);
+        boolean equipped = false;
+        boolean restored = false;
+        boolean brokenRefused = false;
+        boolean lastUsableAccepted = false;
+        String detail = "";
+        try {
+            TestFlightGear gear = new TestFlightGear();
+            ItemStack originalChest = new ItemStack(Material.NETHERITE_CHESTPLATE);
+            org.bukkit.inventory.meta.ItemMeta chestMeta = originalChest.getItemMeta();
+            chestMeta.setDisplayName("Commander's exact trimmed chestplate");
+            if (chestMeta instanceof Damageable) {
+                ((Damageable) chestMeta).setDamage(37);
+            }
+            originalChest.setItemMeta(chestMeta);
+            redglitchx.nullarmy.plugin.kit.KitItems.withCommanderChestplateTrim(originalChest);
+            ItemStack originalElytra = new ItemStack(Material.ELYTRA);
+            org.bukkit.inventory.meta.ItemMeta elytraMeta = originalElytra.getItemMeta();
+            if (elytraMeta instanceof Damageable) {
+                ((Damageable) elytraMeta).setDamage(19);
+            }
+            originalElytra.setItemMeta(elytraMeta);
+            gear.chestplate(originalChest);
+            gear.storage(5, originalElytra);
+
+            redglitchx.nullarmy.plugin.body.ElytraFlightController.EquipmentSwap swap =
+                    redglitchx.nullarmy.plugin.body.ElytraFlightController.equip(gear);
+            equipped = swap != null && gear.chestplate() != null
+                    && gear.chestplate().getType() == Material.ELYTRA && gear.storage(5) == null;
+            if (swap != null && gear.chestplate() != null) {
+                ItemStack wornElytra = gear.chestplate();
+                org.bukkit.inventory.meta.ItemMeta wornMeta = wornElytra.getItemMeta();
+                if (wornMeta instanceof Damageable) {
+                    ((Damageable) wornMeta).setDamage(61);
+                }
+                wornElytra.setItemMeta(wornMeta);
+                swap.restore(gear);
+                ItemStack returned = gear.storage(5);
+                restored = originalChest.equals(gear.chestplate()) && returned != null
+                        && returned.getType() == Material.ELYTRA && returned.getAmount() == 1
+                        && returned.getItemMeta() instanceof Damageable
+                        && ((Damageable) returned.getItemMeta()).getDamage() == 61;
+                detail = "exact chest=" + originalChest.equals(gear.chestplate())
+                        + " Elytra damage returned=" + (returned != null
+                            && returned.getItemMeta() instanceof Damageable
+                            ? ((Damageable) returned.getItemMeta()).getDamage() : -1);
+            }
+
+            TestFlightGear brokenGear = new TestFlightGear();
+            ItemStack broken = new ItemStack(Material.ELYTRA);
+            org.bukkit.inventory.meta.ItemMeta brokenMeta = broken.getItemMeta();
+            if (brokenMeta instanceof Damageable) {
+                // Elytra stop working with one durability point remaining.
+                ((Damageable) brokenMeta).setDamage(Material.ELYTRA.getMaxDurability() - 1);
+            }
+            broken.setItemMeta(brokenMeta);
+            brokenGear.storage(0, broken);
+            brokenRefused = redglitchx.nullarmy.plugin.body.ElytraFlightController.equip(brokenGear) == null;
+
+            TestFlightGear nearlyBrokenGear = new TestFlightGear();
+            ItemStack nearlyBroken = new ItemStack(Material.ELYTRA);
+            org.bukkit.inventory.meta.ItemMeta nearlyBrokenMeta = nearlyBroken.getItemMeta();
+            if (nearlyBrokenMeta instanceof Damageable) {
+                ((Damageable) nearlyBrokenMeta).setDamage(Material.ELYTRA.getMaxDurability() - 2);
+            }
+            nearlyBroken.setItemMeta(nearlyBrokenMeta);
+            nearlyBrokenGear.storage(0, nearlyBroken);
+            lastUsableAccepted = redglitchx.nullarmy.plugin.body.ElytraFlightController.equip(
+                    nearlyBrokenGear) != null;
+        } catch (Throwable e) {
+            detail = Guard.describe(e);
+        }
+        check("S-119", "P-06", gate && equipped && restored && brokenRefused && lastUsableAccepted,
+                "only an explicit Commander pursuit deploys a usable Elytra; teardown restores the exact"
+                        + " chestplate and same, damaged wings, while broken wings are refused"
+                        + " (gates=" + gate + ", equipped=" + equipped + ", restored=" + restored
+                        + ", broken-refused=" + brokenRefused + ", two-points-left-accepted="
+                        + lastUsableAccepted + ", " + detail + ")");
+    }
+
+    /** Minimal inventory for exercising the lossless equipment swap without touching a live body. */
+    private static final class TestFlightGear
+            implements redglitchx.nullarmy.plugin.body.ElytraFlightController.GearAccess {
+        private final ItemStack[] storage = new ItemStack[36];
+        private ItemStack chest;
+
+        @Override public ItemStack chestplate() { return chest; }
+        @Override public void chestplate(ItemStack item) { chest = item == null ? null : item.clone(); }
+        @Override public ItemStack storage(int slot) {
+            return slot < 0 || slot >= storage.length ? null : storage[slot];
+        }
+        @Override public void storage(int slot, ItemStack item) {
+            if (slot >= 0 && slot < storage.length) {
+                storage[slot] = item == null ? null : item.clone();
+            }
+        }
+        @Override public void store(ItemStack item) {
+            for (int i = 0; i < storage.length; i++) {
+                if (storage[i] == null || storage[i].getType().isAir()) {
+                    storage[i] = item == null ? null : item.clone();
+                    return;
+                }
+            }
+        }
+    }
+
     // ------------------------------------------------------------------- P-07
 
     /** "a throne" plans a real chair: a seat, a back, armrests, gold and wool. */
@@ -1218,15 +1368,82 @@ final class SelfTestV4 {
                 detail = "no builder";
             } else {
                 BuilderService.Endpoint plain = builder.resolve("http://localhost:1234/v1");
+                BuilderService.Endpoint invalid = builder.resolve("https://bad host/v1");
                 BuilderService.Endpoint named = builder.resolve("id:does-not-exist");
                 Map<String, redglitchx.nullarmy.core.agent.EndpointConfig> known =
                         plugin.pluginConfig() == null ? Map.of() : plugin.pluginConfig().endpoints();
-                boolean listed = builder.describeEndpoints().contains("AI endpoint test:")
-                        && builder.describeEndpoints().contains("deterministic local");
-                detail = "plain=" + plain.url() + " unknown-id-rejected=" + !named.usable()
-                        + " known=" + known.size();
+                String diagnostics = builder.describeEndpoints();
+                boolean listed = diagnostics.contains("AI connectivity test:")
+                        && diagnostics.contains("deterministic local");
+
+                org.bukkit.configuration.file.YamlConfiguration customYaml =
+                        new org.bukkit.configuration.file.YamlConfiguration();
+                customYaml.loadFromString("ai:\n"
+                        + "  enabled: true\n"
+                        + "  endpoints:\n"
+                        + "    arena-custom:\n"
+                        + "      endpoint: http://127.0.0.1:1234/v1\n"
+                        + "      model-id: nullarmy-test\n"
+                        + "      api-key: \"\"\n"
+                        + "      timeout-millis: 9000\n"
+                        + "      max-json-bytes: 16384\n"
+                        + "    legacy-env:\n"
+                        + "      endpoint: https://legacy.example/v1\n"
+                        + "      model-id: legacy-test\n"
+                        + "      api-key-env: NULLARMY_SELFTEST_MISSING_KEY\n"
+                        + "    invalid-url:\n"
+                        + "      endpoint: https://bad host/v1\n"
+                        + "      model-id: ignored-test\n");
+                redglitchx.nullarmy.plugin.config.PluginConfig parsed =
+                        new redglitchx.nullarmy.plugin.config.PluginConfig(customYaml, plugin.getLogger());
+                redglitchx.nullarmy.core.agent.EndpointConfig registered = parsed.endpoints().get("arena-custom");
+                List<redglitchx.nullarmy.core.agent.EndpointConfig> parsedChatChain =
+                        parsed.chainFor(redglitchx.nullarmy.core.agent.AgentRole.CHAT_COMMANDER);
+                boolean customRegistered = registered != null && registered.enabled() && registered.isUsable()
+                        && registered.timeoutMillis() == 9000L && registered.maxJsonBytes() == 16384
+                        && parsedChatChain.contains(registered);
+                redglitchx.nullarmy.core.agent.EndpointConfig legacy = parsed.endpoints().get("legacy-env");
+                boolean legacyEnvParsed = legacy != null && legacy.usesEnvVar()
+                        && "NULLARMY_SELFTEST_MISSING_KEY".equals(legacy.apiKeyEnvName());
+                boolean defaultFallbackChain = parsedChatChain.size() == 2
+                        && "arena-custom".equals(parsedChatChain.get(0).id())
+                        && "legacy-env".equals(parsedChatChain.get(1).id());
+                boolean malformedSkipped = parsed.endpointProblems().containsKey("invalid-url")
+                        && !parsed.endpoints().containsKey("invalid-url");
+                String route = registered == null ? "" : registered.chatCompletionsUri().toString();
+                redglitchx.nullarmy.core.agent.EndpointConfig requestEndpoint =
+                        redglitchx.nullarmy.core.agent.EndpointConfig.builder("request-test",
+                                "https://url-user:url-pass@custom.example/proxy/v1?tenant=blue#client",
+                                "request-model")
+                                .withApiKey("selftest-secret")
+                                .enabled(true)
+                                .build();
+                java.net.http.HttpRequest request =
+                        redglitchx.nullarmy.plugin.chat.ChatBrain.buildRequest(requestEndpoint, "{}");
+                boolean urlAndAuthCorrect = request.method().equals("POST")
+                        && "https://custom.example/proxy/v1/chat/completions?tenant=blue"
+                                .equals(request.uri().toString())
+                        && request.headers().firstValue("Authorization")
+                                .orElse("").equals("Bearer selftest-secret")
+                        && request.headers().firstValue("Content-Type").orElse("")
+                                .equals("application/json");
+                redglitchx.nullarmy.core.agent.EndpointConfig keylessEndpoint =
+                        redglitchx.nullarmy.core.agent.EndpointConfig.builder("keyless-test",
+                                "http://127.0.0.1:1234/v1", "local-model").enabled(true).build();
+                boolean keylessOmitsAuth = redglitchx.nullarmy.plugin.chat.ChatBrain
+                        .buildRequest(keylessEndpoint, "{}").headers().firstValue("Authorization").isEmpty();
+                detail = "plain=" + plain.url() + " invalid-url-rejected=" + !invalid.usable()
+                        + " custom-registered=" + customRegistered
+                        + " default-fallback-chain=" + defaultFallbackChain
+                        + " legacy-env=" + legacyEnvParsed + " invalid-skipped=" + malformedSkipped
+                        + " route=" + route + " url-auth=" + urlAndAuthCorrect
+                        + " keyless-auth-omitted=" + keylessOmitsAuth
+                        + " unknown-id-rejected=" + !named.usable() + " existing=" + known.size();
                 ok = plain.usable() && plain.url().equals("http://localhost:1234/v1")
-                        && !named.usable() && listed;
+                        && !invalid.usable() && !named.usable() && listed
+                        && customRegistered && defaultFallbackChain
+                        && legacyEnvParsed && malformedSkipped && urlAndAuthCorrect && keylessOmitsAuth
+                        && route.equals("http://127.0.0.1:1234/v1/chat/completions");
             }
         } catch (Throwable e) {
             notes.add("p07 endpoints threw " + Guard.describe(e));

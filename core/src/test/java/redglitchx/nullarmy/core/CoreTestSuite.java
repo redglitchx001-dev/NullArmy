@@ -744,6 +744,35 @@ public final class CoreTestSuite {
         checkEquals("OPENAI_API_KEY", ok.apiKeyEnvName(), "key env name");
         check(ok.usesEnvVar(), "env: prefix means the key comes from the environment");
         check(ok.enabled(), "enabled");
+        checkEquals("https://api.openai.com/v1/chat/completions", ok.chatCompletionsUri().toString(),
+                "base URL resolves to the standard chat-completions route");
+        checkEquals("https://custom.example/proxy/v1/chat/completions?tenant=blue",
+                EndpointConfig.chatCompletionsUri("https://custom.example/proxy/v1/?tenant=blue#client")
+                        .toString(), "custom base path and query are preserved; fragment is discarded");
+        checkEquals("https://custom.example/v1/chat/completions",
+                EndpointConfig.chatCompletionsUri("https://custom.example/v1/chat/completions/").toString(),
+                "a complete route is not appended twice");
+        checkEquals("https://custom.example/v1/chat/completions",
+                endpoint("upper-scheme", "HTTPS://custom.example/v1", "m", "")
+                        .chatCompletionsUri().toString(), "HTTP scheme matching is case-insensitive and normalized");
+        EndpointConfig secretUrl = endpoint("query-secret",
+                "https://user:password@custom.example/v1?token=not-for-logs", "m", "");
+        String safeDescription = secretUrl.describe();
+        check(safeDescription.contains("https://custom.example/v1?…"),
+                "endpoint diagnostics retain route but redact user-info/query values");
+        check(!safeDescription.contains("password") && !safeDescription.contains("not-for-logs"),
+                "endpoint diagnostic does not leak URL credentials");
+        checkEquals("https://custom.example/v1/chat/completions?token=not-for-logs",
+                secretUrl.chatCompletionsUri().toString(),
+                "URL user-info is never sent; credentials use the configured Authorization key instead");
+        checkEquals("http://[::1]:1234/v1/chat/completions",
+                EndpointConfig.chatCompletionsUri("http://[::1]:1234/v1").toString(),
+                "IPv6 endpoint authorities remain valid");
+
+        EndpointConfig invalidKeyEnv = endpoint("invalid-key-env", "https://custom.example/v1", "m",
+                "env:NOT-A-VALID-NAME");
+        check(invalidKeyEnv.resolveApiKey() == null && !invalidKeyEnv.isUsable(),
+                "an invalid environment-variable name is treated as unresolved, not thrown");
 
         // A local endpoint over plain http is allowed, with no key at all.
         EndpointConfig local = endpoint("ollama", "http://127.0.0.1:11434/v1", "llama3", "");
@@ -760,6 +789,12 @@ public final class CoreTestSuite {
         try {
             EndpointConfig.builder("bad", "ftp://x/v1", "m").build();
             throw new AssertionError("expected non-http endpoint to be rejected");
+        } catch (IllegalArgumentException expected) {
+            // correct
+        }
+        try {
+            EndpointConfig.builder("bad", "https://bad host/v1", "m").build();
+            throw new AssertionError("expected malformed HTTP URL to be rejected");
         } catch (IllegalArgumentException expected) {
             // correct
         }

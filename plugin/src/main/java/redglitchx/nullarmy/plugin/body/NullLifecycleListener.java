@@ -143,6 +143,11 @@ public final class NullLifecycleListener implements Listener {
             if (!isNull(body)) {
                 return;
             }
+            // Return any temporarily swapped Commander Elytra/chestplate before
+            // vanilla builds the death-drop list, so neither item can vanish.
+            if (plugin.brain() != null) {
+                plugin.brain().combat().stopFlight(body.getUniqueId(), body);
+            }
             Component original = event.deathMessage();
             String cause = original == null ? "unknown"
                     : net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()

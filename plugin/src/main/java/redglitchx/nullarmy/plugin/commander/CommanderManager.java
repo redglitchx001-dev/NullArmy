@@ -374,9 +374,10 @@ public final class CommanderManager implements Listener, Reloadable {
         // fail without losing the Commander that already exists and was verified.
         final Vec3d arrivalSpot = spot;
         Guard.attempt(plugin.getLogger(), "Commander portal effects", () -> {
-            int effects = Math.max(Caps.minPortalEffects(),
-                    plugin.pluginConfig() == null ? Caps.minPortalEffects()
-                            : plugin.pluginConfig().caps().portalEffectsPerSummon());
+            PluginConfig current = plugin.pluginConfig();
+            int effects = current == null || current.portalParticlesEnabled()
+                    ? Math.max(Caps.minPortalEffects(), current == null ? Caps.minPortalEffects()
+                            : current.caps().portalEffectsPerSummon()) : 0;
             adapter.playPortalEffects(world, arrivalSpot, effects);
         });
 
@@ -434,6 +435,9 @@ public final class CommanderManager implements Listener, Reloadable {
 
     public boolean despawn() {
         NullBody body = commander;
+        if (body != null && plugin.brain() != null) {
+            plugin.brain().combat().stopFlight(body, redglitchx.nullarmy.plugin.body.Bodies.player(body));
+        }
         commander = null;
         if (body == null) {
             return false;

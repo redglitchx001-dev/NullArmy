@@ -1,5 +1,7 @@
 package redglitchx.nullarmy.core.agent;
 
+import java.net.URI;
+import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -50,7 +52,7 @@ public final class EndpointConfig {
 
     private EndpointConfig(Builder b) {
         this.id = b.id;
-        this.endpoint = b.endpoint;
+        this.endpoint = b.endpoint.trim();
         this.modelId = b.modelId;
         this.apiKeyRaw = b.apiKeyRaw;
         this.timeoutMillis = b.timeoutMillis;
@@ -72,6 +74,66 @@ public final class EndpointConfig {
 
     /** Alias for {@link #endpoint()}. */
     public String baseUrl() { return endpoint; }
+
+    /**
+     * Resolves this OpenAI-compatible base URL to its chat-completions route.
+     *
+     * <p>Configuration accepts either a base such as {@code https://host/v1}
+     * or the full {@code /chat/completions} URL. This method handles both,
+     * preserves any base-path and query, and never appends the route twice.
+     * URL fragments are discarded because they are client-side only.</p>
+     */
+    public URI chatCompletionsUri() {
+        return chatCompletionsUri(endpoint);
+    }
+
+    /** Static form used by connectivity checks and dependency-free tests. */
+    public static URI chatCompletionsUri(String baseUrl) {
+        String raw = baseUrl == null ? "" : baseUrl.trim();
+        if (raw.isEmpty()) {
+            throw new IllegalArgumentException("endpoint URL is empty");
+        }
+        final URI base;
+        try {
+            base = URI.create(raw);
+        } catch (IllegalArgumentException invalid) {
+            throw new IllegalArgumentException("endpoint URL is malformed", invalid);
+        }
+        String scheme = base.getScheme();
+        String host = base.getHost();
+        int port = base.getPort();
+        if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))
+                || host == null || host.isEmpty() || port == 0 || port > 65_535) {
+            throw new IllegalArgumentException("endpoint URL must be an absolute http:// or https:// URL");
+        }
+        String path = base.getRawPath();
+        path = path == null ? "" : path;
+        while (path.endsWith("/")) {
+            path = path.substring(0, path.length() - 1);
+        }
+        if (!path.toLowerCase(Locale.ROOT).endsWith("/chat/completions")) {
+            path += "/chat/completions";
+        }
+        // User-info is accepted for diagnostics/migration compatibility but is
+        // deliberately stripped from the request URI. Credentials belong in the
+        // api-key field, where they can be sent as an Authorization header.
+        String authorityHost = host.indexOf(':') >= 0 && !host.startsWith("[")
+                ? "[" + host + "]" : host;
+        StringBuilder resolved = new StringBuilder(scheme.toLowerCase(Locale.ROOT))
+                .append("://").append(authorityHost);
+        if (port > 0) {
+            resolved.append(':').append(port);
+        }
+        resolved.append(path);
+        if (base.getRawQuery() != null) {
+            resolved.append('?').append(base.getRawQuery());
+        }
+        try {
+            return URI.create(resolved.toString());
+        } catch (IllegalArgumentException invalid) {
+            throw new IllegalArgumentException("could not resolve endpoint chat-completions URL", invalid);
+        }
+    }
 
     /** The model id sent with each request. */
     public String modelId() { return modelId; }
@@ -122,11 +184,15 @@ public final class EndpointConfig {
         }
         if (usesEnvVar()) {
             String name = apiKeyEnvName();
-            if (name.isEmpty()) {
+            if (!name.matches("[A-Za-z_][A-Za-z0-9_]*")) {
                 return null;
             }
-            String value = System.getenv(name);
-            return (value == null || value.isEmpty()) ? null : value;
+            try {
+                String value = System.getenv(name);
+                return value == null || value.trim().isEmpty() ? null : value.trim();
+            } catch (IllegalArgumentException | SecurityException invalidEnvironmentAccess) {
+                return null;
+            }
         }
         return apiKeyRaw;
     }
@@ -142,8 +208,49 @@ public final class EndpointConfig {
         return resolveApiKey() != null;
     }
 
+    /** Removes URL user-info and query values before a URL is shown to an operator. */
+    public static String safeEndpointForDisplay(String raw) {
+        if (raw != null && raw.regionMatches(true, 0, "id:", 0, 3)) {
+            return "id:" + safeLabel(raw.substring(3));
+        }
+        try {
+            URI uri = URI.create(raw == null ? "" : raw.trim());
+            if (uri.getScheme() == null || uri.getHost() == null) {
+                return "(invalid URL)";
+            }
+            String host = uri.getHost();
+            if (host.indexOf(':') >= 0 && !host.startsWith("[")) {
+                host = "[" + host + "]";
+            }
+            StringBuilder out = new StringBuilder(uri.getScheme()).append("://").append(host);
+            if (uri.getPort() >= 0) {
+                out.append(':').append(uri.getPort());
+            }
+            if (uri.getRawPath() != null) {
+                out.append(uri.getRawPath());
+            }
+            if (uri.getRawQuery() != null) {
+                out.append("?…");
+            }
+            return out.toString();
+        } catch (IllegalArgumentException invalid) {
+            return "(invalid URL)";
+        }
+    }
+
+    private static String safeLabel(String raw) {
+        String text = raw == null ? "" : raw.trim();
+        StringBuilder clean = new StringBuilder(Math.min(80, text.length()));
+        for (int i = 0; i < text.length() && clean.length() < 80; i++) {
+            char c = text.charAt(i);
+            clean.append(c >= 0x20 && c != 0x7f && c != '\u00a7' ? c : ' ');
+        }
+        String label = clean.toString().trim();
+        return text.length() > clean.length() ? label + "…" : label;
+    }
+
     /**
-     * Diagnostic line. <b>Never contains the key value.</b>
+     * Diagnostic line. <b>Never contains the key value or URL credentials/query values.</b>
      *
      * <p>Example: {@code openai [gpt-4o-mini] https://api.openai.com/v1 env:OPENAI_API_KEY resolves=true}</p>
      */
@@ -156,7 +263,7 @@ public final class EndpointConfig {
         } else {
             keyPart = "inline(" + mask(apiKeyRaw) + ")";
         }
-        return id + " [" + modelId + "] " + endpoint + " " + keyPart;
+        return id + " [" + modelId + "] " + safeEndpointForDisplay(endpoint) + " " + keyPart;
     }
 
     /**
@@ -257,9 +364,11 @@ public final class EndpointConfig {
                 throw new IllegalArgumentException("endpoint must not be empty on endpoint '" + id + "'");
             }
             String url = endpoint.trim();
-            if (!url.startsWith("http://") && !url.startsWith("https://")) {
-                throw new IllegalArgumentException(
-                        "endpoint must start with http:// or https:// on endpoint '" + id + "': " + url);
+            try {
+                chatCompletionsUri(url);
+            } catch (IllegalArgumentException invalidUrl) {
+                throw new IllegalArgumentException("endpoint must be an absolute http:// or https:// URL on endpoint '"
+                        + id + "'", invalidUrl);
             }
             if (timeoutMillis <= 0) {
                 throw new IllegalArgumentException("timeout-millis must be > 0 on endpoint '" + id + "'");

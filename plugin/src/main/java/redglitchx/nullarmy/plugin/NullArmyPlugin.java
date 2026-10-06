@@ -356,7 +356,13 @@ public final class NullArmyPlugin extends JavaPlugin {
                 } catch (Throwable ignored) {
                     // Reported by restoreAll itself.
                 }
-                getLogger().info("[NullArmy] restored " + restored + " arrival portal(s).");
+                int remaining = portalManager.activeCount();
+                if (remaining == 0) {
+                    getLogger().info("[NullArmy] restored " + restored + " arrival portal(s).");
+                } else {
+                    getLogger().warning("[NullArmy] restored " + restored + " arrival portal(s); "
+                            + remaining + " still have blocks that could not be restored.");
+                }
             }
             if (entityRegistry != null) {
                 int removed = 0;

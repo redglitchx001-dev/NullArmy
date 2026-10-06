@@ -43,6 +43,7 @@ public final class PluginConfig {
     private final FileConfiguration config;
 
     private final Caps caps;
+    private final boolean portalParticlesEnabled;
 
     private final boolean griefingEnabled;
     private final boolean explosivesEnabled;
@@ -91,6 +92,7 @@ public final class PluginConfig {
     private final int portalsMaxPerPortal;
     private final int portalsMaxActive;
     private final long portalsLifetimeTicks;
+    private final boolean portalsPersistUntilClear;
     private final int portalSearchRadius;
     private final boolean portalTravelAllowed;
 
@@ -127,6 +129,7 @@ public final class PluginConfig {
 
     private final boolean aiEnabled;
     private final Map<String, EndpointConfig> endpoints = new LinkedHashMap<>();
+    private final Map<String, String> endpointProblems = new LinkedHashMap<>();
 
     /** Every v3 setting (combat, zone, portals, skins, builder, bodies). */
     private final V3Settings v3;
@@ -164,6 +167,7 @@ public final class PluginConfig {
         }
         int portals = clamp(config.getInt("visuals.portal-effects-per-summon", 16),
                 Caps.minPortalEffects(), 512, "visuals.portal-effects-per-summon", logger);
+        this.portalParticlesEnabled = config.getBoolean("visuals.portal-particles-enabled", true);
         int pathExpansions = clamp(config.getInt("limits.path-max-expansions", 4096),
                 1, 1_000_000, "limits.path-max-expansions", logger);
 
@@ -265,6 +269,7 @@ public final class PluginConfig {
                 1, 512, "portals.max-active", logger);
         this.portalsLifetimeTicks = clamp((int) config.getLong("portals.lifetime-ticks", 600L),
                 20, 72_000, "portals.lifetime-ticks", logger);
+        this.portalsPersistUntilClear = config.getBoolean("portals.persist-until-clear", false);
         this.portalSearchRadius = clamp(config.getInt("portals.search-radius", 6),
                 1, 24, "portals.search-radius", logger);
         this.portalTravelAllowed = config.getBoolean("portals.allow-travel", false);
@@ -314,32 +319,59 @@ public final class PluginConfig {
             for (String id : epSection.getKeys(false)) {
                 ConfigurationSection s = epSection.getConfigurationSection(id);
                 if (s == null) {
+                    endpointProblems.put(id, "expected a mapping with endpoint and model-id fields");
+                    if (logger != null) {
+                        logger.warning("[NullArmy] AI endpoint '" + id
+                                + "' was not registered: expected a mapping with endpoint and model-id fields.");
+                    }
                     continue;
                 }
                 // Accepted spellings: the current three-field form, plus the
                 // older base-url/model/auth-key-env names so existing configs
-                // keep working.
+                // keep working. Legacy *-key-env fields contain an environment
+                // variable name, so translate them to the explicit env: form.
                 String url = firstNonEmpty(s, "endpoint", "base-url");
                 String model = firstNonEmpty(s, "model-id", "model");
-                String key = firstNonEmpty(s, "api-key", "api-key-env", "auth-key-env");
+                String key = firstNonEmpty(s, "api-key");
+                if (key.isEmpty()) {
+                    String envName = firstNonEmpty(s, "api-key-env", "auth-key-env");
+                    key = envName.isEmpty() || envName.startsWith("env:") ? envName : "env:" + envName;
+                }
 
-                EndpointConfig ep = EndpointConfig.builder(id, url, model)
-                        .withApiKey(key)
-                        .timeoutMillis(s.getLong("timeout-millis",
-                                config.getLong("ai.defaults.timeout-millis", 3000L)))
-                        .callsPerMinute(s.getInt("calls-per-minute",
-                                config.getInt("ai.defaults.calls-per-minute", 20)))
-                        .maxJsonBytes(s.getInt("max-json-bytes",
-                                config.getInt("ai.defaults.max-json-bytes", 8192)))
-                        .maxRetries(s.getInt("max-retries", 2))
-                        .enabled(s.getBoolean("enabled", false))
-                        .build();
-                endpoints.put(id, ep);
-                if (logger != null && ep.hasInlineKey()) {
-                    logger.warning("[NullArmy] Endpoint '" + id
-                            + "' has its API key written inline in config.yml. It is plain text on"
-                            + " disk and can leak through a paste, a backup or a git commit."
-                            + " Prefer  api-key: \"env:YOUR_VAR_NAME\"  instead.");
+                try {
+                    EndpointConfig ep = EndpointConfig.builder(id, url, model)
+                            .withApiKey(key)
+                            .timeoutMillis(clampLong(s.getLong("timeout-millis",
+                                    config.getLong("ai.defaults.timeout-millis", 3000L)),
+                                    500L, 120_000L, "ai.endpoints." + id + ".timeout-millis", logger))
+                            .callsPerMinute(s.getInt("calls-per-minute",
+                                    config.getInt("ai.defaults.calls-per-minute", 20)))
+                            .maxJsonBytes(clamp(s.getInt("max-json-bytes",
+                                    config.getInt("ai.defaults.max-json-bytes", 8192)),
+                                    256, 10_000_000, "ai.endpoints." + id + ".max-json-bytes", logger))
+                            .maxRetries(clamp(s.getInt("max-retries", 2), 0, 5,
+                                    "ai.endpoints." + id + ".max-retries", logger))
+                            // Shipped providers set enabled:false explicitly. A
+                            // new custom entry with the four required fields is
+                            // usable immediately unless its owner opts it out.
+                            .enabled(s.getBoolean("enabled", true))
+                            .build();
+                    endpoints.put(id, ep);
+                    if (logger != null && ep.hasInlineKey()) {
+                        logger.warning("[NullArmy] Endpoint '" + id
+                                + "' has its API key written inline in config.yml. It is plain text on"
+                                + " disk and can leak through a paste, a backup or a git commit."
+                                + " Prefer  api-key: \"env:YOUR_VAR_NAME\"  instead.");
+                    }
+                } catch (RuntimeException invalidEndpoint) {
+                    // One malformed custom endpoint must not discard every
+                    // other setting or leave the plugin on a stale config.
+                    endpointProblems.put(id, "invalid URL/model or limit; check endpoint, model-id and limits");
+                    if (logger != null) {
+                        logger.warning("[NullArmy] AI endpoint '" + id
+                                + "' was not registered: invalid URL/model or limit."
+                                + " Other settings remain loaded; fix this entry and run /null reload.");
+                    }
                 }
             }
         }
@@ -348,14 +380,22 @@ public final class PluginConfig {
         // The ai.agents: section is OPTIONAL. When absent, every role simply
         // uses the default endpoint, so an owner who only cares about adding
         // models never has to think about roles at all.
-        String defaultEndpointId = resolveDefaultEndpointId(config);
+        String defaultEndpointId = resolveDefaultEndpointId(config, logger);
         boolean autoEnableRoles = aiEnabled && !defaultEndpointId.isEmpty();
 
         for (AgentRole role : AgentRole.values()) {
-            bindings.put(role, AgentBinding.builder(role)
+            AgentBinding.Builder defaultBinding = AgentBinding.builder(role)
                     .primaryEndpointId(defaultEndpointId)
-                    .enabled(autoEnableRoles)
-                    .build());
+                    .enabled(autoEnableRoles);
+            // A simple endpoint list is useful as a fallback list by itself:
+            // use the selected default first, then every other enabled entry
+            // in YAML order. Explicit role bindings below replace this chain.
+            for (EndpointConfig endpoint : endpoints.values()) {
+                if (endpoint.enabled() && !endpoint.id().equals(defaultEndpointId)) {
+                    defaultBinding.addFallback(endpoint.id());
+                }
+            }
+            bindings.put(role, defaultBinding.build());
         }
 
         ConfigurationSection agSection = config.getConfigurationSection("ai.agents");
@@ -409,10 +449,18 @@ public final class PluginConfig {
      * {@code ai.default-endpoint} if set, otherwise the first enabled
      * endpoint, otherwise none (which means local deterministic logic only).
      */
-    private String resolveDefaultEndpointId(FileConfiguration config) {
+    private String resolveDefaultEndpointId(FileConfiguration config, Logger logger) {
         String configured = config.getString("ai.default-endpoint", "");
         if (configured != null && !configured.trim().isEmpty()) {
-            return configured.trim();
+            String id = configured.trim();
+            EndpointConfig selected = endpoints.get(id);
+            if (selected != null && selected.enabled()) {
+                return selected.id();
+            }
+            if (logger != null) {
+                logger.warning("[NullArmy] ai.default-endpoint '" + id
+                        + "' is missing or disabled; selecting the first enabled endpoint instead.");
+            }
         }
         for (EndpointConfig ep : endpoints.values()) {
             if (ep.enabled()) {
@@ -435,6 +483,9 @@ public final class PluginConfig {
 
     // ------------------------------------------------------------- portals API
 
+    /** Whether optional portal particles are enabled; physical frames are unaffected. */
+    public boolean portalParticlesEnabled() { return portalParticlesEnabled; }
+
     /** Whether arrivals are built as real, temporary portal doorways. */
     public boolean portalsEnabled() { return portalsEnabled; }
 
@@ -449,6 +500,9 @@ public final class PluginConfig {
 
     /** How long a doorway stays before its blocks are restored. */
     public long portalsLifetimeTicks() { return portalsLifetimeTicks; }
+
+    /** Whether arrival frames remain until /null portals clear or plugin shutdown. */
+    public boolean portalsPersistUntilClear() { return portalsPersistUntilClear; }
 
     /** How far from the summoner a site is searched for. */
     public int portalSearchRadius() { return portalSearchRadius; }
@@ -650,6 +704,24 @@ public final class PluginConfig {
     /** System prompt for the Commander; "" means "use the built-in one". */
     public String personaCommander() { return personaCommander; }
 
+    private static long clampLong(long value, long min, long max, String key, Logger logger) {
+        if (value < min) {
+            if (logger != null) {
+                logger.warning("[NullArmy] " + key + " is " + value + "; using the minimum "
+                        + min + " instead of refusing to start.");
+            }
+            return min;
+        }
+        if (value > max) {
+            if (logger != null) {
+                logger.warning("[NullArmy] " + key + " is " + value + "; using the maximum "
+                        + max + " instead.");
+            }
+            return max;
+        }
+        return value;
+    }
+
     private static int clamp(int value, int min, int max, String key, Logger logger) {
         if (value < min) {
             if (logger != null) {
@@ -766,6 +838,11 @@ public final class PluginConfig {
 
     public Map<String, EndpointConfig> endpoints() {
         return Collections.unmodifiableMap(endpoints);
+    }
+
+    /** Malformed endpoint entries skipped without rejecting the rest of config.yml. */
+    public Map<String, String> endpointProblems() {
+        return Collections.unmodifiableMap(endpointProblems);
     }
 
     public Map<AgentRole, AgentBinding> bindings() {

@@ -23,6 +23,7 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.util.RayTraceResult;
 import org.bukkit.util.Vector;
 
+import redglitchx.nullarmy.core.config.Caps;
 import redglitchx.nullarmy.core.math.Vec3d;
 import redglitchx.nullarmy.plugin.NullArmyPlugin;
 import redglitchx.nullarmy.plugin.config.PluginConfig;
@@ -809,7 +810,8 @@ public final class WitherCannon implements Reloadable {
             return;
         }
         String world = at.getWorld().getName();
-        int effects = Math.max(15, config == null ? 16 : config.airdropPortals());
+        int effects = config != null && !config.portalParticlesEnabled() ? 0
+                : Math.max(Caps.minPortalEffects(), config == null ? 16 : config.airdropPortals());
         for (int i = 0; i < SKY_CLUSTERS; i++) {
             double offset = (i - (SKY_CLUSTERS - 1) / 2.0) * 2.5;
             Vec3d point = new Vec3d(at.getX() + offset, at.getY() + 1.0, at.getZ() + offset * 0.5);
