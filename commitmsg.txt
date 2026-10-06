@@ -1,11 +1,8 @@
-Measure the barrage's height variety from the plan it fired
+Echo the results the annotations can carry
 
-The pearls all fall at the same speed from the same sky, so their
-positions a few ticks later say nothing about the heights they started
-from - the first run caught both at y=-43 and read that as "one height".
-
-The volley now remembers the heights and landings of the last ready plan,
-and the cannon check asserts what the promise is about: at least two
-different drop heights, landings at least 1.25 blocks apart, one planned
-shot per live Null - while the real pearls still have to exist, be spent,
-and put the bodies on the ground.
+The check-run annotations keep only part of the smoke log, and the part
+they keep is shaped like the script's own "RUNTIME SMOKE:" output. Every
+failure, the verdict and the three checks this pass was about (the /null tp
+cannon, the doorway containment, the loot pickup) are now echoed once at
+the end in that shape, so the numbers behind a pass are readable from
+outside the runner.

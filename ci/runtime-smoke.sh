@@ -247,12 +247,22 @@ else
   echo "RUNTIME SMOKE: FAIL - see the log sections above"
 fi
 
-# The check-run annotations only keep a window of this log, and it is the tail,
-# so the lines that have to be readable there are printed again, last: every
-# FAIL with its detail, the /null tp cannon check, and the verdict.
+# The check-run annotations keep only some of this log, and the lines they do
+# keep look like the script's own "RUNTIME SMOKE:" output. So the results a
+# reader has to be able to see - every failure, the verdict, and the checks
+# this pass was about - are echoed once more in that shape, last.
 echo "----------------------- verdict detail -------------------------"
-grep -E '\[NullArmy\]\[SELFTEST\] .*FAIL' server.log | tail -n 5 || true
-grep -E '\[NullArmy\]\[SELFTEST\] (PASS|FAIL) S-117' server.log | tail -n 1 || true
-grep -E '\[NullArmy\]\[SELFTEST\] RESULT:' server.log | tail -n 1 || true
+annotate() {
+  local label="$1"
+  local pattern="$2"
+  local count="${3:-1}"
+  grep -E "$pattern" server.log | tail -n "$count" \
+    | sed -E "s/^.*\[SELFTEST\] /RUNTIME SMOKE: ${label} /" || true
+}
+annotate "FAILED CHECK:" '\[NullArmy\]\[SELFTEST\] .*FAIL' 5
+annotate "RESULT:" '\[NullArmy\]\[SELFTEST\] RESULT:' 1
+annotate "cannon check:" '\[NullArmy\]\[SELFTEST\] (PASS|FAIL) S-117' 2
+annotate "doorway check:" '\[NullArmy\]\[SELFTEST\] (PASS|FAIL|BLOCKED) S-69' 3
+annotate "loot check:" '\[NullArmy\]\[SELFTEST\] (PASS|FAIL) S-115' 1
 echo "----------------------------------------------------------------"
 exit "$status"
