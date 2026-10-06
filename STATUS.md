@@ -55,7 +55,9 @@ cadence and drill cycle, the throne plan, the bridge-ahead plan, barrage pattern
 
 ### Follow-up pass: the five failing smoke checks, and what each repair was
 
-Verified on CI run `37433416087` (commit `4d20296`): **`RESULT: PASS 120 passed, 0 failed`**.
+Verified on CI run `37433416087` (commit `4d20296`): **`RESULT: PASS 120 passed, 0 failed`**. The quoted
+evidence lines are one green run's output; the parts that are rolled per run (drop heights, landing
+cells, contact ticks, pickup counts) differ between runs, the assertions do not.
 
 | Check | Root cause | What the check now measures |
 | --- | --- | --- |
@@ -64,7 +66,7 @@ Verified on CI run `37433416087` (commit `4d20296`): **`RESULT: PASS 120 passed,
 | S-102 | `autoBridge` could place from mid-jump and count a block that matched no cell | the body crouches and only bridges from the ground; the check reads the two walkway cells the setup dug out and the body's position: `2 block(s) placed, 2 of 2 gap blocks now solid … the builder is at 49.6,-58.7,27.3 (past the gap)` |
 | S-115 | the stack was dropped at the body's feet at spawn time, and the body walks its arrival step-out first — so the check credited a stale drop while its own stack was left behind | the stack lands 1.5 blocks in front of the settled body, the check tracks its UUID and requires the diamonds in the pack (or a counted pickup that took *that* stack off the ground): `3 pickup(s) counted, 3 diamonds in the pack … the measured drop is gone` |
 | S-69 (new evidence) | the pig thrown at the doorway never overlapped a portal block, so the containment was never exercised (`0 crossing(s) refused`) | the entity is now spawned **inside** the opening: `120/120 portal blocks; entity stayed=true; 91 crossing(s) refused by containment; world at -17.2,-60.0,-26.8` — and the check fails if the stay cannot be attributed to the containment |
-| S-117 (new check) | the `/null tp` cannon had no runtime coverage at all | rod tagging (`damage=63 of 64`, tag readable), an ordinary rod refused and left in hand, a missing pearl refused (`has no Ender Pearl … the cannon never invents ammunition`) with no pearl spent and the rod kept, the cast spending one real pearl per live Null (`2/2 pearls spent`), the one-use rod (`cast again while it flies: fired=false`), planned drops `(151,71)+21 (152,72)+19` — `distinct heights=2 of 2 … closest two landings 1.41 block(s) apart (1.25 required)` — and `2 bod(ies) moved, 2 standing on a landing spot`, with the summoning doorways untouched (`0 -> 0`) |
+| S-117 (new check) | the `/null tp` cannon had no runtime coverage at all | rod tagging (`damage=63 of 64`, tag readable), an ordinary rod refused and left in hand, a missing pearl refused (`has no Ender Pearl … the cannon never invents ammunition`) with no pearl spent and the rod kept, the cast spending one real pearl per live Null (`2/2 pearls spent`), the one-use rod (`cast again while it flies: fired=false`), planned drops at varied heights and spaced landings — e.g. `(151,71)+21 (152,72)+19`, or `(151,71)+14 (152,72)+30` on another run, always `distinct heights=2 of 2 … closest two landings 1.41 block(s) apart (1.25 required)` — and `2 bod(ies) moved, 2 standing on a landing spot`, with the summoning doorways untouched (`0 -> 0`) |
 
 ---
 
