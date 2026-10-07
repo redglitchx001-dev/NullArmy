@@ -816,7 +816,7 @@ final class SelfTestV4 {
                 if (plugin.portals() != null && standing.isEmpty()) {
                     String why = plugin.portals().lastRefusal();
                     if (why != null && !why.isEmpty()) {
-                        refusal = "summon of " + here.size() + " at " + attempt + ": " + why;
+                        refusal = "summon of 6 at " + attempt + ": " + why;
                     }
                 }
             }
