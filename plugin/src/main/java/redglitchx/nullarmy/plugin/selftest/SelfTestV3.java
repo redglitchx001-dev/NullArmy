@@ -411,14 +411,16 @@ final class SelfTestV3 {
             check("S-30", "B-02", problem != null && problem.line() > 0 && problem.column() > 0,
                     "a malformed config is reported with line and column ("
                             + (problem == null ? "no problem reported" : problem.headline()) + ")");
-            boolean quoted = false;
+            boolean masked = false;
+            boolean caret = false;
             if (problem != null) {
                 for (String line : problem.snippet()) {
-                    quoted |= line.contains("lifetime-s") || line.contains("enabled");
+                    masked |= line.contains("[content hidden]");
+                    caret |= line.contains("^");
                 }
             }
-            check("S-31", "B-02", quoted && problem.snippet().size() >= 2,
-                    "the report quotes the offending lines with a caret");
+            check("S-31", "B-02", problem != null && masked && caret && problem.snippet().size() >= 2,
+                    "the report shows masked source context and a caret without exposing config values");
             check("S-32", "B-02", plugin.pluginConfig() == before, "the last good configuration stays in use");
             long length = badCopy.length();
             ConfigMigration.Report refused = ConfigMigration.migrateFile(plugin, badCopy, "selftest");

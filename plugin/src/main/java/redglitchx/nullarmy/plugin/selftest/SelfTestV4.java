@@ -786,6 +786,8 @@ final class SelfTestV4 {
         boolean staggered = false;
         int portalBlocks = 0;
         int frames = 0;
+        int portalArrivals = 0;
+        int exitPositions = 0;
         String refusal = "";
         String note = "";
         try {
@@ -805,11 +807,10 @@ final class SelfTestV4 {
                 if (squad != null) {
                     dismissAll();
                 }
-                List<Vec3d> here = new ArrayList<>();
-                for (int i = 0; i < 6; i++) {
-                    here.add(at(36 + attempt * 14 + (i % 3) * 2, 24 + (i / 3) * 2));
-                }
-                squad = plugin.squads().spawnSquadAt(owner("p03b"), worldName, here);
+                Vec3d summonAt = at(36 + attempt * 14, 24);
+                // Exercise the same arrival planner as a real summon. spawnSquadAt
+                // deliberately bypasses portals and would only test the fixture.
+                squad = plugin.squads().createSquad(owner("p03b"), worldName, summonAt, 6);
                 note = squad == null ? "" : squad.arrivalNote();
                 standing = plugin.portals() == null ? List.of() : plugin.portals().standing();
                 if (plugin.portals() != null && standing.isEmpty()) {
@@ -841,27 +842,23 @@ final class SelfTestV4 {
                     }
                 }
             }
-            // Staggered emergence: the bodies were not all created on one tick.
-            Set<Integer> lived = new HashSet<>();
-            for (NullBody body : squad.members()) {
-                Player p = handle(body);
-                if (p != null) {
-                    lived.add(p.getTicksLived());
-                }
-            }
-            // Staggered: the squad does not all appear at one spot. They come
-            // out of the doorway one after another, along the exit queue, so
-            // their distances from the mouth differ (or their birth ticks do).
-            Set<Integer> spreads = new HashSet<>();
+            // Portal arrivals use distinct positions in the real exit queue.
+            // Server-side spawning is synchronous, so do not claim that their
+            // entity ages differ or that arrivals are delayed across ticks.
+            Set<UUID> portalMembers = new HashSet<>();
             for (redglitchx.nullarmy.plugin.portal.PortalBuilder.BuiltPortal portal : standing) {
-                Vec3d c = portal.center();
-                for (NullBody body : squad.members()) {
-                    Vec3d p = body.bodyPosition();
-                    spreads.add((int) Math.round(Math.hypot(p.x() - c.x(), p.z() - c.z()) * 4.0D));
+                portalMembers.addAll(portal.assigned());
+            }
+            Set<String> positions = new HashSet<>();
+            for (NullBody body : squad.members()) {
+                Vec3d p = body.bodyPosition();
+                positions.add(String.format(Locale.ROOT, "%.2f,%.2f", p.x(), p.z()));
+                if (body.uuid() != null && portalMembers.contains(body.uuid())) {
+                    portalArrivals++;
                 }
             }
-            staggered = squad.members().size() >= 2
-                    && (lived.size() > 1 || spreads.size() > 1);
+            exitPositions = positions.size();
+            staggered = portalArrivals >= 2 && exitPositions >= 2;
             if (frames == 0) {
                 // Nothing standing: ask for a frame outright, so the obsidian
                 // half of the promise is measured even when every site around
@@ -908,9 +905,10 @@ final class SelfTestV4 {
                 * redglitchx.nullarmy.plugin.portal.PortalBuilder.INTERIOR_HEIGHT;
         boolean realPortal = portalBlocks == expectedPortalBlocks && expectedPortalBlocks > 0;
         check("S-90", "P-03", obsidian && realPortal && staggered,
-                "the arrival doorway has an obsidian frame and real NETHER_PORTAL blocks; the squad emerges"
-                        + " staggered, not in one tick (" + frames + " frame(s), " + portalBlocks + "/"
-                        + expectedPortalBlocks + " portal blocks, obsidian=" + obsidian + ", staggered=" + staggered
+                "the physical doorway has an obsidian frame and real NETHER_PORTAL blocks; at least two Nulls"
+                        + " use distinct assigned exit spots (" + frames + " frame(s), " + portalBlocks + "/"
+                        + expectedPortalBlocks + " portal blocks, obsidian=" + obsidian + ", portal arrivals="
+                        + portalArrivals + ", distinct exit positions=" + exitPositions
                         + (refusal == null || refusal.isEmpty() ? "" : ", last refusal: " + refusal)
                         + ", arrival: " + note + ")");
         dismissAll();
@@ -1688,12 +1686,15 @@ final class SelfTestV4 {
             plugin.brain().clearBridgePlacements();
             // A real 2-block-deep, 2-block-wide gap in flat ground. Ordinary
             // movement must leave it alone; a later explicit BRIDGE order is tested.
-            Vec3d spot = at(50, 20);
+            // Start five blocks back so the WALK observation cannot carry the
+            // body past this deliberately shallow gap before the explicit order.
+            Vec3d spot = at(50, 16);
+            Vec3d gapReference = at(50, 20);
             int bx = (int) Math.floor(spot.x());
-            int bz = (int) Math.floor(spot.z());
+            int bz = (int) Math.floor(gapReference.z());
             // by is the block a walker stands ON; the gap takes it and the one
             // below away, so a bridge is the deck coming back.
-            int by = world.getHighestBlockYAt(bx, bz);
+            int by = world.getHighestBlockYAt(bx, bz + 1);
             gapSurfaceY = by;
             for (int dz = 1; dz <= 2; dz++) {
                 for (int dy = 0; dy <= 1; dy++) {
@@ -1720,7 +1721,8 @@ final class SelfTestV4 {
             }
             plugin.brain().resetBehaviourCounters();
             l02Ahead = new Vec3d(spot.x(), spot.y(), spot.z() + 8.0D);
-            plugin.brain().order(List.of(body), Mind.Verb.WALK, l02Ahead, null,
+            Vec3d walkToEdge = new Vec3d(spot.x(), spot.y(), bz + 0.5D);
+            plugin.brain().order(List.of(body), Mind.Verb.WALK, walkToEdge, null,
                     plugin.squads().ownerOf(body), 1);
         } catch (Throwable e) {
             notes.add("l02 setup threw " + Guard.describe(e));
