@@ -1,6 +1,10 @@
 package redglitchx.nullarmy.plugin.skin;
 
+import org.bukkit.Bukkit;
+
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -34,6 +38,7 @@ public final class MojangSkinClient {
     private static final String UUID_URL = "https://api.mojang.com/users/profiles/minecraft/";
     private static final String PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/";
     private static final String SIGNED_PROFILE_QUERY = "?unsigned=false";
+    private static final int MAX_RESPONSE_BYTES = 64 * 1024;
 
     private final HttpClient http;
 
@@ -55,11 +60,20 @@ public final class MojangSkinClient {
      * <p><b>Must never be called on the server's main thread.</b></p>
      */
     public SkinData fetch(String username) {
-        if (username == null || username.trim().isEmpty()) {
+        if (username == null) {
             return null;
         }
+        String name = username.trim();
+        // fetch() is also a public entry point; never let callers bypass the
+        // cache's path-safe Mojang-name check and send arbitrary path segments.
+        if (!name.matches("[A-Za-z0-9_]{1,16}")) {
+            return null;
+        }
+        if (Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException("Mojang skin lookups must not run on the server thread");
+        }
         try {
-            String uuid = lookupUuid(username.trim());
+            String uuid = lookupUuid(name);
             if (uuid == null || uuid.isEmpty()) {
                 return null;
             }
@@ -103,16 +117,36 @@ public final class MojangSkinClient {
                 .header("User-Agent", "NullArmy")
                 .GET()
                 .build();
-        HttpResponse<String> response =
-                http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        int status = response.statusCode();
-        if (status == 204 || status == 404) {
-            return null; // unknown player / no skin: not an error, just absent
+        HttpResponse<InputStream> response =
+                http.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        try (InputStream body = response.body()) {
+            int status = response.statusCode();
+            if (status == 204 || status == 404) {
+                return null; // unknown player / no skin: not an error, just absent
+            }
+            if (status < 200 || status >= 300) {
+                throw new IOException("Mojang returned HTTP " + status + " for " + url);
+            }
+            long declaredLength = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
+            if (declaredLength > MAX_RESPONSE_BYTES) {
+                throw new IOException("Mojang response exceeded the size limit");
+            }
+            return new String(readBounded(body), StandardCharsets.UTF_8);
         }
-        if (status < 200 || status >= 300) {
-            throw new IOException("Mojang returned HTTP " + status + " for " + url);
+    }
+
+    /** Reads at most MAX_RESPONSE_BYTES; closing on overflow cancels the rest of the body. */
+    private static byte[] readBounded(InputStream input) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream(4096);
+        byte[] buffer = new byte[4096];
+        int count;
+        while ((count = input.read(buffer)) != -1) {
+            if (output.size() + count > MAX_RESPONSE_BYTES) {
+                throw new IOException("Mojang response exceeded the size limit");
+            }
+            output.write(buffer, 0, count);
         }
-        return response.body();
+        return output.toByteArray();
     }
 
     static String encode(String s) {

@@ -6,8 +6,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Turns a YAML parser error into something an owner can act on: the file, the
- * line, the column, what is wrong, and the offending lines with a caret.
+ * Turns a YAML parser error into a safe diagnostic: the file, line, column,
+ * a generic syntax hint, and a caret-only location. Source text and parser
+ * excerpts are never shown because configuration may contain credentials.
  *
  * <p>SnakeYAML's messages carry marks like {@code in 'reader', line 12, column 5:}
  * (1-based). The last mark is the problem; earlier ones are context. Parsing the
@@ -44,7 +45,7 @@ public final class YamlProblem {
 
     public String problem() { return problem; }
 
-    /** The offending line with one line of context each side and a caret line. */
+    /** Three masked line numbers and a caret location; never includes YAML contents. */
     public List<String> snippet() { return snippet; }
 
     public boolean hasPosition() { return line > 0; }
@@ -74,38 +75,14 @@ public final class YamlProblem {
                 // keep the previous mark
             }
         }
-        return new YamlProblem(file == null ? "config.yml" : file, line, column, summarise(msg),
+        String summary = source == null
+                ? "configuration could not be loaded"
+                : "invalid YAML syntax (source text hidden)";
+        return new YamlProblem(file == null ? "config.yml" : file, line, column, summary,
                 snippet(source, line, column));
     }
 
-    /**
-     * The human part of the message: the lines that are not marks, carets or
-     * echoed source, joined with "; ".
-     */
-    static String summarise(String message) {
-        List<String> parts = new ArrayList<>();
-        for (String raw : message.split("\\r?\\n")) {
-            String line = raw.trim();
-            if (line.isEmpty() || line.startsWith("in '") || line.startsWith("in \"")
-                    || line.equals("^") || raw.startsWith("    ")) {
-                continue;
-            }
-            if (line.startsWith("org.yaml.snakeyaml") || line.startsWith("org.bukkit")) {
-                int colon = line.indexOf(':');
-                if (colon > 0 && colon < line.length() - 1) {
-                    line = line.substring(colon + 1).trim();
-                }
-            }
-            if (!line.isEmpty()) {
-                parts.add(line);
-            }
-        }
-        if (parts.isEmpty()) {
-            return message.trim().isEmpty() ? "the file is not valid YAML" : message.trim();
-        }
-        return String.join("; ", parts);
-    }
-
+    /** A position-only report: never echo YAML values or parser excerpts. */
     static List<String> snippet(String source, int line, int column) {
         List<String> out = new ArrayList<>();
         if (source == null || line <= 0) {
@@ -117,10 +94,11 @@ public final class YamlProblem {
             return out;
         }
         for (int i = Math.max(0, index - 1); i <= Math.min(lines.length - 1, index + 1); i++) {
-            out.add(String.format(java.util.Locale.ROOT, "%4d | %s", i + 1, lines[i].replace('\t', '\u2192')));
+            out.add(String.format(java.util.Locale.ROOT, "%4d | [content hidden]", i + 1));
             if (i == index) {
                 StringBuilder caret = new StringBuilder("     | ");
-                for (int c = 1; c < Math.max(1, column); c++) {
+                int caretColumn = Math.max(1, Math.min(256, column));
+                for (int c = 1; c < caretColumn; c++) {
                     caret.append(' ');
                 }
                 out.add(caret.append('^').toString());

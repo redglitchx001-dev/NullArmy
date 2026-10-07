@@ -271,7 +271,7 @@ public final class NullArmyPlugin extends JavaPlugin {
 
         // 6. Warm the skin cache in the background. Cosmetic, never fatal.
         Guard.attempt(getLogger(), "warming the skin cache", () -> commander.preloadSkin());
-        Guard.attempt(getLogger(), "resolving the skin chain", () -> skinChain.refreshAsync(false));
+        Guard.attempt(getLogger(), "resolving the skin chain", () -> skinChain.refreshAsync(true));
 
         // 7. The tick loop. Its own try/catch sits one level above the
         //    per-subsystem guards in onTick().

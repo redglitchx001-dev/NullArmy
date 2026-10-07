@@ -141,6 +141,23 @@ public final class DefaultKit {
             "5:IRON_PICKAXE:1", "6:ENDER_PEARL:8", "7:WATER_BUCKET:1", "8:TORCH:32",
             "38:IRON_CHESTPLATE:1", "40:SHIELD:1"));
 
+    /** The shipped shared kit before the Mace received its live-combat enchantments. */
+    public static final List<String> LEGACY_UNENCHANTED_MACE_LINES = Collections.unmodifiableList(
+            java.util.Arrays.asList(
+            "0:NETHERITE_SWORD:1|sharpness=5,unbreaking=3",
+            "1:BOW:1|power=5,infinity=1",
+            "2:NETHERITE_AXE:1|efficiency=5,unbreaking=3",
+            "3:NETHERITE_PICKAXE:1|efficiency=5,fortune=3,unbreaking=3",
+            "4:GOLDEN_APPLE:4", "5:POTION:2|potion=strong_healing", "6:COBBLESTONE:64",
+            "7:WATER_BUCKET:1", "8:ENDER_PEARL:4", "9:ARROW:1", "10:NETHERITE_SHOVEL:1",
+            "11:POTION:1|potion=strong_strength", "12:POTION:1|potion=strong_regeneration",
+            "13:ENCHANTED_GOLDEN_APPLE:4", "14:DEEPSLATE:64", "15:OBSIDIAN:16", "16:TORCH:32",
+            "17:MACE:1", "18:TOTEM_OF_UNDYING:2", "19:WIND_CHARGE:16", "20:FIREWORK_ROCKET:32",
+            "36:NETHERITE_BOOTS:1|protection=4,unbreaking=3,feather_falling=4",
+            "37:NETHERITE_LEGGINGS:1|protection=4,unbreaking=3",
+            "38:NETHERITE_CHESTPLATE:1|protection=4,unbreaking=3",
+            "39:NETHERITE_HELMET:1|protection=4,unbreaking=3", "40:SHIELD:1|unbreaking=3"));
+
     /** The previously shipped v3 soldier kit, upgraded without losing custom edits. */
     public static final List<String> LEGACY_V3_LINES = Collections.unmodifiableList(java.util.Arrays.asList(
             "0:NETHERITE_SWORD:1|sharpness=5,unbreaking=3",
@@ -175,7 +192,10 @@ public final class DefaultKit {
         kit.add(item(14, "DEEPSLATE", 64, ""));
         kit.add(item(15, "OBSIDIAN", 16, ""));
         kit.add(item(16, "TORCH", 32, ""));
-        kit.add(item(17, "MACE", 1, ""));
+        // Breach and Wind Burst are compatible; Density and Breach are not.
+        // Density remains available to an owner's custom kit without creating
+        // an illegal all-enchantments-at-once mace.
+        kit.add(item(17, "MACE", 1, "breach=4,wind_burst=3"));
         kit.add(item(18, "TOTEM_OF_UNDYING", 2, ""));
         kit.add(item(19, "WIND_CHARGE", 16, ""));
         kit.add(item(20, "FIREWORK_ROCKET", 32, ""));
@@ -228,6 +248,10 @@ public final class DefaultKit {
                     }
                     continue;
                 }
+                if (bySlot.containsKey(item.slot()) && errors != null) {
+                    errors.add("loadout.default-kit slot " + item.slot()
+                            + " is listed more than once; the last entry wins");
+                }
                 bySlot.put(item.slot(), item);
             }
         }
@@ -247,6 +271,13 @@ public final class DefaultKit {
             if (notes != null) {
                 notes.add("loadout.default-kit is the unedited legacy kit; the current shared Null/Commander"
                         + " kit is used instead (edit the list to keep your own)");
+            }
+            return DEFAULT;
+        }
+        if (sameLines(lines, LEGACY_UNENCHANTED_MACE_LINES)) {
+            if (notes != null) {
+                notes.add("loadout.default-kit is the unedited shared kit with a plain Mace; the updated"
+                        + " Breach/Wind Burst Mace is used instead (edit the list to keep your own)");
             }
             return DEFAULT;
         }

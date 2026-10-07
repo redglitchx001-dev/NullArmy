@@ -18,6 +18,7 @@ import org.bukkit.entity.EnderPearl;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.EquipmentSlot;
@@ -303,8 +304,11 @@ final class SelfTestV4 {
         }
         steps.add(this::l01Check);        // S-101
 
-        // ---- L-02 auto-bridge
+        // ---- L-02: no incidental block placement; only an explicit bridge order may bridge
         steps.add(this::l02Setup);
+        steps.add(() -> t.gap(2));
+        steps.add(this::l02PassiveCheck); // S-126
+        steps.add(this::l02ExplicitBridge);
         for (int i = 0; i < 8; i++) {
             steps.add(() -> t.gap(20));
         }
@@ -334,9 +338,14 @@ final class SelfTestV4 {
         steps.add(this::p09Setup);
         steps.add(this::p09Build);        // S-106
         steps.add(this::p09Bridge);       // S-107
+        steps.add(this::p09AmbiguousDismiss); // S-123
         steps.add(() -> t.gap(20));
-        steps.add(this::p09Destroy);      // S-108
-        steps.add(this::p09NonOwner);     // S-109
+        steps.add(this::p09Destroy);      // issue S-108
+        steps.add(() -> t.gap(2));
+        steps.add(this::p09DestroyCheck); // verify after AsyncChatEvent main-thread dispatch
+        steps.add(this::p09NonOwner);     // issue S-109
+        steps.add(() -> t.gap(2));
+        steps.add(this::p09NonOwnerCheck);
 
         // ---- P-10 death drops
         steps.add(this::p10Drops);        // S-110
@@ -1670,14 +1679,15 @@ final class SelfTestV4 {
     private final List<Block> gapCells = new ArrayList<>();
     private volatile int gapSurfaceY;
     private volatile int planksBefore;
+    private Vec3d l02Ahead;
 
     private void l02Setup() {
         dismissAll();
         try {
             gapCells.clear();
             plugin.brain().clearBridgePlacements();
-            // A real 2-block-deep, 2-block-wide gap in flat ground: the sort a
-            // squad walks into and bridges without being told to.
+            // A real 2-block-deep, 2-block-wide gap in flat ground. Ordinary
+            // movement must leave it alone; a later explicit BRIDGE order is tested.
             Vec3d spot = at(50, 20);
             int bx = (int) Math.floor(spot.x());
             int bz = (int) Math.floor(spot.z());
@@ -1709,15 +1719,66 @@ final class SelfTestV4 {
                 }
             }
             plugin.brain().resetBehaviourCounters();
-            Vec3d ahead = new Vec3d(spot.x(), spot.y(), spot.z() + 8.0D);
-            plugin.brain().bridge(List.of(body), ahead, plugin.squads().ownerOf(body));
+            l02Ahead = new Vec3d(spot.x(), spot.y(), spot.z() + 8.0D);
+            plugin.brain().order(List.of(body), Mind.Verb.WALK, l02Ahead, null,
+                    plugin.squads().ownerOf(body), 1);
         } catch (Throwable e) {
             notes.add("l02 setup threw " + Guard.describe(e));
         }
     }
 
-    /** Walking at a gap, the Null bridges it out of its own inventory. */
+    /** An ordinary WALK order must not place blocks merely because there is a gap ahead. */
+    private void l02PassiveCheck() {
+        boolean walking = false;
+        int carried = 0;
+        int open = 0;
+        try {
+            NullBody body = squad == null || squad.members().isEmpty() ? null : squad.members().get(0);
+            Mind mind = body == null ? null : plugin.brain().mind(body);
+            walking = mind != null && mind.order != null && mind.order.verb == Mind.Verb.WALK;
+            Player handle = body == null ? null : handle(body);
+            if (handle != null) {
+                for (ItemStack stack : handle.getInventory().getContents()) {
+                    if (stack != null && stack.getType() != Material.AIR) {
+                        carried += stack.getAmount();
+                    }
+                }
+            }
+            for (Block cell : gapCells) {
+                if (cell.getType().isAir()) {
+                    open++;
+                }
+            }
+        } catch (Throwable e) {
+            notes.add("l02 passive check threw " + Guard.describe(e));
+        }
+        boolean untouched = plugin.brain().blocksBridged() == 0
+                && open == gapCells.size() && carried == planksBefore;
+        check("S-126", "L-02", walking && untouched,
+                "ordinary walking leaves the gap and inventory unchanged until a BRIDGE order is explicit"
+                        + " (walking=" + walking + ", bridge placements=" + plugin.brain().blocksBridged()
+                        + ", open=" + open + "/" + gapCells.size() + ", items=" + carried + "/" + planksBefore + ")");
+    }
+
+    /** The explicit BRIDGE order uses real blocks from the body's inventory. */
+    private void l02ExplicitBridge() {
+        try {
+            NullBody body = squad == null || squad.members().isEmpty() ? null : squad.members().get(0);
+            if (body != null && l02Ahead != null) {
+                plugin.brain().bridge(List.of(body), l02Ahead, plugin.squads().ownerOf(body));
+            }
+        } catch (Throwable e) {
+            notes.add("l02 explicit bridge order threw " + Guard.describe(e));
+        }
+    }
+
+    /** An explicit bridge order fills a shallow gap out of the Null's own inventory. */
     private void l02Check() {
+        if (settings() != null && !settings().autoBridge()) {
+            blocked("S-102", "L-02", "behaviour.auto-bridge is disabled, so explicit block placement is not configured");
+            dismissAll();
+            return;
+        }
         boolean ok = false;
         String detail;
         try {
@@ -1785,8 +1846,8 @@ final class SelfTestV4 {
             ok = false;
             detail = Guard.describe(e);
         }
-        check("S-102", "L-02", ok, "a Null crossing a gap shallower than four blocks bridges it by hand out"
-                + " of its own pack (" + detail + ")");
+        check("S-102", "L-02", ok, "an explicit bridge order crosses a gap shallower than four blocks using"
+                + " real blocks from the Null's pack (" + detail + ")");
         dismissAll();
     }
 
@@ -1971,6 +2032,14 @@ final class SelfTestV4 {
     // ------------------------------------------------------------------- P-09
 
     private UUID p09Owner;
+    private boolean p09Griefing;
+    private int p09AnswersBefore;
+    private int p09CommanderLinesBefore;
+    private int p09RefusalsBefore;
+    private int p09BlocksBefore;
+    private NullBody p09NonOwnerBody;
+    private Vec3d p09NonOwnerBefore;
+    private int p09NonOwnerIgnoredBefore;
 
     private void p09Setup() {
         dismissAll();
@@ -2030,69 +2099,103 @@ final class SelfTestV4 {
                 + " 'in front of me' part, so it stays relative to the speaker (" + detail + ")");
     }
 
-    /** Destroy without griefing enabled: one console line, nothing broken, nothing said. */
-    private void p09Destroy() {
+    /** Casual phrases must not turn into an immediate destructive dismiss. */
+    private void p09AmbiguousDismiss() {
         boolean ok = false;
         String detail;
         try {
+            String[] remove = plugin.chat() == null ? null : plugin.chat().asCommand("remove the extra ones");
+            String[] goAway = plugin.chat() == null ? null : plugin.chat().asCommand("go away");
+            String[] explicit = plugin.chat() == null ? null : plugin.chat().asCommand("dismiss");
+            boolean destroyNotInPublicOrders = !redglitchx.nullarmy.plugin.command.V3Commands.VERBS
+                    .contains("destroy");
+            ok = remove == null && goAway == null && explicit != null
+                    && explicit.length == 1 && "dismiss".equals(explicit[0]) && destroyNotInPublicOrders;
+            detail = "remove=" + java.util.Arrays.toString(remove) + ", go away="
+                    + java.util.Arrays.toString(goAway) + ", explicit=" + java.util.Arrays.toString(explicit)
+                    + ", destroy in /null order=" + !destroyNotInPublicOrders;
+        } catch (Throwable e) {
+            detail = Guard.describe(e);
+        }
+        check("S-123", "P-09", ok, "ambiguous 'remove' and 'go away' chat text is conversation, only explicit"
+                + " 'dismiss' maps to dismissal, and teardown is not a /null order verb (" + detail + ")");
+    }
+
+    /** Sends the destructive order; the policy and world assertions run after it is scheduled. */
+    private void p09Destroy() {
+        try {
             redglitchx.nullarmy.plugin.config.PluginConfig config = plugin.pluginConfig();
-            boolean griefing = config != null && config.griefingEnabled();
-            Player player = chatter();
-            int answersBefore = plugin.chatGate() == null ? 0 : plugin.chatGate().answers();
-            int commanderBefore = plugin.chatGate() == null ? 0 : plugin.chatGate().commanderLines();
-            int refusalsBefore = plugin.chat() == null ? 0 : plugin.chat().destroyRefusals();
-            if (player != null) {
+            p09Griefing = config != null && config.griefingEnabled();
+            p09AnswersBefore = plugin.chatGate() == null ? 0 : plugin.chatGate().answers();
+            p09CommanderLinesBefore = plugin.chatGate() == null ? 0 : plugin.chatGate().commanderLines();
+            p09RefusalsBefore = plugin.chat() == null ? 0 : plugin.chat().destroyRefusals();
+            p09BlocksBefore = plugin.brain().blocksDestroyed();
+            if (chatter() != null) {
                 say("null destroy that wall");
             }
-            int destroyed = plugin.brain().blocksDestroyed();
-            boolean saidNothing = plugin.chatGate() == null
-                    || (plugin.chatGate().answers() == answersBefore
-                        && plugin.chatGate().commanderLines() == commanderBefore);
-            boolean refusedOnce = !griefing
-                    && plugin.chat() != null
-                    && plugin.chat().destroyRefusals() == refusalsBefore + 1;
-            detail = "griefing=" + griefing + ", blocks destroyed=" + destroyed + ", chat lines added="
-                    + (plugin.chatGate() == null ? 0
-                        : (plugin.chatGate().answers() - answersBefore)
-                          + (plugin.chatGate().commanderLines() - commanderBefore));
-            ok = destroyed == 0 && saidNothing && (griefing || refusedOnce);
         } catch (Throwable e) {
-            ok = false;
+            notes.add("p09 destroy dispatch threw " + Guard.describe(e));
+        }
+    }
+
+    private void p09DestroyCheck() {
+        boolean ok = false;
+        String detail;
+        try {
+            int destroyed = plugin.brain().blocksDestroyed() - p09BlocksBefore;
+            boolean saidNothing = plugin.chatGate() == null
+                    || (plugin.chatGate().answers() == p09AnswersBefore
+                        && plugin.chatGate().commanderLines() == p09CommanderLinesBefore);
+            boolean refusedOnce = !p09Griefing && plugin.chat() != null
+                    && plugin.chat().destroyRefusals() == p09RefusalsBefore + 1;
+            detail = "griefing=" + p09Griefing + ", blocks destroyed=" + destroyed + ", chat lines added="
+                    + (plugin.chatGate() == null ? 0
+                        : (plugin.chatGate().answers() - p09AnswersBefore)
+                          + (plugin.chatGate().commanderLines() - p09CommanderLinesBefore));
+            ok = destroyed == 0 && saidNothing && (p09Griefing || refusedOnce);
+        } catch (Throwable e) {
             detail = Guard.describe(e);
         }
         check("S-108", "P-09", ok, "a destroy order without policy.griefing-enabled breaks nothing, says"
                 + " nothing in chat and writes exactly one refusal line to the console (" + detail + ")");
     }
 
-    /** Somebody else's order: no movement, no reply, no acknowledgement. */
+    /** Sends somebody else's order, then checks it after AsyncChatEvent is dispatched. */
     private void p09NonOwner() {
-        boolean ok = false;
-        String detail = "no squad";
         try {
             dismissAll();
             squad = plugin.squads().spawnSquadAt(owner("p09b"), worldName, List.of(at(78, 20)));
-            NullBody body = squad.members().get(0);
-            Vec3d before = body.bodyPosition();
+            p09NonOwnerBody = squad.members().get(0);
+            p09NonOwnerBefore = p09NonOwnerBody.bodyPosition();
             Player stranger = chatter();
             if (plugin.commander() != null && stranger != null) {
-                // The chatter is not this squad's owner, so the order must do nothing.
-                plugin.brain().order(List.of(body), Mind.Verb.WALK, at(4, 4), null,
+                plugin.brain().order(List.of(p09NonOwnerBody), Mind.Verb.WALK, at(4, 4), null,
                         stranger.getUniqueId(), 1);
-                int ignoredBefore = plugin.chat() == null ? 0
+                p09NonOwnerIgnoredBefore = plugin.chat() == null ? 0
                         : plugin.chat().ignoredNonOwner();
-                say("null attack " + body.profileName());
+                say("null attack " + p09NonOwnerBody.profileName());
+            }
+        } catch (Throwable e) {
+            notes.add("p09 non-owner dispatch threw " + Guard.describe(e));
+        }
+    }
+
+    private void p09NonOwnerCheck() {
+        boolean ok = false;
+        String detail = "no squad";
+        try {
+            if (p09NonOwnerBody != null && p09NonOwnerBefore != null) {
                 int ignored = plugin.chat() == null ? 0 : plugin.chat().ignoredNonOwner();
-                Vec3d after = body.bodyPosition();
-                double moved = Math.hypot(after.x() - before.x(), after.z() - before.z());
-                Mind mind = plugin.brain().mind(body);
-                boolean noOrder = mind == null || mind.order == null
-                        || mind.order.verb == Mind.Verb.STOP;
+                Vec3d after = p09NonOwnerBody.bodyPosition();
+                double moved = Math.hypot(after.x() - p09NonOwnerBefore.x(), after.z() - p09NonOwnerBefore.z());
+                Mind mind = plugin.brain().mind(p09NonOwnerBody);
+                boolean noOrder = mind == null || mind.order == null || mind.order.verb == Mind.Verb.STOP;
                 detail = "moved " + String.format(Locale.ROOT, "%.2f", moved) + ", ignored orders "
-                        + ignoredBefore + " -> " + ignored;
+                        + p09NonOwnerIgnoredBefore + " -> " + ignored;
                 ok = moved < 1.0D && noOrder;
             }
         } catch (Throwable e) {
-            notes.add("p09 non-owner threw " + Guard.describe(e));
+            notes.add("p09 non-owner check threw " + Guard.describe(e));
         }
         check("S-109", "P-09", ok, "a sentence from somebody who is not the owner is ignored completely -"
                 + " the Nulls do not move and nothing answers (" + detail + ")");
@@ -2181,16 +2284,24 @@ final class SelfTestV4 {
 
     // ------------------------------------------------------------------- P-12
 
-    /** /null name renames the Commander live, and anyone may call him by it. */
+    /** /null name changes Commander addressing live, and anyone may call him by it. */
     private void p12Rename() {
         boolean ok = false;
         String detail;
-        String previous = null;
+        redglitchx.nullarmy.plugin.config.PluginConfig original = plugin.pluginConfig();
+        String previous = plugin.commander() == null ? "NullCommander" : plugin.commander().commanderName();
         try {
-            previous = plugin.commander() == null ? "NullCommander" : plugin.commander().commanderName();
-            String answer = plugin.commander() == null ? "" : plugin.commander().rename("VoidMarshal");
-            boolean renamed = plugin.commander() != null
-                    && "VoidMarshal".equals(plugin.commander().commanderName());
+            if (original == null || original.file() == null || plugin.commander() == null) {
+                throw new IllegalStateException("live Commander config is unavailable");
+            }
+            YamlConfiguration changed = new YamlConfiguration();
+            changed.setDefaults(redglitchx.nullarmy.plugin.config.ConfigLoader.shipped(plugin));
+            changed.loadFromString(original.file().saveToString());
+            changed.set("commander.name", "VoidMarshal");
+            redglitchx.nullarmy.plugin.config.PluginConfig candidate =
+                    new redglitchx.nullarmy.plugin.config.PluginConfig(changed, plugin.getLogger());
+            plugin.commander().onConfigReloaded(candidate);
+            boolean renamed = "VoidMarshal".equals(plugin.commander().commanderName());
             OrderParser.Order mention = OrderParser.parse("@VoidMarshal stop", "VoidMarshal", "@");
             OrderParser.Order prefix = OrderParser.parse("VoidMarshal hold the line", "VoidMarshal", "@");
             OrderParser.Order wake = OrderParser.parse("null follow me", "VoidMarshal", "@");
@@ -2199,20 +2310,20 @@ final class SelfTestV4 {
                     && prefix != null && prefix.addressed() && prefix.verb() == OrderParser.Verb.STOP
                     && wake != null && wake.addressed()
                     && (ignored == null || !ignored.addressed());
-            detail = previous + " -> " + (plugin.commander() == null ? "?" : plugin.commander().commanderName())
-                    + " (" + answer + "), @mention=" + mention + ", name-prefix=" + prefix
-                    + ", wake word=" + wake;
+            detail = previous + " -> " + plugin.commander().commanderName()
+                    + ", @mention=" + mention + ", name-prefix=" + prefix + ", wake word=" + wake;
             ok = renamed && addressed;
         } catch (Throwable e) {
             ok = false;
             detail = Guard.describe(e);
+        } finally {
+            if (plugin.commander() != null && original != null) {
+                plugin.commander().onConfigReloaded(original);
+            }
         }
-        check("S-113", "P-12", ok, "the Commander can be renamed live and answers to @<name>, to his name at"
-                + " the start of a line and to the wake words - while a line that is not for him is left"
-                + " alone (" + detail + ")");
-        if (plugin.commander() != null && previous != null) {
-            plugin.commander().rename(previous);
-        }
+        check("S-113", "P-12", ok, "a runtime config change renames the Commander for chat addressing and he"
+                + " answers to @<name>, to his name at the start of a line and to the wake words - while a line"
+                + " that is not for him is left alone (" + detail + ")");
     }
 
     // ------------------------------------------------------------------- L-07

@@ -182,7 +182,7 @@ loadout:
     - "14:DEEPSLATE:64"
     - "15:OBSIDIAN:16"
     - "16:TORCH:32"
-    - "17:MACE:1"
+    - "17:MACE:1|breach=4,wind_burst=3"
     - "18:TOTEM_OF_UNDYING:2"
     - "19:WIND_CHARGE:16"
     - "20:FIREWORK_ROCKET:32"
@@ -227,6 +227,9 @@ chat:
   commands-per-minute: 20
   # Longest reply the plugin will print, in characters.
   max-reply-chars: 400
+  # Commander/private chat lines are plain character dialogue by default; set
+  # true only if you explicitly want the visible [NullArmy] tag on those lines.
+  plugin-prefix: false
   # A private channel closes after this many seconds without a message.
   session-timeout-seconds: 600
   personas:
@@ -357,8 +360,8 @@ drops:
 #
 #  march-cadence: a squad ordered to march shares one step clock, so the line
 #                 stays a line instead of stringing out.
-#  auto-bridge:   walking towards a gap, the lead Null places blocks under the
-#                 route out of its own inventory, one block per place rate.
+#  auto-bridge:   when the owner gives an explicit bridge order, a Null may
+#                 place blocks under that route from its own inventory.
 #  camp-life:     silent idle life - rest in a ring round a light source, spar
 #                 in pairs with zero damage, eat when hurt, haul spare blocks to
 #                 a builder that needs them.
@@ -436,8 +439,8 @@ ai:
     gather-outside-zone: false
 
   # Master switch. TRUE means the Commander may ask a model what the squad
-  # should do next. FALSE (or no usable endpoint) means the local deterministic
-  # coordinator does it instead - and /null ai says plainly which one you have.
+  # should do next. FALSE (or no usable endpoint) leaves the local deterministic
+  # coordinator available only for an explicit owner order such as /null coordinate.
   enabled: true
 
   # The Commander gets a live view of its squad (every Null's health, position
@@ -449,10 +452,11 @@ ai:
   # griefing, ban or kill a player. Cannon, air drop and dismiss always need the
   # owner's /null confirm before anything happens.
   squad-coordination: true
-  # Let the LOCAL coordinator take safe, reversible steps on its own (heal a
-  # hurt squad, hold position when idle, store missing roles). It never touches
-  # anything destructive.
-  auto-coordinate: true
+  # Automatic group changes are off: healing, role assignment and guard orders
+  # happen only after an explicit /null ai coordinate (or another owner order).
+  # Kept as a compatibility setting; true is migrated to false when it is the
+  # untouched shipped default.
+  auto-coordinate: false
   coordinate-interval-ticks: 400
 
   # Primary endpoint when no role-specific binding is provided. Leave empty
@@ -522,23 +526,26 @@ ai:
 #  SKINS  -  the texture source only, never the name
 # ---------------------------------------------------------------------
 skins:
-  # The Mojang username whose SKIN every Null wears. Nulls are still named with
-  # their own unique random alphanumeric profile names; this account is only the
-  # source of the signed texture. If the lookup fails, Nulls keep the default
-  # skin and nothing breaks.
+  # Optional account whose signed skin Nulls may use. Blank means no account
+  # skin is requested; no player's skin is selected by default. Nulls keep their
+  # own unique random profile names regardless of this texture source.
   # NOTE: the key is "nulls", not "null" - in YAML an unquoted `null` is the
   # null value, not the word.
-  nulls: "uH3WR2v0ti0uTHJ"
+  nulls: ""
 
-  # Skin for the Commander. Empty = same as the Null skin above.
+  # Skin for the Commander. Empty = same configured skin as ordinary Nulls.
   commander: ""
 
-  # Skin priority: 1) signed value + signature pasted here; 2) the local PNG
-  # plugins/NullArmy/skins/null.png signed through MineSkin; 3) proxy-url; then
-  # 4) the Mojang account above. A custom PNG is shared with the Commander when
-  # both use the same skin account. Minecraft needs signed texture data; raw PNG
-  # bytes cannot be applied directly. /null reload re-signs changed PNGs and
-  # live-reapplies the resolved skin without a relog.
+  # Optional administrator-provided PNG, relative to plugins/NullArmy and
+  # restricted to the skins/ directory. Blank disables this source.
+  # Only 64x64 or legacy 64x32 PNG skins up to 2 MiB are accepted.
+  png-path: "skins/null.png"
+
+  # Skin priority: 1) signed value + signature pasted here; 2) the configured
+  # PNG signed through MineSkin; 3) proxy-url; then 4) the explicitly configured
+  # Mojang account. Minecraft needs signed texture data; raw PNG bytes cannot be
+  # applied directly. /null reload re-signs changed PNGs and live-reapplies the
+  # resolved skin without a relog.
   value: ""
   signature: ""
   # MineSkin API key from https://account.mineskin.org/keys. Prefer an environment
@@ -546,8 +553,8 @@ skins:
   mineskin:
     api-key: ""
   # Any URL answering {"value":"...","signature":"..."} (MineSkin and Mojang
-  # session shapes work too) or raw base64. Failures log the HTTP status and a
-  # short response preview.
+  # session shapes work too) or raw base64. Diagnostics never print URL paths,
+  # query values, or response-body previews.
   proxy-url: ""
   live-reapply: true
 

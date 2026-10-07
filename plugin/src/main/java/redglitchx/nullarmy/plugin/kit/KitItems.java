@@ -7,6 +7,7 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.Registry;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.ArmorMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.PotionMeta;
@@ -87,6 +88,42 @@ public final class KitItems {
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    /**
+     * Finds a drinkable potion with one of the requested base potion types.
+     * Splash/lingering potions and custom potions with another base type never
+     * match, so a Strength or Regeneration potion cannot be consumed as healing.
+     */
+    public static int potionSlot(PlayerInventory inventory, String... potionKeys) {
+        if (inventory == null || potionKeys == null || potionKeys.length == 0) {
+            return -1;
+        }
+        List<PotionType> expected = new java.util.ArrayList<>();
+        for (String key : potionKeys) {
+            if (key == null || key.trim().isEmpty()) {
+                continue;
+            }
+            PotionType type = potion(key.trim());
+            if (type != null && !expected.contains(type)) {
+                expected.add(type);
+            }
+        }
+        if (expected.isEmpty()) {
+            return -1;
+        }
+        for (int slot = 0; slot < 36; slot++) {
+            ItemStack stack = inventory.getItem(slot);
+            if (stack == null || stack.getType() != Material.POTION) {
+                continue;
+            }
+            ItemMeta meta = stack.getItemMeta();
+            if (meta instanceof PotionMeta
+                    && expected.contains(((PotionMeta) meta).getBasePotionType())) {
+                return slot;
+            }
+        }
+        return -1;
     }
 
     /** Removes an armor trim while preserving every other item property. */

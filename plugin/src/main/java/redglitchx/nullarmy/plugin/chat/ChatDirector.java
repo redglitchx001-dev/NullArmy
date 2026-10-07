@@ -2,6 +2,8 @@ package redglitchx.nullarmy.plugin.chat;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.block.Block;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -111,6 +113,35 @@ public final class ChatDirector implements Listener, Reloadable {
         }
     }
 
+    /** One short-lived, block-specific owner confirmation for a protected teardown. */
+    private static final class PendingDestroy {
+        private final String phrase;
+        private final String world;
+        private final int x;
+        private final int y;
+        private final int z;
+        private final Material material;
+        private final long expiresAtTick;
+
+        PendingDestroy(String phrase, Block block, long expiresAtTick) {
+            this.phrase = phrase;
+            this.world = block.getWorld().getName();
+            this.x = block.getX();
+            this.y = block.getY();
+            this.z = block.getZ();
+            this.material = block.getType();
+            this.expiresAtTick = expiresAtTick;
+        }
+
+        boolean matches(String requestedPhrase, Block block, long now) {
+            return block != null && now <= expiresAtTick
+                    && phrase.equals(requestedPhrase)
+                    && world.equals(block.getWorld().getName())
+                    && x == block.getX() && y == block.getY() && z == block.getZ()
+                    && material == block.getType();
+        }
+    }
+
     /** A two-word phrase mapped onto a subcommand, tried before the single words. */
     private static final Map<String, String> PHRASES = new LinkedHashMap<>();
     /** A single word that is a natural way to say a subcommand. */
@@ -122,7 +153,6 @@ public final class ChatDirector implements Listener, Reloadable {
         PHRASES.put("come here", "come");
         PHRASES.put("come to me", "come");
         PHRASES.put("follow me", "follow");
-        PHRASES.put("go away", "dismiss");
         PHRASES.put("stop it", "stop");
         PHRASES.put("heal up", "heal");
         PHRASES.put("get over here", "come");
@@ -131,7 +161,6 @@ public final class ChatDirector implements Listener, Reloadable {
         // "eliminate", "banish" and friends are how a human says kill/ban.
         WORDS.put("eliminate", "kill");
         WORDS.put("banish", "ban");
-        WORDS.put("remove", "dismiss");
         WORDS.put("summon", "horn");
         WORDS.put("call", "horn");
         WORDS.put("rest", "guard");
@@ -195,14 +224,25 @@ public final class ChatDirector implements Listener, Reloadable {
             this.config = fresh;
         }
         // Sessions are cheap and live in memory only: a reload should not
-        // silently end a conversation someone is in the middle of.
+        // silently end a conversation someone is in the middle of. A destructive
+        // confirmation is policy-bound and must be restarted after any reload.
+        pendingDestroy.clear();
     }
 
     public ChatBrain brain() { return brain; }
 
+    /** Whether private Commander dialogue currently shows the optional plugin tag. */
+    public boolean pluginPrefixEnabled() { return !prefix().isEmpty(); }
+
     /** True when conversation is reserved for the Commander. */
     private boolean commanderOnlyConversation() {
         return config == null || config.commanderOnlyConversation();
+    }
+
+    /** The chat-line prefix is opt-in; by default the Commander speaks without a plugin tag. */
+    private String prefix() {
+        V3Settings settings = config == null ? null : config.v3();
+        return settings != null && settings.chatPluginPrefix() ? PREFIX : "";
     }
 
     /**
@@ -259,24 +299,24 @@ public final class ChatDirector implements Listener, Reloadable {
             return false;
         }
         if (speaker == Speaker.NULL && commanderOnlyConversation()) {
-            player.sendMessage(PREFIX + "Only the Commander talks. The Nulls take orders and"
+            player.sendMessage(prefix() + "Only the Commander talks. The Nulls take orders and"
                     + " nothing else - try 'null guard', 'null follow', 'null formation square'.");
-            player.sendMessage(PREFIX + "Use /null chat commander to open the Commander's channel.");
+            player.sendMessage(prefix() + "Use /null chat commander to open the Commander's channel.");
             return false;
         }
         if (!player.hasPermission("nullarmy.chat")) {
-            player.sendMessage(PREFIX + "You do not have permission to talk to the Nulls (nullarmy.chat).");
+            player.sendMessage(prefix() + "You do not have permission to talk to the Nulls (nullarmy.chat).");
             return false;
         }
         sessions.put(player.getUniqueId(), new Session(speaker, plugin.currentTick()));
         chatModes.put(player.getUniqueId(), ChatMode.PRIVATE);
-        player.sendMessage(PREFIX + "Private channel open with the " + speaker.displayName() + ".");
-        player.sendMessage(PREFIX + "Type your messages normally - only the " + speaker.displayName()
+        player.sendMessage(prefix() + "Private channel open with the " + speaker.displayName() + ".");
+        player.sendMessage(prefix() + "Type your messages normally - only the " + speaker.displayName()
                 + " hears them. Say 'exit' or run /null chat off to end it.");
         if (!brain.available()) {
             String reason = speaker.displayName() + " can still answer briefly, but the"
                     + " full conversation needs a model: " + brain.unavailableReason() + ".";
-            player.sendMessage(PREFIX + reason);
+            player.sendMessage(prefix() + reason);
         }
         return true;
     }
@@ -287,12 +327,12 @@ public final class ChatDirector implements Listener, Reloadable {
             return false;
         }
         if (!player.hasPermission("nullarmy.chat")) {
-            player.sendMessage(PREFIX + "You do not have permission to talk to the Commander (nullarmy.chat).");
+            player.sendMessage(prefix() + "You do not have permission to talk to the Commander (nullarmy.chat).");
             return false;
         }
         boolean closedPrivate = sessions.remove(player.getUniqueId()) != null;
         chatModes.put(player.getUniqueId(), ChatMode.PUBLIC);
-        player.sendMessage(PREFIX + (closedPrivate ? "Private channel closed. " : "")
+        player.sendMessage(prefix() + (closedPrivate ? "Private channel closed. " : "")
                 + "Public Commander chat is on. Address him by name or wake word; replies appear as Name: message.");
         return true;
     }
@@ -304,7 +344,7 @@ public final class ChatDirector implements Listener, Reloadable {
         }
         boolean closedPrivate = sessions.remove(player.getUniqueId()) != null;
         chatModes.put(player.getUniqueId(), ChatMode.OFF);
-        player.sendMessage(PREFIX + (closedPrivate ? "Private channel closed. " : "")
+        player.sendMessage(prefix() + (closedPrivate ? "Private channel closed. " : "")
                 + "Commander chat mode is off. Addressed conversation lines will not be routed; orders still work.");
         return true;
     }
@@ -319,7 +359,7 @@ public final class ChatDirector implements Listener, Reloadable {
             return false;
         }
         chatModes.put(player.getUniqueId(), ChatMode.OFF);
-        player.sendMessage(PREFIX + "The " + session.speaker.displayName() + " signs off."
+        player.sendMessage(prefix() + "The " + session.speaker.displayName() + " signs off."
                 + (why == null || why.isEmpty() ? "" : " (" + why + ")"));
         return true;
     }
@@ -366,6 +406,9 @@ public final class ChatDirector implements Listener, Reloadable {
         chatModes.remove(player);
         orderLimits.remove(player);
         pendingDestroy.remove(player);
+        if (plugin.coordinator() != null) {
+            plugin.coordinator().clearPendingConfirmation(player);
+        }
     }
 
     private void handle(io.papermc.paper.event.player.AsyncChatEvent event) {
@@ -423,7 +466,7 @@ public final class ChatDirector implements Listener, Reloadable {
         if (talkTarget != null) {
             event.setCancelled(true);
             if (talkTarget.isEmpty()) {
-                player.sendMessage(PREFIX + "Usage: 'null chat <public|private|null|commander|off>'.");
+                player.sendMessage(prefix() + "Usage: 'null chat <public|private|null|commander|off>'.");
                 return;
             }
             if (talkTarget.equalsIgnoreCase("public")) {
@@ -436,7 +479,7 @@ public final class ChatDirector implements Listener, Reloadable {
             }
             Speaker target = Speaker.parse(talkTarget);
             if (target == null) {
-                player.sendMessage(PREFIX + "'" + talkTarget + "' is neither a Null nor a chat mode."
+                player.sendMessage(prefix() + "'" + talkTarget + "' is neither a Null nor a chat mode."
                         + " Use 'null chat public', 'null chat private', 'null chat null' or 'null chat off'.");
                 return;
             }
@@ -454,7 +497,7 @@ public final class ChatDirector implements Listener, Reloadable {
                 commanderReply("Yes, " + player.getName() + "? Give the order, or ask me something.");
             } else if (!offExplicitly) {
                 event.setCancelled(true);
-                player.sendMessage(PREFIX + "Yes? Try 'null help', 'null attack <player>',"
+                player.sendMessage(prefix() + "Yes? Try 'null help', 'null attack <player>',"
                         + " or 'null chat commander' to talk.");
             }
             return;
@@ -493,11 +536,13 @@ public final class ChatDirector implements Listener, Reloadable {
             event.setCancelled(true);
         }
         if (!allowOrder(player)) {
-            player.sendMessage(PREFIX + "Slow down - the Nulls can only take so many orders a minute.");
+            player.sendMessage(prefix() + "Slow down - the Nulls can only take so many orders a minute.");
             return;
         }
         final String verb = args[0].equals("order") && args.length > 2 ? args[2] : args[0];
-        dispatch(player, args);
+        if (!dispatch(player, args)) {
+            return;
+        }
         if (publicReplies) {
             commanderReply(acknowledgement(verb, player.getName()));
         }
@@ -505,8 +550,9 @@ public final class ChatDirector implements Listener, Reloadable {
 
     // ------------------------------------------------------- natural orders (P-09)
 
-    /** A destroy order waiting for its confirm: owner -> verb + target. */
-    private final Map<UUID, String> pendingDestroy = new ConcurrentHashMap<>();
+    /** A destroy order waiting for its confirm: owner -> exact target and expiry. */
+    private final Map<UUID, PendingDestroy> pendingDestroy = new ConcurrentHashMap<>();
+    private static final long DESTROY_CONFIRM_WINDOW_TICKS = 200L;
 
     /** How many natural-language orders were obeyed (self test). */
     private int naturalOrders;
@@ -550,29 +596,78 @@ public final class ChatDirector implements Listener, Reloadable {
         if (order == null || !order.addressed() || !order.isOrder()) {
             return false;
         }
+        // AsyncChatEvent may run off-thread. Parsing is pure; keep the event's
+        // player handle, but do not query or mutate it until the main-thread task.
+        later(() -> executeNaturalOrder(player, order));
+        return true;
+    }
+
+    /** Executes one parsed natural-language order on the server thread. */
+    private void executeNaturalOrder(Player player,
+                                     redglitchx.nullarmy.core.orders.OrderParser.Order order) {
+        if (player == null || !player.isValid() || order == null) {
+            return;
+        }
         if (plugin.commander() != null && plugin.commander().owner() != null
                 && !plugin.commander().isOwner(player)) {
             // P-09: a non-owner's order is ignored silently. No chat, no movement.
             ignoredNonOwner++;
             plugin.getLogger().info("[NullArmy] " + player.getName() + " ordered the army without being"
                     + " its owner; the order was ignored in silence.");
-            return true; // the line was ours, but nothing happens and nothing is said
+            return;
         }
         if (!allowOrder(player)) {
-            player.sendMessage(PREFIX + "Slow down - the Nulls can only take so many orders a minute.");
-            return true;
+            player.sendMessage(prefix() + "Slow down - the Nulls can only take so many orders a minute.");
+            return;
         }
         if (order.verb() == redglitchx.nullarmy.core.orders.OrderParser.Verb.DESTROY) {
-            return destroyOrder(player, order);
+            destroyOrder(player, order);
+            return;
         }
-        // A confirm that is not a destroy cancels it: "stop" after "destroy".
+        String permission = naturalOrderPermission(order.verb());
+        if (permission != null && !player.hasPermission(permission)) {
+            player.sendMessage(prefix() + "That order needs " + permission + ". Nothing was changed.");
+            return;
+        }
+        // A valid, authorized non-destroy order cancels a pending confirmation:
+        // "stop" after "destroy". An unauthorized line does not consume it.
         pendingDestroy.remove(player.getUniqueId());
         if (!obey(player, order)) {
-            return false;
+            return;
         }
         naturalOrders++;
         replyByMode(player, acknowledgement(order.verb().name(), player.getName()));
-        return true;
+    }
+
+    /** Maps natural orders to the same action-level permission as their typed command. */
+    private static String naturalOrderPermission(redglitchx.nullarmy.core.orders.OrderParser.Verb verb) {
+        if (verb == null) {
+            return null;
+        }
+        switch (verb) {
+            case BUILD:
+            case BRIDGE:
+                return "nullarmy.build";
+            case ATTACK:
+                return "nullarmy.attack";
+            case STOP:
+                return "nullarmy.admin";
+            case FOLLOW:
+            case COME:
+            case GUARD:
+            case MARCH:
+            case DRILL:
+            case PATROL:
+            case DEFEND:
+            case SALUTE:
+            case REGROUP:
+                return "nullarmy.follow";
+            case DESTROY:
+                return "nullarmy.admin";
+            case CHAT:
+            default:
+                return null;
+        }
     }
 
     /** Carries out one parsed order. @return false when the verb is not ours. */
@@ -583,7 +678,7 @@ public final class ChatDirector implements Listener, Reloadable {
         UUID owner = player.getUniqueId();
         List<NullBody> targets = new ArrayList<>(plugin.squads().membersOf(owner));
         if (targets.isEmpty()) {
-            player.sendMessage(PREFIX + "You have no Nulls to order - summon some first.");
+            player.sendMessage(prefix() + "You have no Nulls to order - summon some first.");
             return true;
         }
         V3Settings settings = plugin.pluginConfig() == null ? null : plugin.pluginConfig().v3();
@@ -596,8 +691,8 @@ public final class ChatDirector implements Listener, Reloadable {
                 Location at = player.getLocation();
                 String answer = plugin.builder().start(owner, at.getWorld().getName(),
                         new Vec3d(at.getX(), at.getY(), at.getZ()), at.getYaw(), goal,
-                        line -> player.sendMessage(PREFIX + line));
-                player.sendMessage(PREFIX + answer);
+                        line -> player.sendMessage(prefix() + line));
+                player.sendMessage(prefix() + answer);
                 return true;
             }
             case BRIDGE: {
@@ -606,50 +701,51 @@ public final class ChatDirector implements Listener, Reloadable {
                 double yaw = Math.toRadians(at.getYaw());
                 Vec3d ahead = new Vec3d(at.getX() - Math.sin(yaw) * 10.0D, at.getY(),
                         at.getZ() + Math.cos(yaw) * 10.0D);
-                player.sendMessage(PREFIX + plugin.brain().bridge(targets, ahead, owner));
+                player.sendMessage(prefix() + plugin.brain().bridge(targets, ahead, owner));
                 return true;
             }
             case ATTACK: {
                 Entity target = attackTarget(player, order.argument());
                 if (target == null) {
-                    player.sendMessage(PREFIX + "Attack whom? Name a player, or say 'them' for"
-                            + " whatever you are looking at.");
+                    player.sendMessage(prefix() + "Attack whom? Name an online player, or say 'them' while"
+                            + " looking directly at a living target. I will not guess a target.");
                     return true;
                 }
                 if (target.getUniqueId().equals(owner)) {
-                    player.sendMessage(PREFIX + "Never. The army does not touch its own owner.");
+                    player.sendMessage(prefix() + "Never. The army does not touch its own owner.");
                     return true;
                 }
                 if (settings != null && settings.isProtected(target.getName(),
                         target.getUniqueId())) {
-                    player.sendMessage(PREFIX + target.getName() + " is protected"
+                    player.sendMessage(prefix() + target.getName() + " is protected"
                             + " (policy.protected) - the army will not touch them.");
                     return true;
                 }
                 // L-07: hunt to the end - two chasers, the rest hold the line.
-                player.sendMessage(PREFIX + plugin.brain().hunt(targets, target.getUniqueId(), owner, 2));
+                player.sendMessage(prefix() + plugin.brain().hunt(targets, target.getUniqueId(), owner, 2));
                 return true;
             }
             case FOLLOW:
             case COME:
-                player.sendMessage(PREFIX + plugin.brain().order(targets, Mind.Verb.FOLLOW, null,
+                player.sendMessage(prefix() + plugin.brain().order(targets, Mind.Verb.FOLLOW, null,
                         owner, owner, 1));
                 return true;
             case STOP:
                 if (plugin.builder() != null) {
                     plugin.builder().stop(owner, "stopped by order");
                 }
-                player.sendMessage(PREFIX + plugin.brain().order(targets, Mind.Verb.STOP, null, null,
+                player.sendMessage(prefix() + plugin.brain().order(targets, Mind.Verb.STOP, null, null,
                         owner, 1));
                 return true;
             case GUARD:
-                player.sendMessage(PREFIX + plugin.brain().order(targets, Mind.Verb.DEFEND, null,
+            case DEFEND:
+                player.sendMessage(prefix() + plugin.brain().order(targets, Mind.Verb.DEFEND, null,
                         owner, owner, 1));
                 return true;
             case MARCH:
             case DRILL: {
                 Location at = player.getLocation();
-                player.sendMessage(PREFIX + plugin.brain().order(targets,
+                player.sendMessage(prefix() + plugin.brain().order(targets,
                         order.verb() == redglitchx.nullarmy.core.orders.OrderParser.Verb.MARCH
                                 ? Mind.Verb.MARCH : Mind.Verb.DRILL,
                         new Vec3d(at.getX(), at.getY(), at.getZ()), null, owner, 1));
@@ -660,15 +756,15 @@ public final class ChatDirector implements Listener, Reloadable {
                 double yaw = Math.toRadians(at.getYaw());
                 Vec3d b = new Vec3d(at.getX() - Math.sin(yaw) * 16.0D, at.getY(),
                         at.getZ() + Math.cos(yaw) * 16.0D);
-                player.sendMessage(PREFIX + plugin.brain().patrol(targets,
+                player.sendMessage(prefix() + plugin.brain().patrol(targets,
                         new Vec3d(at.getX(), at.getY(), at.getZ()), b, owner));
                 return true;
             }
             case SALUTE:
-                player.sendMessage(PREFIX + plugin.brain().salute(targets, owner));
+                player.sendMessage(prefix() + plugin.brain().salute(targets, owner));
                 return true;
             case REGROUP:
-                player.sendMessage(PREFIX + plugin.brain().order(targets, Mind.Verb.REGROUP, null,
+                player.sendMessage(prefix() + plugin.brain().order(targets, Mind.Verb.REGROUP, null,
                         owner, owner, 1));
                 return true;
             default:
@@ -679,36 +775,22 @@ public final class ChatDirector implements Listener, Reloadable {
     /** Resolves the target of an attack: 'them' (what the owner is looking at) or a name. */
     private Entity attackTarget(Player player, String argument) {
         String arg = argument == null ? "" : argument.trim();
-        if (arg.isEmpty() || arg.equalsIgnoreCase("them") || arg.equalsIgnoreCase("him")
+        if (arg.isEmpty()) {
+            return null; // an unqualified "attack" or "kill" never picks a target for the owner
+        }
+        if (arg.equalsIgnoreCase("them") || arg.equalsIgnoreCase("him")
                 || arg.equalsIgnoreCase("her") || arg.equalsIgnoreCase("it")
                 || arg.equalsIgnoreCase("that")) {
             org.bukkit.util.RayTraceResult hit = player.rayTraceEntities(48);
-            if (hit != null && hit.getHitEntity() != null) {
-                return hit.getHitEntity();
+            Entity target = hit == null ? null : hit.getHitEntity();
+            if (!(target instanceof org.bukkit.entity.LivingEntity) || target.isDead()
+                    || target.getUniqueId().equals(player.getUniqueId())
+                    || (plugin.adapter() != null && plugin.adapter().isNullEntity(target.getUniqueId()))) {
+                return null; // pronouns only resolve the living entity the owner actually aimed at
             }
-            Entity nearest = null;
-            double best = Double.MAX_VALUE;
-            Location at = player.getLocation();
-            for (Entity near : player.getNearbyEntities(16.0D, 8.0D, 16.0D)) {
-                if (!(near instanceof org.bukkit.entity.LivingEntity) || near.isDead()) {
-                    continue;
-                }
-                if (plugin.adapter() != null && plugin.adapter().isNullEntity(near.getUniqueId())) {
-                    continue;
-                }
-                if (near.getUniqueId().equals(player.getUniqueId())) {
-                    continue;
-                }
-                double d = near.getLocation().distanceSquared(at);
-                if (d < best) {
-                    best = d;
-                    nearest = near;
-                }
-            }
-            return nearest;
+            return target;
         }
-        Player named = Bukkit.getPlayerExact(arg);
-        return named;
+        return Bukkit.getPlayerExact(arg);
     }
 
     /**
@@ -720,34 +802,74 @@ public final class ChatDirector implements Listener, Reloadable {
      * shout, not an answer.</p>
      */
     private boolean destroyOrder(Player player, redglitchx.nullarmy.core.orders.OrderParser.Order order) {
+        UUID owner = player.getUniqueId();
         boolean griefing = plugin.pluginConfig() != null && plugin.pluginConfig().griefingEnabled();
         if (!griefing) {
+            pendingDestroy.remove(owner);
             destroyRefusals++;
-            plugin.getLogger().info("[NullArmy] destroy refused: " + player.getName()
-                    + " asked the army to tear down " + (order.argument().isEmpty() ? "the area"
-                    : "'" + order.argument() + "'") + " but policy.griefing-enabled is false.");
+            plugin.getLogger().info("[NullArmy] destroy refused for " + player.getName()
+                    + ": policy.griefing-enabled is false.");
             return true;
         }
-        String pending = pendingDestroy.get(player.getUniqueId());
-        if (pending == null || !pending.equals(order.argument())) {
-            pendingDestroy.put(player.getUniqueId(), order.argument());
-            player.sendMessage(PREFIX + "Tearing down " + (order.argument().isEmpty() ? "the area"
-                    : "'" + order.argument() + "'") + " will really destroy blocks."
-                    + " Say it again to confirm.");
+        if (!player.hasPermission("nullarmy.admin")) {
+            pendingDestroy.remove(owner);
+            player.sendMessage(prefix() + "A directed teardown needs nullarmy.admin. Nothing was changed.");
             return true;
         }
-        pendingDestroy.remove(player.getUniqueId());
+
+        String phrase = order.argument() == null ? "" : order.argument().trim().toLowerCase(Locale.ROOT);
+        if (phrase.isEmpty()) {
+            pendingDestroy.remove(owner);
+            player.sendMessage(prefix() + "Name what to destroy and look directly at the block."
+                    + " The target is limited to a small patch around that block.");
+            return true;
+        }
+        org.bukkit.util.RayTraceResult trace = player.rayTraceBlocks(6.0D);
+        Block target = trace == null ? null : trace.getHitBlock();
+        if (target == null || target.getType().isAir()) {
+            pendingDestroy.remove(owner);
+            player.sendMessage(prefix() + "No block is targeted. Look at the exact block and repeat"
+                    + " 'null destroy <target>'. Nothing was changed.");
+            return true;
+        }
+        redglitchx.nullarmy.plugin.SquadManager.Squad squad = plugin.squads() == null
+                ? null : plugin.squads().find(owner);
+        if (squad == null || !squad.worldName().equals(target.getWorld().getName())) {
+            pendingDestroy.remove(owner);
+            player.sendMessage(prefix() + "The target block must be in the same world as your live squad."
+                    + " Nothing was changed.");
+            return true;
+        }
+        List<NullBody> members = plugin.squads().membersOf(owner);
+        if (members.isEmpty()) {
+            pendingDestroy.remove(owner);
+            player.sendMessage(prefix() + "You have no Nulls to order - summon some first.");
+            return true;
+        }
+
+        long now = plugin.currentTick();
+        PendingDestroy pending = pendingDestroy.get(owner);
+        if (pending == null || !pending.matches(phrase, target, now)) {
+            pendingDestroy.put(owner, new PendingDestroy(phrase, target,
+                    now + DESTROY_CONFIRM_WINDOW_TICKS));
+            player.sendMessage(prefix() + "This will remove at most 9 blocks in a small patch centered on "
+                    + target.getType().name().toLowerCase(Locale.ROOT) + " at "
+                    + target.getX() + "," + target.getY() + "," + target.getZ()
+                    + ". Repeat the same directed order while aiming at this block within 10 seconds to confirm.");
+            return true;
+        }
+        pendingDestroy.remove(owner);
         if (plugin.brain() == null || plugin.squads() == null) {
             return true;
         }
-        List<NullBody> targets = new ArrayList<>(plugin.squads().membersOf(player.getUniqueId()));
-        if (targets.isEmpty()) {
-            player.sendMessage(PREFIX + "You have no Nulls to order - summon some first.");
-            return true;
-        }
-        Location at = player.getLocation();
-        player.sendMessage(PREFIX + plugin.brain().destroy(targets,
-                new Vec3d(at.getX(), at.getY(), at.getZ()), 2, player.getUniqueId()));
+        // One worker, one horizontal 3x3 layer, and a hard 9-block cap keep an
+        // explicitly enabled teardown bounded. The owner confirms the exact
+        // world/block again; it never defaults to a broad area around the player.
+        NullBody worker = members.get(0);
+        Vec3d centre = new Vec3d(target.getX() + 0.5D, target.getY() - 1.0D,
+                target.getZ() + 0.5D);
+        player.sendMessage(prefix() + plugin.brain().destroy(java.util.Collections.singletonList(worker),
+                centre, 1, owner, target.getWorld().getName()));
         naturalOrders++;
         replyByMode(player, "As you say. It comes down.");
         return true;
@@ -760,11 +882,18 @@ public final class ChatDirector implements Listener, Reloadable {
 
     /** Runs on the main thread a tick later - after the player's own line is shown. */
     private void later(Runnable action) {
+        boolean mainThread = Bukkit.isPrimaryThread();
         try {
             Bukkit.getScheduler().runTaskLater(plugin, () -> Guard.attempt(plugin.getLogger(),
                     "Commander reply", action::run), 1L);
         } catch (Throwable t) {
-            action.run();
+            if (mainThread) {
+                action.run();
+            } else {
+                // Never fall back to touching Bukkit/world state from AsyncChatEvent.
+                plugin.getLogger().fine("[NullArmy] deferred chat work was not scheduled ("
+                        + t.getClass().getSimpleName() + ")");
+            }
         }
     }
 
@@ -785,7 +914,7 @@ public final class ChatDirector implements Listener, Reloadable {
         if (mode == ChatMode.PUBLIC) {
             commanderReply(text);
         } else if (!explicitlyOff(player.getUniqueId())) {
-            player.sendMessage(PREFIX + text);
+            player.sendMessage(prefix() + text);
         }
     }
 
@@ -918,21 +1047,27 @@ public final class ChatDirector implements Listener, Reloadable {
     }
 
     /** Runs the order on the server thread through the real command executor. */
-    private void dispatch(Player player, String[] args) {
+    private boolean dispatch(Player player, String[] args) {
+        if (player == null || args == null || command == null) {
+            plugin.getLogger().warning("[NullArmy] A chat order was dropped because the command is unavailable.");
+            return false;
+        }
         final String[] copy = args.clone();
-        Guard.attempt(plugin.getLogger(), "chat order null " + String.join(" ", copy), () -> {
-            if (command == null) {
-                player.sendMessage(PREFIX + "Orders are unavailable: the command is not wired.");
-                return;
-            }
-            try {
-                Bukkit.getScheduler().runTask(plugin, () -> Guard.attempt(plugin.getLogger(),
-                        "executing a chat order", () -> command.dispatch(player, copy)));
-            } catch (Throwable t) {
-                // Already on the main thread, or the scheduler is closing: run inline.
-                command.dispatch(player, copy);
-            }
-        });
+        Runnable execute = () -> Guard.attempt(plugin.getLogger(), "executing a chat order",
+                () -> command.dispatch(player, copy));
+        if (Bukkit.isPrimaryThread()) {
+            execute.run();
+            return true;
+        }
+        try {
+            Bukkit.getScheduler().runTask(plugin, execute);
+            return true;
+        } catch (Throwable t) {
+            // A failed async dispatch is dropped, never run against Bukkit off-thread.
+            plugin.getLogger().warning("[NullArmy] A chat order was dropped because main-thread scheduling failed ("
+                    + t.getClass().getSimpleName() + ").");
+            return false;
+        }
     }
 
     // ------------------------------------------------------------------ conversation
@@ -944,17 +1079,17 @@ public final class ChatDirector implements Listener, Reloadable {
         if (!brain.available()) {
             String local = localLine(message);
             if (local == null) {
-                player.sendMessage(PREFIX + label(session.speaker) + ": the channel is"
+                player.sendMessage(prefix() + label(session.speaker) + ": the channel is"
                         + " not connected to a model, so I only know a few lines."
                         + " (" + brain.unavailableReason() + ")");
                 return;
             }
-            player.sendMessage(PREFIX + label(session.speaker) + ": " + local);
+            player.sendMessage(prefix() + label(session.speaker) + ": " + local);
             push(session.history, new ChatBrain.Turn("assistant", local));
             return;
         }
         if (session.awaitingReply) {
-            player.sendMessage(PREFIX + label(session.speaker) + ": one moment...");
+            player.sendMessage(prefix() + label(session.speaker) + ": one moment...");
             return;
         }
         session.awaitingReply = true;
@@ -986,7 +1121,7 @@ public final class ChatDirector implements Listener, Reloadable {
         if (history == null || history.isEmpty()) {
             String local = localLine(message);
             if (local != null && !brain.available()) {
-                player.sendMessage(PREFIX + label(speaker) + ": " + local);
+                player.sendMessage(prefix() + label(speaker) + ": " + local);
                 if (onDone != null) {
                     onDone.accept(local);
                 }
@@ -1002,7 +1137,7 @@ public final class ChatDirector implements Listener, Reloadable {
                     return; // the player switched channels while this reply was in flight
                 }
                 String clipped = clip(text, config == null ? 400 : config.chatMaxReplyChars());
-                player.sendMessage(PREFIX + label(speaker) + ": " + clipped);
+                player.sendMessage(prefix() + label(speaker) + ": " + clipped);
                 if (onDone != null) {
                     onDone.accept(clipped);
                 }
@@ -1015,13 +1150,13 @@ public final class ChatDirector implements Listener, Reloadable {
                 }
                 String local = localLine(message);
                 if (local != null) {
-                    player.sendMessage(PREFIX + label(speaker) + ": " + local);
+                    player.sendMessage(prefix() + label(speaker) + ": " + local);
                     if (onDone != null) {
                         onDone.accept(local);
                     }
                     return;
                 }
-                player.sendMessage(PREFIX + "The " + label(speaker)
+                player.sendMessage(prefix() + "The " + label(speaker)
                         + " cannot answer that right now: " + reason + ".");
             }
         });
@@ -1150,7 +1285,8 @@ public final class ChatDirector implements Listener, Reloadable {
      *
      * @return null when this is not a command the plugin knows
      */
-    String[] asCommand(String rest) {
+    /** Pure command-name resolution, exposed for diagnostics and runtime smoke tests. */
+    public String[] asCommand(String rest) {
         String lower = rest.toLowerCase(Locale.ROOT).trim();
         if (lower.isEmpty()) {
             return null;

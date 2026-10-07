@@ -102,7 +102,8 @@ public final class ConfigBootstrap {
                 if (report.error() != null) {
                     log.warning("[NullArmy] " + report.describe());
                 } else if (report.changed()) {
-                    log.info("[NullArmy] " + report.describe() + ": " + report.addedKeys());
+                    log.info("[NullArmy] " + report.describe()
+                            + (report.addedKeys().isEmpty() ? "" : ": " + report.addedKeys()));
                 } else {
                     log.info("[NullArmy] Keeping the existing configuration ("
                             + report.describe() + ").");
@@ -166,12 +167,14 @@ public final class ConfigBootstrap {
                 "ai:",
                 "  # The plugin is fully functional with AI off.",
                 "  enabled: false",
+                "  auto-coordinate: false",
                 "  default-endpoint: \"\"",
                 "  endpoints: {}",
                 "",
                 "skins:",
-                "  nulls: \"uH3WR2v0ti0uTHJ\"",
+                "  nulls: \"\"",
                 "  commander: \"\"",
+                "  png-path: \"skins/null.png\"",
                 "",
                 "commander:",
                 "  name: \"NullCommander\"",

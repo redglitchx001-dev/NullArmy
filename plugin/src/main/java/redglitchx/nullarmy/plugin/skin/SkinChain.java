@@ -14,6 +14,7 @@ import redglitchx.nullarmy.plugin.util.Guard;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -21,6 +22,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
@@ -32,6 +34,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.zip.CRC32;
+import java.util.zip.DataFormatException;
+import java.util.zip.Inflater;
 
 /**
  * Which skin the Nulls wear, in a fixed order of trust.
@@ -39,12 +45,13 @@ import java.util.UUID;
  * <ol>
  *   <li>{@code skins.value} + {@code skins.signature} from config.yml - an owner
  *       who pasted a signed texture gets exactly that, with no network;</li>
- *   <li>{@code plugins/NullArmy/skins/null.png}, uploaded to MineSkin v2 and
- *       cached as a signed texture (requires {@code skins.mineskin.api-key});</li>
+ *   <li>The configured relative PNG under {@code plugins/NullArmy/skins/},
+ *       uploaded to MineSkin v2 and cached as a signed texture (requires
+ *       {@code skins.mineskin.api-key});</li>
  *   <li>{@code skins.proxy-url} - any service that returns
  *       {@code {"value","signature"}} JSON (MineSkin and Mojang shapes too) or raw
- *       base64; a failure logs the HTTP status and the first 80 characters of the
- *       body so the owner can see what the proxy said;</li>
+ *       base64; failures are reported with bounded, credential-redacted diagnostics
+ *       and never include the response body;</li>
  *   <li>Mojang by account name ({@code skins.nulls} / {@code skins.commander}),
  *       through the existing cache and resolver.</li>
  * </ol>
@@ -60,10 +67,10 @@ public final class SkinChain implements Reloadable {
 
     private static final URI MINESKIN_QUEUE_URI = URI.create("https://api.mineskin.org/v2/queue");
     private static final String MINESKIN_BASE_URL = "https://api.mineskin.org";
-    private static final String MINESKIN_USER_AGENT = "NullArmy/0.1.0 (Paper plugin; skin signing)";
     private static final int MAX_CUSTOM_PNG_BYTES = 2 * 1024 * 1024;
     private static final int MAX_MINESKIN_POLLS = 60;
-    private static final int MAX_MINESKIN_RESPONSE_CHARS = 256 * 1024;
+    private static final int MAX_MINESKIN_RESPONSE_BYTES = 256 * 1024;
+    private static final int MAX_PROXY_RESPONSE_BYTES = 256 * 1024;
 
     /** One resolved skin and where it came from. */
     public static final class Resolution {
@@ -96,11 +103,14 @@ public final class SkinChain implements Reloadable {
     private volatile Resolution commander = new Resolution(null, "not resolved yet", Collections.emptyList());
     private final Map<String, String> applied = Collections.synchronizedMap(new LinkedHashMap<>());
     private volatile String lastProxyStatus = "";
+    private final AtomicLong refreshGeneration = new AtomicLong();
 
     public SkinChain(NullArmyPlugin plugin) {
         this.plugin = plugin;
+        // A proxy URL may carry credentials in its query/path; never forward it
+        // automatically to a redirect target.
         this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
-                .followRedirects(HttpClient.Redirect.NORMAL).build();
+                .followRedirects(HttpClient.Redirect.NEVER).build();
         this.mineSkinHttp = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
                 .followRedirects(HttpClient.Redirect.NEVER).build();
         try {
@@ -133,16 +143,27 @@ public final class SkinChain implements Reloadable {
 
     /** Resolves the chain off-thread; on success, optionally re-skins every live body. */
     public void refreshAsync(boolean reapply) {
+        long generation = refreshGeneration.incrementAndGet();
+        lastProxyStatus = "";
+        PluginConfig config = plugin.pluginConfig();
+        V3Settings v3 = config == null ? null : config.v3();
+        boolean sharesSkin = commanderSharesNullSkin(config);
         try {
             Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                Resolution forNulls = resolve(false);
-                Resolution forCommander = commanderSharesNullSkin() ? forNulls : resolve(true);
+                Resolution forNulls = resolve(false, config, v3, sharesSkin, generation);
+                Resolution forCommander = sharesSkin ? forNulls
+                        : resolve(true, config, v3, false, generation);
                 Bukkit.getScheduler().runTask(plugin, () -> {
+                    // /null reload may have started another resolution while this
+                    // network request was still running. Never let the older config win.
+                    if (generation != refreshGeneration.get()) {
+                        return;
+                    }
                     nulls = forNulls;
                     commander = forCommander;
                     plugin.getLogger().info("[NullArmy] skin for Nulls: " + forNulls.source()
                             + (forNulls.complete() ? "" : " (default skin)"));
-                    if (reapply && settings() != null && settings().skinLiveReapply()) {
+                    if (reapply && v3 != null && v3.skinLiveReapply()) {
                         int done = reapplyAll();
                         if (done > 0) {
                             plugin.getLogger().info("[NullArmy] re-skinned " + done + " live Null(s).");
@@ -151,12 +172,8 @@ public final class SkinChain implements Reloadable {
                 });
             });
         } catch (Throwable t) {
-            plugin.getLogger().fine("[NullArmy] skin refresh not scheduled: " + Guard.describe(t));
+            plugin.getLogger().fine("[NullArmy] skin refresh not scheduled: " + t.getClass().getSimpleName());
         }
-    }
-
-    private V3Settings settings() {
-        return plugin.pluginConfig() == null ? null : plugin.pluginConfig().v3();
     }
 
     /**
@@ -164,8 +181,17 @@ public final class SkinChain implements Reloadable {
      * steps).
      */
     public Resolution resolve(boolean forCommander) {
+        if (Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException("skin-chain network resolution must run asynchronously");
+        }
+        PluginConfig config = plugin.pluginConfig();
+        V3Settings v3 = config == null ? null : config.v3();
+        return resolve(forCommander, config, v3, commanderSharesNullSkin(config), -1L);
+    }
+
+    private Resolution resolve(boolean forCommander, PluginConfig config, V3Settings v3,
+                               boolean sharesSkin, long generation) {
         List<String> attempts = new ArrayList<>();
-        V3Settings v3 = settings();
         // 1. Pasted value + signature.
         if (v3 != null && !v3.skinValue().isEmpty()) {
             if (!v3.skinSignature().isEmpty()) {
@@ -178,95 +204,177 @@ public final class SkinChain implements Reloadable {
             attempts.add("config value+signature: not set");
         }
         // 2. A local PNG must be signed before Minecraft clients can use it.
-        if (forCommander && !commanderSharesNullSkin()) {
-            attempts.add("skins/null.png: skipped because the Commander has a separate skin account");
+        if (forCommander && !sharesSkin) {
+            attempts.add("configured PNG: skipped because the Commander has a separate skin account");
         } else {
             SkinPayload customPng = signCustomPng(v3);
             if (customPng != null) {
                 if (customPng.complete()) {
-                    attempts.add("skins/null.png via MineSkin: signed texture used");
+                    attempts.add("configured PNG via MineSkin: signed texture used");
                     return new Resolution(new SkinData(customPng.value(), customPng.signature(),
-                            SkinData.Source.MINESKIN), "MineSkin signed plugins/NullArmy/skins/null.png", attempts);
+                            SkinData.Source.MINESKIN), "MineSkin signed configured PNG", attempts);
                 }
-                attempts.add("skins/null.png via MineSkin: " + customPng.error());
+                attempts.add("configured PNG via MineSkin: " + customPng.error());
             } else {
-                attempts.add("skins/null.png: not present");
+                attempts.add("configured PNG: not present or disabled");
             }
         }
-        // 3. Proxy.
+        // 3. Proxy. Diagnostics intentionally omit URL path, query and response body.
         if (v3 != null && !v3.skinProxyUrl().isEmpty()) {
-            SkinPayload payload = fetchProxy(v3.skinProxyUrl());
+            String safeProxy = redglitchx.nullarmy.core.agent.EndpointConfig
+                    .safeEndpointForDisplay(v3.skinProxyUrl());
+            SkinPayload payload = fetchProxy(v3.skinProxyUrl(), generation);
             if (payload.complete()) {
-                attempts.add("proxy " + v3.skinProxyUrl() + ": used");
+                attempts.add("proxy " + safeProxy + ": used");
                 return new Resolution(new SkinData(payload.value(), payload.signature(), SkinData.Source.PROXY),
-                        "skins.proxy-url " + v3.skinProxyUrl(), attempts);
+                        "skins.proxy-url " + safeProxy, attempts);
             }
-            attempts.add("proxy " + v3.skinProxyUrl() + ": " + payload.error());
+            attempts.add("proxy " + safeProxy + ": " + payload.error());
         } else {
             attempts.add("proxy: not set");
         }
-        // 4. Mojang by name.
-        String name = account(forCommander);
+        // 4. Mojang by an explicitly configured account name only.
+        String name = account(forCommander, config);
         if (name != null && !name.isEmpty() && plugin.skins() != null) {
-            SkinData cached = plugin.skins().resolveCached(name);
-            if (cached != null && cached.complete()) {
-                attempts.add("Mojang account " + name + ": " + cached.source().name().toLowerCase(java.util.Locale.ROOT));
-                return new Resolution(cached, "Mojang account " + name + " (" + cached.source().name()
-                        .toLowerCase(java.util.Locale.ROOT).replace('_', ' ') + ")", attempts);
-            }
-            try {
-                SkinData fetched = new MojangSkinClient().fetch(name);
-                if (fetched != null && fetched.complete()) {
-                    attempts.add("Mojang account " + name + ": fetched");
-                    return new Resolution(fetched, "Mojang account " + name + " (fetched)", attempts);
+            if (!SkinResolver.isValidAccountName(name)) {
+                attempts.add("configured Mojang account name is invalid; lookup skipped");
+            } else {
+                SkinData cached = plugin.skins().resolveCached(name);
+                if (cached != null && cached.complete()) {
+                    attempts.add("Mojang account " + name + ": "
+                            + cached.source().name().toLowerCase(java.util.Locale.ROOT));
+                    return new Resolution(cached, "Mojang account " + name + " (" + cached.source().name()
+                            .toLowerCase(java.util.Locale.ROOT).replace('_', ' ') + ")", attempts);
                 }
-                attempts.add("Mojang account " + name + ": no signed texture returned");
-            } catch (Throwable t) {
-                attempts.add("Mojang account " + name + ": " + Guard.describe(t));
+                try {
+                    SkinData fetched = new MojangSkinClient().fetch(name);
+                    if (fetched != null && fetched.complete()) {
+                        attempts.add("Mojang account " + name + ": fetched");
+                        return new Resolution(fetched, "Mojang account " + name + " (fetched)", attempts);
+                    }
+                    attempts.add("Mojang account " + name + ": no signed texture returned");
+                } catch (Throwable t) {
+                    attempts.add("Mojang account " + name + ": lookup failed ("
+                            + t.getClass().getSimpleName() + ")");
+                }
             }
         } else {
-            attempts.add("Mojang account: not set");
+            attempts.add("Mojang account: not configured");
         }
-        // 5. Legacy root-level skin.png is not signed, so Minecraft cannot display it.
+        // 5. Legacy root-level skin.png is unsigned, so Minecraft cannot display it.
         File legacyPng = new File(plugin.getDataFolder(), "skin.png");
         boolean legacyPngPresent = legacyPng.isFile() || plugin.getResource("skin.png") != null;
-        attempts.add(legacyPngPresent ? "legacy skin.png: present but unsigned; use skins/null.png with"
-                + " skins.mineskin.api-key, skins.proxy-url, or a signed skins.value + skins.signature"
+        attempts.add(legacyPngPresent ? "legacy skin.png: present but unsigned; use skins.png-path with"
+                + " MineSkin, skins.proxy-url, or a signed skins.value + skins.signature"
                 : "legacy skin.png: none");
         return new Resolution(null, legacyPngPresent ? "legacy skin.png (unsigned, not displayable) - default skin shown"
                 : "nothing resolved - default skin shown", attempts);
     }
 
-    private boolean commanderSharesNullSkin() {
-        PluginConfig config = plugin.pluginConfig();
+    private boolean commanderSharesNullSkin(PluginConfig config) {
         return config == null || config.commanderSkinName().equalsIgnoreCase(config.nullSkinName());
     }
 
     /**
-     * Signs the administrator-provided PNG and reuses a disk cache until its
-     * content changes. A null result means no custom file is present.
+     * Resolves the configured PNG only inside the dedicated skins directory.
+     * Absolute paths, traversal, backslashes and symbolic links are refused.
+     * A null result means the source is disabled.
      */
-    private synchronized SkinPayload signCustomPng(V3Settings v3) {
-        Path image = plugin.getDataFolder().toPath().resolve("skins").resolve("null.png");
-        if (!Files.exists(image)) {
+    public static Path resolveConfiguredPng(Path dataFolder, String configured) throws IOException {
+        String raw = configured == null ? "" : configured.trim();
+        if (raw.isEmpty()) {
             return null;
         }
-        if (!Files.isRegularFile(image)) {
-            return SkinPayload.failure("skins/null.png is not a regular file");
+        if (dataFolder == null || raw.length() > 512 || raw.indexOf('\\') >= 0
+                || raw.indexOf('\0') >= 0 || raw.matches(".*[\\r\\n\\t].*")) {
+            throw new IllegalArgumentException("PNG path must be a short relative path under skins/");
+        }
+        Path relative = Path.of(raw);
+        if (relative.isAbsolute()) {
+            throw new IllegalArgumentException("absolute PNG paths are not allowed");
+        }
+        for (Path part : relative) {
+            String name = part.toString();
+            if ("..".equals(name) || name.contains(":")) {
+                throw new IllegalArgumentException("PNG path traversal is not allowed");
+            }
+        }
+
+        Path root = dataFolder.toRealPath();
+        Path allowedRoot = root.resolve("skins").normalize();
+        if (Files.isSymbolicLink(allowedRoot)
+                || !Files.isDirectory(allowedRoot, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IllegalArgumentException("the skins directory must be a real directory");
+        }
+        Path image = root.resolve(relative).normalize();
+        if (!image.startsWith(allowedRoot) || image.equals(allowedRoot)) {
+            throw new IllegalArgumentException("PNG path must stay under skins/");
+        }
+
+        Path cursor = allowedRoot;
+        Path beneathSkins = allowedRoot.relativize(image);
+        int index = 0;
+        for (Path part : beneathSkins) {
+            cursor = cursor.resolve(part);
+            if (Files.isSymbolicLink(cursor)) {
+                throw new IllegalArgumentException("symbolic links are not allowed in the PNG path");
+            }
+            index++;
+            if (index < beneathSkins.getNameCount() && Files.exists(cursor, LinkOption.NOFOLLOW_LINKS)
+                    && !Files.isDirectory(cursor, LinkOption.NOFOLLOW_LINKS)) {
+                throw new IllegalArgumentException("PNG parent path is not a directory");
+            }
+        }
+        if (!Files.exists(image, LinkOption.NOFOLLOW_LINKS)) {
+            return image;
+        }
+        if (!Files.isRegularFile(image, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IllegalArgumentException("configured PNG is not a regular file");
+        }
+        Path realImage = image.toRealPath();
+        if (!realImage.startsWith(allowedRoot)) {
+            throw new IllegalArgumentException("configured PNG resolves outside skins/");
+        }
+        return realImage;
+    }
+
+    /**
+     * Signs the administrator-provided PNG and reuses a disk cache until its
+     * content changes. File bytes and remote responses are bounded.
+     */
+    private synchronized SkinPayload signCustomPng(V3Settings v3) {
+        final Path image;
+        try {
+            image = resolveConfiguredPng(plugin.getDataFolder().toPath(),
+                    v3 == null ? "skins/null.png" : v3.skinPngPath());
+        } catch (IOException | RuntimeException unsafePath) {
+            return SkinPayload.failure("configured PNG path is invalid or unsafe");
+        }
+        if (image == null || !Files.exists(image, LinkOption.NOFOLLOW_LINKS)) {
+            return null;
+        }
+        if (Files.isSymbolicLink(image) || !Files.isRegularFile(image, LinkOption.NOFOLLOW_LINKS)) {
+            return SkinPayload.failure("configured PNG is not a regular file");
         }
 
         final byte[] png;
         try {
             long size = Files.size(image);
-            if (size < 8 || size > MAX_CUSTOM_PNG_BYTES) {
-                return SkinPayload.failure("skins/null.png must be a PNG no larger than 2 MiB");
+            if (size < 24L || size > MAX_CUSTOM_PNG_BYTES) {
+                return SkinPayload.failure("configured PNG must be a skin-sized PNG no larger than 2 MiB");
             }
-            png = Files.readAllBytes(image);
+            try (InputStream in = Files.newInputStream(image, LinkOption.NOFOLLOW_LINKS)) {
+                png = readBounded(in, MAX_CUSTOM_PNG_BYTES);
+            }
+            if (png == null) {
+                return SkinPayload.failure("configured PNG exceeds the 2 MiB limit");
+            }
         } catch (IOException | SecurityException failure) {
-            return SkinPayload.failure("could not read skins/null.png (" + failure.getClass().getSimpleName() + ")");
+            return SkinPayload.failure("configured PNG could not be read ("
+                    + failure.getClass().getSimpleName() + ")");
         }
-        if (!hasPngSignature(png)) {
-            return SkinPayload.failure("skins/null.png does not have a PNG file signature");
+        if (!isSupportedSkinPng(png)) {
+            return SkinPayload.failure("configured PNG must be a 64x64 or 64x32 skin image");
         }
 
         final String digest;
@@ -285,7 +393,8 @@ public final class SkinChain implements Reloadable {
             return SkinPayload.failure("MineSkin API key is not available; set skins.mineskin.api-key"
                     + " (an env:NAME reference is supported)");
         }
-        if (apiKey.length() > 4096 || apiKey.indexOf('\r') >= 0 || apiKey.indexOf('\n') >= 0) {
+        if (apiKey.length() > 4096
+                || !redglitchx.nullarmy.core.agent.EndpointConfig.isValidApiKeyValue(apiKey)) {
             return SkinPayload.failure("MineSkin API key is not a valid HTTP header value");
         }
 
@@ -308,14 +417,26 @@ public final class SkinChain implements Reloadable {
                     .header("Content-Type", "multipart/form-data; boundary=" + boundary)
                     .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                     .build();
-            HttpResponse<String> response = mineSkinHttp.send(request,
-                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            String responseBody = response.body() == null ? "" : response.body();
-            if (responseBody.length() > MAX_MINESKIN_RESPONSE_CHARS) {
-                return SkinPayload.failure("MineSkin returned an oversized response");
-            }
+            HttpResponse<InputStream> response = mineSkinHttp.send(request,
+                    HttpResponse.BodyHandlers.ofInputStream());
+            InputStream responseStream = response.body();
             if (response.statusCode() != 200 && response.statusCode() != 202) {
+                if (responseStream != null) {
+                    try (InputStream ignored = responseStream) {
+                        // Do not read or retain provider error bodies; they may contain credentials.
+                    }
+                }
                 return SkinPayload.failure("MineSkin queue returned HTTP " + response.statusCode());
+            }
+            if (responseStream == null) {
+                return SkinPayload.failure("MineSkin queue returned an empty response");
+            }
+            String responseBody;
+            try (InputStream bodyStream = responseStream) {
+                responseBody = readBoundedUtf8(bodyStream, MAX_MINESKIN_RESPONSE_BYTES);
+            }
+            if (responseBody == null) {
+                return SkinPayload.failure("MineSkin returned an oversized response");
             }
 
             SkinPayload immediate = SkinPayload.parse(responseBody);
@@ -360,14 +481,26 @@ public final class SkinChain implements Reloadable {
                     .header("User-Agent", mineSkinUserAgent())
                     .header("Accept", "application/json")
                     .GET().build();
-            HttpResponse<String> response = mineSkinHttp.send(request,
-                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            String body = response.body() == null ? "" : response.body();
-            if (body.length() > MAX_MINESKIN_RESPONSE_CHARS) {
-                return SkinPayload.failure("MineSkin returned an oversized job response");
-            }
+            HttpResponse<InputStream> response = mineSkinHttp.send(request,
+                    HttpResponse.BodyHandlers.ofInputStream());
+            InputStream responseStream = response.body();
             if (response.statusCode() != 200) {
+                if (responseStream != null) {
+                    try (InputStream ignored = responseStream) {
+                        // Provider error bodies are intentionally suppressed.
+                    }
+                }
                 return SkinPayload.failure("MineSkin job status returned HTTP " + response.statusCode());
+            }
+            if (responseStream == null) {
+                return SkinPayload.failure("MineSkin job status returned an empty response");
+            }
+            String body;
+            try (InputStream bodyStream = responseStream) {
+                body = readBoundedUtf8(bodyStream, MAX_MINESKIN_RESPONSE_BYTES);
+            }
+            if (body == null) {
+                return SkinPayload.failure("MineSkin returned an oversized job response");
             }
             SkinPayload signed = SkinPayload.parse(body);
             if (signed.complete()) {
@@ -375,7 +508,7 @@ public final class SkinChain implements Reloadable {
             }
             String status = mineSkinJobStatus(body);
             if ("failed".equals(status)) {
-                return SkinPayload.failure("MineSkin could not sign skins/null.png");
+                return SkinPayload.failure("MineSkin could not sign the configured PNG");
             }
             if ("completed".equals(status)) {
                 return SkinPayload.failure("MineSkin completed without signed texture data");
@@ -429,6 +562,276 @@ public final class SkinChain implements Reloadable {
         return true;
     }
 
+    /**
+     * Validates a bounded PNG skin without relying on AWT/ImageIO. Checks chunk
+     * order and CRCs, supported skin dimensions, legal colour metadata, a full
+     * zlib raster with valid filter bytes, and a terminal IEND chunk.
+     */
+    public static boolean isSupportedSkinPng(byte[] bytes) {
+        if (!hasPngSignature(bytes) || bytes.length < 45 || bytes.length > MAX_CUSTOM_PNG_BYTES) {
+            return false;
+        }
+        int offset = 8;
+        int width = 0;
+        int height = 0;
+        int bitDepth = 0;
+        int colorType = -1;
+        int interlace = -1;
+        boolean ihdr = false;
+        boolean palette = false;
+        boolean idat = false;
+        boolean idatEnded = false;
+        boolean iend = false;
+        ByteArrayOutputStream compressed = new ByteArrayOutputStream(Math.min(bytes.length, 32 * 1024));
+        while (offset < bytes.length) {
+            if (bytes.length - offset < 12) {
+                return false;
+            }
+            int dataLength = readInt(bytes, offset);
+            if (dataLength < 0 || dataLength > bytes.length - offset - 12) {
+                return false;
+            }
+            int typeOffset = offset + 4;
+            if (!validChunkType(bytes, typeOffset)) {
+                return false;
+            }
+            String type = new String(bytes, typeOffset, 4, StandardCharsets.US_ASCII);
+            int dataOffset = offset + 8;
+            int crcOffset = dataOffset + dataLength;
+            CRC32 crc = new CRC32();
+            crc.update(bytes, typeOffset, dataLength + 4);
+            if ((int) crc.getValue() != readInt(bytes, crcOffset)) {
+                return false;
+            }
+
+            if (!ihdr && !"IHDR".equals(type)) {
+                return false;
+            }
+            if ("IHDR".equals(type)) {
+                if (ihdr || offset != 8 || dataLength != 13) {
+                    return false;
+                }
+                width = readInt(bytes, dataOffset);
+                height = readInt(bytes, dataOffset + 4);
+                bitDepth = bytes[dataOffset + 8] & 0xff;
+                colorType = bytes[dataOffset + 9] & 0xff;
+                interlace = bytes[dataOffset + 12] & 0xff;
+                if (width != 64 || (height != 64 && height != 32)
+                        || !validPngFormat(bitDepth, colorType)
+                        || bytes[dataOffset + 10] != 0 || bytes[dataOffset + 11] != 0
+                        || (interlace != 0 && interlace != 1)) {
+                    return false;
+                }
+                ihdr = true;
+            } else if ("PLTE".equals(type)) {
+                if (palette || idat || colorType == 0 || colorType == 4
+                        || dataLength < 3 || dataLength > 768 || dataLength % 3 != 0
+                        || colorType == 3 && dataLength / 3 > (1 << bitDepth)) {
+                    return false;
+                }
+                palette = true;
+            } else if ("IDAT".equals(type)) {
+                if (idatEnded || (colorType == 3 && !palette)) {
+                    return false;
+                }
+                idat = true;
+                compressed.write(bytes, dataOffset, dataLength);
+            } else if ("IEND".equals(type)) {
+                if (!idat || dataLength != 0 || colorType == 3 && !palette) {
+                    return false;
+                }
+                iend = true;
+                offset += dataLength + 12;
+                if (offset != bytes.length) {
+                    return false;
+                }
+                break;
+            } else {
+                if (idat) {
+                    idatEnded = true;
+                }
+                // PNG critical chunks have an uppercase first byte. Unknown
+                // critical chunks cannot be safely interpreted by this reader.
+                if (bytes[typeOffset] >= 'A' && bytes[typeOffset] <= 'Z') {
+                    return false;
+                }
+                if ("PLTE".equals(type)) {
+                    return false;
+                }
+            }
+            if (idat && !"IDAT".equals(type) && !"IEND".equals(type)) {
+                idatEnded = true;
+            }
+            offset += dataLength + 12;
+        }
+        if (!ihdr || !idat || !iend || compressed.size() == 0 || colorType == 3 && !palette) {
+            return false;
+        }
+        return validPngRaster(compressed.toByteArray(), width, height, bitDepth, colorType, interlace);
+    }
+
+    private static boolean validChunkType(byte[] bytes, int offset) {
+        for (int i = 0; i < 4; i++) {
+            int c = bytes[offset + i] & 0xff;
+            if (!(c >= 'A' && c <= 'Z') && !(c >= 'a' && c <= 'z')) {
+                return false;
+            }
+        }
+        // The third character's reserved bit must be zero (uppercase).
+        return bytes[offset + 2] >= 'A' && bytes[offset + 2] <= 'Z';
+    }
+
+    private static boolean validPngFormat(int bitDepth, int colorType) {
+        switch (colorType) {
+            case 0: return bitDepth == 1 || bitDepth == 2 || bitDepth == 4 || bitDepth == 8 || bitDepth == 16;
+            case 2: return bitDepth == 8 || bitDepth == 16;
+            case 3: return bitDepth == 1 || bitDepth == 2 || bitDepth == 4 || bitDepth == 8;
+            case 4: return bitDepth == 8 || bitDepth == 16;
+            case 6: return bitDepth == 8 || bitDepth == 16;
+            default: return false;
+        }
+    }
+
+    private static boolean validPngRaster(byte[] compressed, int width, int height,
+                                          int bitDepth, int colorType, int interlace) {
+        int channels;
+        switch (colorType) {
+            case 0: case 3: channels = 1; break;
+            case 2: channels = 3; break;
+            case 4: channels = 2; break;
+            case 6: channels = 4; break;
+            default: return false;
+        }
+        int bitsPerPixel = channels * bitDepth;
+        long expected = expectedRasterBytes(width, height, bitsPerPixel, interlace);
+        if (expected <= 0L || expected > 65_536L) {
+            return false;
+        }
+        byte[] raster = new byte[(int) expected + 1];
+        Inflater inflater = new Inflater();
+        try {
+            inflater.setInput(compressed);
+            int total = 0;
+            while (!inflater.finished() && total < raster.length) {
+                int count = inflater.inflate(raster, total, raster.length - total);
+                if (count == 0) {
+                    if (inflater.finished()) {
+                        break;
+                    }
+                    return false;
+                }
+                total += count;
+            }
+            if (!inflater.finished() || total != expected || inflater.getRemaining() != 0) {
+                return false;
+            }
+            return validFilterBytes(raster, total, width, height, bitsPerPixel, interlace);
+        } catch (DataFormatException invalidZlib) {
+            return false;
+        } finally {
+            inflater.end();
+        }
+    }
+
+    private static long expectedRasterBytes(int width, int height, int bitsPerPixel, int interlace) {
+        if (interlace == 0) {
+            long rowBytes = ((long) width * bitsPerPixel + 7L) / 8L;
+            return (rowBytes + 1L) * height;
+        }
+        int[] startX = {0, 4, 0, 2, 0, 1, 0};
+        int[] startY = {0, 0, 4, 0, 2, 0, 1};
+        int[] stepX = {8, 8, 4, 4, 2, 2, 1};
+        int[] stepY = {8, 8, 8, 4, 4, 2, 2};
+        long total = 0L;
+        for (int pass = 0; pass < 7; pass++) {
+            int passWidth = width <= startX[pass] ? 0
+                    : (width - startX[pass] + stepX[pass] - 1) / stepX[pass];
+            int passHeight = height <= startY[pass] ? 0
+                    : (height - startY[pass] + stepY[pass] - 1) / stepY[pass];
+            if (passWidth > 0 && passHeight > 0) {
+                long rowBytes = ((long) passWidth * bitsPerPixel + 7L) / 8L;
+                total += (rowBytes + 1L) * passHeight;
+            }
+        }
+        return total;
+    }
+
+    private static boolean validFilterBytes(byte[] raster, int rasterLength, int width, int height,
+                                            int bitsPerPixel, int interlace) {
+        int[] startX = {0, 4, 0, 2, 0, 1, 0};
+        int[] startY = {0, 0, 4, 0, 2, 0, 1};
+        int[] stepX = {8, 8, 4, 4, 2, 2, 1};
+        int[] stepY = {8, 8, 8, 4, 4, 2, 2};
+        int passes = interlace == 0 ? 1 : 7;
+        int offset = 0;
+        for (int pass = 0; pass < passes; pass++) {
+            int passWidth = interlace == 0 ? width : width <= startX[pass] ? 0
+                    : (width - startX[pass] + stepX[pass] - 1) / stepX[pass];
+            int passHeight = interlace == 0 ? height : height <= startY[pass] ? 0
+                    : (height - startY[pass] + stepY[pass] - 1) / stepY[pass];
+            if (passWidth == 0 || passHeight == 0) {
+                continue;
+            }
+            int rowBytes = (passWidth * bitsPerPixel + 7) / 8;
+            for (int row = 0; row < passHeight; row++) {
+                int filter = raster[offset] & 0xff;
+                if (filter > 4) {
+                    return false;
+                }
+                offset += rowBytes + 1;
+            }
+        }
+        return offset == rasterLength;
+    }
+
+    private static int readInt(byte[] bytes, int offset) {
+        return (bytes[offset] & 0xff) << 24 | (bytes[offset + 1] & 0xff) << 16
+                | (bytes[offset + 2] & 0xff) << 8 | (bytes[offset + 3] & 0xff);
+    }
+
+    /** Reads bounded UTF-8, returning null when the byte limit is exceeded. */
+    private static String readBoundedUtf8(InputStream in, int limit) throws IOException {
+        byte[] bytes = readBounded(in, limit);
+        return bytes == null ? null : new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    /** Reads at most {@code limit} bytes, returning null if one more byte exists. */
+    private static byte[] readBounded(InputStream in, int limit) throws IOException {
+        if (in == null || limit < 0) {
+            return null;
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream(Math.min(limit, 8192));
+        byte[] buffer = new byte[8192];
+        int total = 0;
+        while (true) {
+            int read = in.read(buffer);
+            if (read < 0) {
+                break;
+            }
+            if (read == 0) {
+                // InputStream implementations should make progress for a non-empty
+                // buffer, but a custom stream may return zero. Fall back to one byte
+                // so a broken response cannot spin the skin worker forever.
+                int single = in.read();
+                if (single < 0) {
+                    break;
+                }
+                if (total >= limit) {
+                    return null;
+                }
+                out.write(single);
+                total++;
+                continue;
+            }
+            if (read > limit - total) {
+                return null;
+            }
+            out.write(buffer, 0, read);
+            total += read;
+        }
+        return out.toByteArray();
+    }
+
     private static String sha256(byte[] bytes) throws NoSuchAlgorithmException {
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
         char[] hex = "0123456789abcdef".toCharArray();
@@ -444,14 +847,25 @@ public final class SkinChain implements Reloadable {
     private SkinPayload readMineSkinCache(String digest) {
         Path cache = mineSkinCachePath();
         try {
-            if (!Files.isRegularFile(cache) || Files.size(cache) > MAX_MINESKIN_RESPONSE_CHARS) {
+            Path directory = cache.getParent();
+            if (Files.isSymbolicLink(directory) || Files.isSymbolicLink(cache)
+                    || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)
+                    || !Files.isRegularFile(cache, LinkOption.NOFOLLOW_LINKS)
+                    || Files.size(cache) > MAX_MINESKIN_RESPONSE_BYTES) {
                 return null;
             }
-            List<String> lines = Files.readAllLines(cache, StandardCharsets.UTF_8);
-            if (lines.size() < 3 || !digest.equals(lines.get(0).trim())) {
+            final byte[] bytes;
+            try (InputStream in = Files.newInputStream(cache, LinkOption.NOFOLLOW_LINKS)) {
+                bytes = readBounded(in, MAX_MINESKIN_RESPONSE_BYTES);
+            }
+            if (bytes == null) {
                 return null;
             }
-            SkinPayload payload = SkinPayload.of(lines.get(1).trim(), lines.get(2).trim());
+            String[] lines = new String(bytes, StandardCharsets.UTF_8).split("\\R", -1);
+            if (lines.length < 3 || !digest.equals(lines[0].trim())) {
+                return null;
+            }
+            SkinPayload payload = SkinPayload.of(lines[1].trim(), lines[2].trim());
             return payload.complete() ? payload : null;
         } catch (IOException | SecurityException ignored) {
             return null;
@@ -460,22 +874,40 @@ public final class SkinChain implements Reloadable {
 
     private void writeMineSkinCache(String digest, SkinPayload payload) {
         Path cache = mineSkinCachePath();
-        Path temporary = cache.resolveSibling(cache.getFileName() + ".tmp");
+        Path directory = cache.getParent();
+        Path temporary = null;
         try {
-            Files.createDirectories(cache.getParent());
+            if (payload == null || !payload.complete() || digest == null || !digest.matches("[0-9a-f]{64}")) {
+                return;
+            }
+            if (Files.isSymbolicLink(directory)) {
+                return;
+            }
+            Files.createDirectories(directory);
+            if (Files.isSymbolicLink(directory) || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)
+                    || Files.isSymbolicLink(cache)) {
+                return;
+            }
+            // A unique, newly-created sibling avoids following a stale or
+            // attacker-planted fixed .tmp symlink from an earlier run.
+            temporary = Files.createTempFile(directory, "null-mineskin-", ".tmp");
             Files.write(temporary, List.of(digest, payload.value(), payload.signature()), StandardCharsets.UTF_8);
             try {
                 Files.move(temporary, cache, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             } catch (AtomicMoveNotSupportedException unsupported) {
                 Files.move(temporary, cache, StandardCopyOption.REPLACE_EXISTING);
             }
+            temporary = null;
         } catch (IOException | SecurityException failure) {
             plugin.getLogger().fine("[NullArmy] could not persist the MineSkin result ("
                     + failure.getClass().getSimpleName() + ")");
-            try {
-                Files.deleteIfExists(temporary);
-            } catch (IOException ignored) {
-                // The cache is only an optimization; a stale temp file is harmless.
+        } finally {
+            if (temporary != null) {
+                try {
+                    Files.deleteIfExists(temporary);
+                } catch (IOException ignored) {
+                    // The cache is only an optimization; a stale temp file is harmless.
+                }
             }
         }
     }
@@ -498,10 +930,10 @@ public final class SkinChain implements Reloadable {
 
     private static Map<String, Object> mineSkinJob(String body) {
         try {
-            if (body == null || body.length() > MAX_MINESKIN_RESPONSE_CHARS) {
+            if (body == null || body.length() > MAX_MINESKIN_RESPONSE_BYTES) {
                 return null;
             }
-            Map<String, Object> root = Json.asObject(Json.parse(body, MAX_MINESKIN_RESPONSE_CHARS));
+            Map<String, Object> root = Json.asObject(Json.parse(body, MAX_MINESKIN_RESPONSE_BYTES));
             Object job = root.get("job");
             if (job instanceof Map) {
                 @SuppressWarnings("unchecked")
@@ -514,49 +946,71 @@ public final class SkinChain implements Reloadable {
         return null;
     }
 
-    private String account(boolean forCommander) {
-        PluginConfig config = plugin.pluginConfig();
+    private String account(boolean forCommander, PluginConfig config) {
         if (config == null) {
-            return null;
+            return "";
         }
         try {
-            if (forCommander && plugin.commander() != null) {
-                String commanderSkin = plugin.commander().skinName();
-                if (commanderSkin != null && !commanderSkin.isEmpty()) {
-                    return commanderSkin;
-                }
-            }
-            return config.nullSkinName();
-        } catch (Throwable t) {
-            return null;
+            return forCommander ? config.commanderSkinName() : config.nullSkinName();
+        } catch (Throwable ignored) {
+            return "";
         }
     }
 
-    /** GET the proxy and read a texture out of whatever it returned. */
+    /** GET the configured proxy; never retain or report its response body on failure. */
     public SkinPayload fetchProxy(String url) {
+        return fetchProxy(url, -1L);
+    }
+
+    private SkinPayload fetchProxy(String url, long generation) {
+        String status;
         try {
             HttpRequest request = HttpRequest.newBuilder(URI.create(url))
                     .timeout(Duration.ofSeconds(8))
                     .header("Accept", "application/json, text/plain")
                     .GET().build();
-            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
-            String body = response.body() == null ? "" : response.body();
+            HttpResponse<InputStream> response = http.send(request, HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() / 100 != 2) {
-                lastProxyStatus = "HTTP " + response.statusCode() + ": " + SkinPayload.preview(body, 80);
-                plugin.getLogger().warning("[NullArmy] skins.proxy-url answered " + lastProxyStatus);
-                return SkinPayload.failure(lastProxyStatus);
+                try (InputStream ignored = response.body()) {
+                    // Do not parse, retain or log an error body; it may contain credentials.
+                }
+                status = "HTTP " + response.statusCode() + " (response body suppressed)";
+                setProxyStatus(generation, status);
+                plugin.getLogger().warning("[NullArmy] skins.proxy-url " + status);
+                return SkinPayload.failure("proxy returned HTTP " + response.statusCode());
             }
-            SkinPayload payload = SkinPayload.parse(body);
-            lastProxyStatus = "HTTP " + response.statusCode() + (payload.complete() ? " (texture read)"
-                    : ": " + payload.error() + " - body: " + SkinPayload.preview(body, 80));
+            final byte[] bytes;
+            try (InputStream body = response.body()) {
+                bytes = readBounded(body, MAX_PROXY_RESPONSE_BYTES);
+            }
+            if (bytes == null) {
+                status = "HTTP " + response.statusCode() + " (response exceeded the size limit)";
+                setProxyStatus(generation, status);
+                plugin.getLogger().warning("[NullArmy] skins.proxy-url " + status);
+                return SkinPayload.failure("proxy response exceeded the size limit");
+            }
+            SkinPayload payload = SkinPayload.parse(new String(bytes, StandardCharsets.UTF_8));
+            status = "HTTP " + response.statusCode() + (payload.complete()
+                    ? " (texture read)" : " (no usable signed texture)");
+            setProxyStatus(generation, status);
             if (!payload.complete()) {
-                plugin.getLogger().warning("[NullArmy] skins.proxy-url " + lastProxyStatus);
+                plugin.getLogger().warning("[NullArmy] skins.proxy-url " + status);
             }
             return payload;
-        } catch (Throwable t) {
-            lastProxyStatus = "request failed: " + Guard.describe(t);
-            plugin.getLogger().warning("[NullArmy] skins.proxy-url " + lastProxyStatus);
-            return SkinPayload.failure(lastProxyStatus);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            status = "request interrupted";
+        } catch (Throwable failure) {
+            status = "request failed (" + failure.getClass().getSimpleName() + ")";
+        }
+        setProxyStatus(generation, status);
+        plugin.getLogger().warning("[NullArmy] skins.proxy-url " + status);
+        return SkinPayload.failure(status);
+    }
+
+    private void setProxyStatus(long generation, String status) {
+        if (generation < 0L || generation == refreshGeneration.get()) {
+            lastProxyStatus = status == null ? "" : status;
         }
     }
 

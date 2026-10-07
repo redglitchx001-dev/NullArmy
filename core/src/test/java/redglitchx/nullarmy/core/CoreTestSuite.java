@@ -755,13 +755,20 @@ public final class CoreTestSuite {
         checkEquals("https://custom.example/v1/chat/completions",
                 endpoint("upper-scheme", "HTTPS://custom.example/v1", "m", "")
                         .chatCompletionsUri().toString(), "HTTP scheme matching is case-insensitive and normalized");
-        EndpointConfig secretUrl = endpoint("query-secret",
-                "https://user:password@custom.example/v1?token=not-for-logs", "m", "");
+        EndpointConfig secretUrl = endpoint("safe-test",
+                "https://user:password@custom.example/proxy/v1/accounts/route-secret?token=query-secret", "m", "");
         String safeDescription = secretUrl.describe();
-        check(safeDescription.contains("https://custom.example/v1?…"),
-                "endpoint diagnostics retain route but redact user-info/query values");
-        check(!safeDescription.contains("password") && !safeDescription.contains("not-for-logs"),
-                "endpoint diagnostic does not leak URL credentials");
+        check(safeDescription.contains("https://custom.example [path redacted] [query redacted]"),
+                "endpoint diagnostics retain the origin and redact the entire path/query");
+        check(!safeDescription.contains("password") && !safeDescription.contains("query-secret")
+                        && !safeDescription.contains("route-secret") && !safeDescription.contains("/proxy/v1"),
+                "endpoint diagnostic does not leak URL credentials or route tokens");
+        checkEquals("https://custom.example [path redacted] [query redacted]",
+                EndpointConfig.safeEndpointForDisplay(
+                        "https://user:pass@custom.example/v1/secret?api_key=credential#fragment"),
+                "the shared endpoint sanitizer removes user-info, path, query and fragment");
+        checkEquals("(invalid URL)", EndpointConfig.safeEndpointForDisplay("ftp://example.invalid/secret"),
+                "unsupported schemes are not presented as usable endpoints");
         checkEquals("https://custom.example/v1/chat/completions?token=not-for-logs",
                 secretUrl.chatCompletionsUri().toString(),
                 "URL user-info is never sent; credentials use the configured Authorization key instead");
@@ -799,6 +806,19 @@ public final class CoreTestSuite {
             // correct
         }
         try {
+            EndpointConfig.builder("bad", "http://custom.example:-2/v1", "m").build();
+            throw new AssertionError("expected invalid negative port to be rejected");
+        } catch (IllegalArgumentException expected) {
+            // correct
+        }
+        try {
+            EndpointConfig.builder("bad", "https://x/v1", "m").withApiKey("key\r\nAuthorization: forged")
+                    .build();
+            throw new AssertionError("expected header injection characters to be rejected");
+        } catch (IllegalArgumentException expected) {
+            // correct
+        }
+        try {
             EndpointConfig.builder("bad", "https://x/v1", "m").timeoutMillis(0L).build();
             throw new AssertionError("expected zero timeout to be rejected");
         } catch (IllegalArgumentException expected) {
@@ -818,7 +838,8 @@ public final class CoreTestSuite {
 
     /**
      * The api-key field accepts two forms: {@code env:NAME} (recommended) and
-     * a literal key. Neither may ever leak into describe().
+     * a literal key. Neither the full key nor any recognizable fragment may
+     * appear in describe().
      */
     private static void testApiKeyForms() {
         EndpointConfig envForm = endpoint("a", "https://x/v1", "m", "env:MY_VAR");
@@ -827,19 +848,21 @@ public final class CoreTestSuite {
         checkEquals("MY_VAR", envForm.apiKeyEnvName(), "env var name parsed");
         check(envForm.describe().contains("env:MY_VAR"), "describe shows the env form");
 
-        EndpointConfig inline = endpoint("b", "https://x/v1", "m", "sk-jeurjwiejbfbfEXAMPLE");
+        String secret = "sk-live-4d7d-secret-suffix";
+        EndpointConfig inline = endpoint("b", "https://x/v1", "m", secret);
         check(!inline.usesEnvVar(), "literal key is not an env var");
         check(inline.hasInlineKey(), "literal key flagged as inline");
-        checkEquals("sk-jeurjwiejbfbfEXAMPLE", inline.resolveApiKey(), "literal key resolves verbatim");
+        checkEquals(secret, inline.resolveApiKey(), "literal key resolves verbatim for the request");
 
-        // describe() must mask, never echo, an inline key.
+        // describe() must hide the complete key, not reveal a prefix or suffix.
         String desc = inline.describe();
-        check(!desc.contains("jeurjwiejbfbf"), "describe must never contain the key body");
-        check(desc.contains("inline("), "describe marks an inline key");
+        check(!desc.contains(secret) && !desc.contains("sk-live") && !desc.contains("suffix"),
+                "describe must not reveal any key fragment");
+        check(desc.contains("inline(hidden)"), "describe marks an inline key as hidden");
 
         checkEquals("*****", EndpointConfig.mask("abc"), "short keys fully masked");
         checkEquals("*****", EndpointConfig.mask(null), "null key fully masked");
-        checkEquals("sk-...LE", EndpointConfig.mask("sk-jeurjwiejbfbfEXAMPLE"), "mask shape");
+        checkEquals("*****", EndpointConfig.mask("sk-jeurjwiejbfbfEXAMPLE"), "long keys are fully masked too");
 
         EndpointConfig none = endpoint("c", "https://x/v1", "m", "");
         check(!none.usesEnvVar() && !none.hasInlineKey(), "empty key is neither form");
@@ -1022,8 +1045,14 @@ public final class CoreTestSuite {
                 "live selector refuses an unsupported teleport strategy");
         check(!PvpArsenal.usesMaceForAttack(PvpArsenal.Technique.DISENGAGE),
                 "fallback does not pretend a mace action happened");
-        check(!PvpArsenal.usesMaceForAttack(PvpArsenal.Technique.BREACH_SHIELD_BREAK),
-                "Breach does not pretend that a mace breaks a raised shield");
+        CombatSituation breach = CombatSituation.builder()
+                .hasMace(true).maceHasBreach(true).targetBlocking(true)
+                .distanceToTarget(2.4).targetHealth(20.0).build();
+        checkEquals(PvpArsenal.Technique.BREACH_SHIELD_BREAK,
+                PvpArsenal.selectSupportedMelee(breach),
+                "a Breach mace is selected against a blocking target");
+        check(PvpArsenal.usesMaceForAttack(PvpArsenal.Technique.BREACH_SHIELD_BREAK),
+                "live Breach tactic equips the real mace for a vanilla attack");
     }
 
     private static void testElytraRequiresElytra() {
@@ -1274,6 +1303,10 @@ public final class CoreTestSuite {
         checkEquals("ARROW", slots.get(9), "the one arrow Infinity needs is carried");
         checkEquals("TORCH", slots.get(16), "torches are carried");
         checkEquals("MACE", slots.get(17), "the shared kit carries a mace");
+        redglitchx.nullarmy.core.kit.DefaultKit.Item mace = kit.stream()
+                .filter(item -> item.slot() == 17).findFirst().orElseThrow();
+        checkEquals(Integer.valueOf(4), mace.enchants().get("breach"), "the default mace carries Breach IV");
+        checkEquals(Integer.valueOf(3), mace.enchants().get("wind_burst"), "the default mace carries Wind Burst III");
         checkEquals("TOTEM_OF_UNDYING", slots.get(18), "the shared kit carries Totems");
         checkEquals("WIND_CHARGE", slots.get(19), "the shared kit carries Wind Charges");
         checkEquals("FIREWORK_ROCKET", slots.get(20), "the shared kit carries fireworks");
@@ -1308,6 +1341,15 @@ public final class CoreTestSuite {
                         java.util.Collections.singletonList("junk"), null)
                         == redglitchx.nullarmy.core.kit.DefaultKit.DEFAULT,
                 "a broken config means the default kit");
+        java.util.List<String> duplicateErrors = new java.util.ArrayList<>();
+        java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> duplicates =
+                redglitchx.nullarmy.core.kit.DefaultKit.parse(
+                        java.util.Arrays.asList("0:STONE:1", "0:DIRT:1"), duplicateErrors);
+        checkEquals(1, duplicates.size(), "duplicate slots do not create two entries");
+        checkEquals("DIRT", duplicates.get(0).material(), "the documented last entry wins");
+        check(duplicateErrors.stream().anyMatch(problem -> problem.contains("slot 0")
+                        && problem.contains("last entry wins")),
+                "duplicate configured slots are diagnosed");
     }
 
     private static void testKitReapplyNoDuplicates() {
@@ -1646,6 +1688,21 @@ public final class CoreTestSuite {
                                 redglitchx.nullarmy.core.ai.SquadAction.Kind.HEAL, "", ""),
                         policyView(noAi)).allowed(),
                 "a model-backed action is refused when no endpoint is configured");
+        check(redglitchx.nullarmy.core.ai.ActionPolicy.checkLocal(
+                        redglitchx.nullarmy.core.ai.SquadAction.of(
+                                redglitchx.nullarmy.core.ai.SquadAction.Kind.HEAL, "", ""),
+                        policyView(noAi)).allowed(),
+                "an explicit local heal is allowed without an AI endpoint");
+        check(redglitchx.nullarmy.core.ai.ActionPolicy.checkLocal(
+                        redglitchx.nullarmy.core.ai.SquadAction.of(
+                                redglitchx.nullarmy.core.ai.SquadAction.Kind.ROLES, "", ""),
+                        policyView(noAi)).allowed(),
+                "an explicit local role assignment is allowed without an AI endpoint");
+        check(!redglitchx.nullarmy.core.ai.ActionPolicy.checkLocal(
+                        redglitchx.nullarmy.core.ai.SquadAction.of(
+                                redglitchx.nullarmy.core.ai.SquadAction.Kind.DISMISS, "", ""),
+                        policyView(noAi)).allowed(),
+                "the local fallback cannot dismiss a squad");
 
         // No permission: refused with the permission named.
         boolean[] noPerm = gates.clone();
@@ -1658,6 +1715,13 @@ public final class CoreTestSuite {
         check(!denied.allowed(), "a missing permission refuses the action");
         check(denied.reason().contains("nullarmy.follow"),
                 "the refusal names the permission that is missing");
+        redglitchx.nullarmy.core.ai.ActionPolicy.Decision localDenied =
+                redglitchx.nullarmy.core.ai.ActionPolicy.checkLocal(
+                        redglitchx.nullarmy.core.ai.SquadAction.of(
+                                redglitchx.nullarmy.core.ai.SquadAction.Kind.GUARD, "", ""),
+                        policyView(noPerm));
+        check(!localDenied.allowed() && localDenied.reason().contains("nullarmy.follow"),
+                "the local fallback still enforces the typed follow permission");
     }
 
     /** Builds a policy view from a fixed flag array. */
@@ -1836,6 +1900,27 @@ public final class CoreTestSuite {
                 redglitchx.nullarmy.core.kit.DefaultKit.resolveConfigured(editedV3, null, notes);
         checkEquals("DIAMOND_SWORD", keptV3.get(0).material(), "a previous-v3 owner's edit is respected");
         check(notes.isEmpty(), "a previous-v3 edit is not mistaken for the shipped list");
+
+        notes.clear();
+        java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> upgradedMace =
+                redglitchx.nullarmy.core.kit.DefaultKit.resolveConfigured(
+                        redglitchx.nullarmy.core.kit.DefaultKit.LEGACY_UNENCHANTED_MACE_LINES,
+                        null, notes);
+        check(upgradedMace == redglitchx.nullarmy.core.kit.DefaultKit.DEFAULT,
+                "the exact shipped plain-Mace kit receives the new Mace enchantments");
+        checkEquals(1, notes.size(), "the plain-Mace upgrade is announced");
+        java.util.List<String> editedMace = new java.util.ArrayList<>(
+                redglitchx.nullarmy.core.kit.DefaultKit.LEGACY_UNENCHANTED_MACE_LINES);
+        editedMace.set(0, "0:DIAMOND_SWORD:1");
+        notes.clear();
+        java.util.List<redglitchx.nullarmy.core.kit.DefaultKit.Item> keptMace =
+                redglitchx.nullarmy.core.kit.DefaultKit.resolveConfigured(editedMace, null, notes);
+        checkEquals("DIAMOND_SWORD", keptMace.get(0).material(),
+                "a customized kit matching the old layout is not migrated");
+        redglitchx.nullarmy.core.kit.DefaultKit.Item keptPlainMace = keptMace.stream()
+                .filter(item -> item.slot() == 17).findFirst().orElseThrow();
+        check(keptPlainMace.enchants().isEmpty(), "an owner's plain Mace remains exactly as configured");
+        check(notes.isEmpty(), "an edited plain-Mace kit receives no migration note");
     }
 
     private static void testFallbackPlanner() {
@@ -2029,20 +2114,25 @@ public final class CoreTestSuite {
     }
 
     private static void testYamlProblem() {
-        String source = "limits:\n  max-live-npcs: 64\n  summon-hard-cap: 24\n bad: [\nportals:\n";
+        String secret = "inline-api-token-should-never-be-shown";
+        String source = "limits:\n  max-live-npcs: 64\n  summon-hard-cap: 24\n  api-key: "
+                + secret + "\nportals:\n";
         String message = "while parsing a block mapping\n in 'reader', line 1, column 1:\n    limits:\n    ^\n"
                 + "expected <block end>, but found '<block mapping start>'\n in 'reader', line 4, column 2:\n"
-                + "     bad: [\n     ^\n";
+                + "     api-key: " + secret + "\n     ^\n";
         redglitchx.nullarmy.core.config.YamlProblem problem =
                 redglitchx.nullarmy.core.config.YamlProblem.locate("config.yml", message, source);
         checkEquals(4, problem.line(), "the last mark is the problem line");
         checkEquals(2, problem.column(), "the problem column");
-        check(problem.problem().contains("expected <block end>"), "the human part of the message is kept");
-        check(!problem.problem().contains("in 'reader'"), "the marks are not repeated in the summary");
+        checkEquals("invalid YAML syntax (source text hidden)", problem.problem(),
+                "parser excerpts are replaced with a credential-safe diagnostic");
         check(problem.headline().startsWith("config.yml line 4, column 2:"), "headline names file, line, column");
-        checkEquals(4, problem.snippet().size(), "three lines of context plus a caret line");
-        check(problem.snippet().get(1).contains("bad: ["), "the offending line is in the snippet");
+        checkEquals(4, problem.snippet().size(), "three masked context lines plus a caret line");
+        check(problem.snippet().get(1).contains("[content hidden]"), "the offending line is masked");
         checkEquals("     |  ^", problem.snippet().get(2), "the caret sits under the column");
+        String diagnostic = problem.headline() + problem.snippet();
+        check(!diagnostic.contains(secret), "configuration secrets never enter a YAML diagnostic");
+        check(!diagnostic.contains("api-key"), "YAML context is not echoed even when parser text contains it");
         redglitchx.nullarmy.core.config.YamlProblem none =
                 redglitchx.nullarmy.core.config.YamlProblem.locate("config.yml", "something odd", null);
         check(!none.hasPosition(), "a message without marks has no position");
@@ -2061,11 +2151,15 @@ public final class CoreTestSuite {
         check(redglitchx.nullarmy.core.skin.SkinPayload.parse(value + "\n" + sig).complete(), "two lines of base64");
         redglitchx.nullarmy.core.skin.SkinPayload unsigned = redglitchx.nullarmy.core.skin.SkinPayload.parse(value);
         check(!unsigned.complete() && unsigned.value().equals(value), "raw base64 is read but reported unsigned");
+        String diagnosticSecret = "proxy-response-secret-8472";
         redglitchx.nullarmy.core.skin.SkinPayload html =
-                redglitchx.nullarmy.core.skin.SkinPayload.parse("<html><body>502 Bad Gateway</body></html>");
-        check(html.error() != null && html.error().contains("502"), "an HTML error page is reported with a preview");
-        checkEquals(83, redglitchx.nullarmy.core.skin.SkinPayload.preview(new String(new char[200]).replace('\0', 'a'),
-                80).length(), "previews are cut at 80 characters");
+                redglitchx.nullarmy.core.skin.SkinPayload.parse("<html><body>502 " + diagnosticSecret + "</body></html>");
+        checkEquals("the response is neither JSON nor base64", html.error(),
+                "an HTML error response receives a generic diagnostic");
+        check(!html.error().contains(diagnosticSecret), "proxy response bodies never enter diagnostics");
+        redglitchx.nullarmy.core.skin.SkinPayload malformedJson =
+                redglitchx.nullarmy.core.skin.SkinPayload.parse("{broken: \"" + diagnosticSecret + "\"}");
+        check(!malformedJson.error().contains(diagnosticSecret), "JSON parser diagnostics do not echo the body");
     }
 
     private static void testBallistics() {

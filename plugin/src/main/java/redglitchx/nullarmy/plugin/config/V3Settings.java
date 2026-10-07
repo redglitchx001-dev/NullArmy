@@ -2,6 +2,7 @@ package redglitchx.nullarmy.plugin.config;
 
 import org.bukkit.configuration.file.FileConfiguration;
 
+import redglitchx.nullarmy.core.agent.EndpointConfig;
 import redglitchx.nullarmy.core.formation.FormationMatrix;
 import redglitchx.nullarmy.core.zone.SummonZone;
 import redglitchx.nullarmy.nms.BodySettings;
@@ -69,6 +70,7 @@ public final class V3Settings {
     private final String skinValue;
     private final String skinSignature;
     private final String skinProxyUrl;
+    private final String skinPngPath;
     /** Resolved MineSkin key; never include it in diagnostics or logs. */
     private final String skinMineSkinApiKey;
     private final boolean skinLiveReapply;
@@ -76,6 +78,7 @@ public final class V3Settings {
     // chat
     private final boolean commanderPublicReplies;
     private final boolean commanderNameTrigger;
+    private final boolean chatPluginPrefix;
     private final String mentionPrefix;
     private final boolean silenceUnits;
     private final List<String> protectedNames;
@@ -170,11 +173,13 @@ public final class V3Settings {
         this.skinValue = trimmed(config.getString("skins.value", ""));
         this.skinSignature = trimmed(config.getString("skins.signature", ""));
         this.skinProxyUrl = trimmed(config.getString("skins.proxy-url", ""));
+        this.skinPngPath = trimmed(config.getString("skins.png-path", "skins/null.png"));
         this.skinMineSkinApiKey = resolveSecret(config.getString("skins.mineskin.api-key", ""));
         this.skinLiveReapply = config.getBoolean("skins.live-reapply", true);
 
         this.commanderPublicReplies = config.getBoolean("chat.commander-public-replies", true);
         this.commanderNameTrigger = config.getBoolean("chat.commander-name-trigger", true);
+        this.chatPluginPrefix = config.getBoolean("chat.plugin-prefix", false);
         this.mentionPrefix = trimmed(config.getString("chat.mention-prefix", "@"));
         this.silenceUnits = config.getBoolean("chat.silence-units", true);
         this.protectedNames = readProtected(config);
@@ -238,7 +243,7 @@ public final class V3Settings {
                 continue;
             }
             if (!raw.startsWith("env:")) {
-                return new ResolvedBuilderKey(raw, "inline key set", "");
+                return checkedBuilderKey(raw, "inline key set");
             }
             String name = raw.substring(4).trim();
             if (!name.matches("[A-Za-z_][A-Za-z0-9_]*")) {
@@ -249,7 +254,7 @@ public final class V3Settings {
             }
             String value = environmentValue(name);
             if (!value.isEmpty()) {
-                return new ResolvedBuilderKey(value, "env:" + name + " resolved", "");
+                return checkedBuilderKey(value, "env:" + name + " resolved");
             }
             if (unresolved.isEmpty()) {
                 unresolved = "API-key environment variable '" + name + "' is missing or invalid";
@@ -259,12 +264,20 @@ public final class V3Settings {
         if (!fallback.isEmpty()) {
             String status = "env:" + AI_KEY_ENV + " resolved"
                     + (unresolved.isEmpty() ? "" : " (configured env key unavailable)");
-            return new ResolvedBuilderKey(fallback, status, "");
+            return checkedBuilderKey(fallback, status);
         }
         if (!unresolved.isEmpty()) {
             return new ResolvedBuilderKey("", unresolved, unresolved);
         }
         return new ResolvedBuilderKey("", "no key configured (env:" + AI_KEY_ENV + " is optional)", "");
+    }
+
+    private static ResolvedBuilderKey checkedBuilderKey(String value, String status) {
+        if (!EndpointConfig.isValidApiKeyValue(value)) {
+            return new ResolvedBuilderKey("", "API-key value invalid (hidden)",
+                    "API-key is too long or contains invalid HTTP header characters");
+        }
+        return new ResolvedBuilderKey(value, status, "");
     }
 
     private static String environmentValue(String name) {
@@ -383,12 +396,15 @@ public final class V3Settings {
     public String skinValue() { return skinValue; }
     public String skinSignature() { return skinSignature; }
     public String skinProxyUrl() { return skinProxyUrl; }
+    /** Relative PNG path; SkinChain restricts it to plugins/NullArmy/skins/. */
+    public String skinPngPath() { return skinPngPath; }
     /** Resolved key for MineSkin uploads; never log or expose this value. */
     public String skinMineSkinApiKey() { return skinMineSkinApiKey; }
     public boolean skinLiveReapply() { return skinLiveReapply; }
 
     public boolean commanderPublicReplies() { return commanderPublicReplies; }
     public boolean commanderNameTrigger() { return commanderNameTrigger; }
+    public boolean chatPluginPrefix() { return chatPluginPrefix; }
     public String mentionPrefix() { return mentionPrefix.isEmpty() ? "@" : mentionPrefix; }
     public boolean silenceUnits() { return silenceUnits; }
     public List<String> protectedNames() { return protectedNames; }
@@ -471,6 +487,7 @@ public final class V3Settings {
         out.put("skins.value", skinValue.isEmpty() ? "(unset)" : "(set, " + skinValue.length() + " chars)");
         out.put("skins.signature", skinSignature.isEmpty() ? "(unset)" : "(set)");
         out.put("skins.proxy-url", skinProxyUrl.isEmpty() ? "(unset)" : safeEndpointForDisplay(skinProxyUrl));
+        out.put("skins.png-path", skinPngPath.isEmpty() ? "(disabled)" : skinPngPath);
         out.put("skins.mineskin.api-key", skinMineSkinApiKey.isEmpty() ? "(unset)" : "(set, hidden)");
         out.put("ai.builder.enabled", builderEnabled);
         out.put("ai.builder.endpoint", builderEndpoint.isEmpty()
@@ -489,6 +506,7 @@ public final class V3Settings {
         out.put("combat.attack-threshold", attackThreshold);
         out.put("combat.aim-skill", aimSkill);
         out.put("chat.mention-prefix", mentionPrefix.isEmpty() ? "@" : mentionPrefix);
+        out.put("chat.plugin-prefix", chatPluginPrefix);
         out.put("chat.silence-units", silenceUnits);
         out.put("policy.protected", protectedNames.isEmpty() ? "(none)" : String.join(", ", protectedNames));
         out.put("drops.enabled", dropsEnabled);

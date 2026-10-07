@@ -12,6 +12,7 @@ import org.bukkit.entity.WindCharge;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
+import org.bukkit.potion.PotionEffectType;
 import org.bukkit.util.Vector;
 
 import redglitchx.nullarmy.core.combat.AimSkill;
@@ -250,8 +251,11 @@ public final class CombatBrain {
                 intent.dx = -dx / Math.max(1.0e-6, dist);
                 intent.dz = -dz / Math.max(1.0e-6, dist);
                 intent.gait = NullBody.GAIT_SPRINT;
-            } else {
-                brain.maybeEat(body, mind, handle);
+            } else if (!brain.maybeEat(body, mind, handle) && mind.combatPursuit
+                    && drinkCombatPotion(body, mind, handle, distance3d, now)) {
+                cancelBow(mind, handle);
+                brain.raiseShield(handle, mind, false);
+                lastNote = "drinking a combat potion while retreating";
             }
             return intent;
         }
@@ -267,6 +271,15 @@ public final class CombatBrain {
             lastNote = "holding position: no attack order";
             brain.raiseShield(handle, mind, false);
             cancelBow(mind, handle);
+            return intent;
+        }
+
+        // Tactical drinks are only used for an explicit pursuit, at a safe
+        // stand-off distance, and never while the Commander is already gliding.
+        if (mind.combatPursuit && drinkCombatPotion(body, mind, handle, distance3d, now)) {
+            cancelBow(mind, handle);
+            brain.raiseShield(handle, mind, false);
+            lastNote = "drinking a tactical combat potion";
             return intent;
         }
 
@@ -400,6 +413,56 @@ public final class CombatBrain {
             brain.raiseShield(handle, mind, v3.shields() && cooldown < gate && !mind.critJumped);
         }
         return intent;
+    }
+
+    /**
+     * Uses only a potion that fits the current explicit fight state: Regeneration
+     * below 70% health, Strength otherwise. Drinking is never attempted in melee,
+     * while airborne, while gliding, or without an explicit pursuit order.
+     */
+    private boolean drinkCombatPotion(NullBody body, Mind mind, Player handle, double distance, long now) {
+        if (body == null || mind == null || handle == null || !mind.combatPursuit || mind.eating()
+                || now < mind.nextEatAllowed || !handle.isOnGround() || handle.isGliding()
+                || flight.active(mind.id) || distance < 5.0D || distance > 18.0D) {
+            return false;
+        }
+        double max = NullBrain.maxHealth(handle);
+        if (max <= 0.0D) {
+            return false;
+        }
+        PlayerInventory inventory = handle.getInventory();
+        boolean needsRegeneration = body.health() < max * 0.70D;
+        int slot;
+        if (needsRegeneration) {
+            if (handle.hasPotionEffect(PotionEffectType.REGENERATION)) {
+                return false;
+            }
+            slot = KitItems.potionSlot(inventory, "strong_regeneration", "regeneration");
+            if (slot < 0) {
+                return false;
+            }
+        } else {
+            if (handle.hasPotionEffect(PotionEffectType.STRENGTH)) {
+                return false;
+            }
+            slot = KitItems.potionSlot(inventory, "strong_strength", "strength");
+            if (slot < 0) {
+                return false;
+            }
+        }
+        if (handle.isHandRaised()) {
+            handle.clearActiveItem();
+        }
+        mind.slotBeforeEating = inventory.getHeldItemSlot();
+        if (Bodies.hold(handle, slot) < 0) {
+            mind.slotBeforeEating = -1;
+            return false;
+        }
+        handle.startUsingItem(EquipmentSlot.HAND);
+        mind.eatingUntil = now + 45L;
+        mind.nextEatAllowed = now + 120L;
+        mind.shieldUp = false;
+        return true;
     }
 
     /**

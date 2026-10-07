@@ -1,5 +1,4 @@
 package redglitchx.nullarmy.plugin.config;
-import redglitchx.nullarmy.plugin.skin.SkinResolver;
 
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
@@ -38,6 +37,9 @@ import java.util.logging.Logger;
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
  */
 public final class PluginConfig {
+
+    /** Legacy bundled account skin; never selected implicitly, even if migration fails. */
+    private static final String LEGACY_DEFAULT_SKIN_OWNER = "uH3WR2v0ti0uTHJ";
 
     /** Kept so the skin getters can read their keys lazily, at call time. */
     private final FileConfiguration config;
@@ -306,7 +308,7 @@ public final class PluginConfig {
 
         // ------------------------------------------------------------------ ai
         this.aiSquadCoordination = config.getBoolean("ai.squad-coordination", true);
-        this.aiAutoCoordinate = config.getBoolean("ai.auto-coordinate", true);
+        this.aiAutoCoordinate = config.getBoolean("ai.auto-coordinate", false);
         this.aiCoordinateIntervalTicks = clamp(config.getInt("ai.coordinate-interval-ticks", 400),
                 100, 72_000, "ai.coordinate-interval-ticks", logger);
 
@@ -798,31 +800,30 @@ public final class PluginConfig {
     }
 
     /**
-     * The Minecraft username whose skin ordinary Nulls wear.
+     * The optional Minecraft account whose signed skin ordinary Nulls wear.
      *
-     * <p>Config wins over nothing; the system property wins over config, so an
-     * owner can override without editing a file. Falls back to
-     * {@link SkinResolver#DEFAULT_SKIN_OWNER}.</p>
+     * <p>The system property wins over config. An empty value deliberately means
+     * "no account skin"; no third-party/player account is selected by default.
+     * The retired bundled account default is suppressed from config at runtime
+     * as a safety fallback if file migration is unavailable. The key is
+     * {@code skins.nulls}, because an unquoted YAML {@code null} is a null value
+     * rather than the word.</p>
      */
     public String nullSkinName() {
         String override = System.getProperty("nullarmy.skin.null");
         if (override != null && !override.trim().isEmpty()) {
             return override.trim();
         }
-        // The key is "nulls": an unquoted YAML `null` is the null value, not
-        // the word, so using it as a key would silently resolve to nothing.
         String configured = config.getString("skins.nulls", "");
-        if (configured != null && !configured.trim().isEmpty()) {
-            return configured.trim();
-        }
-        return SkinResolver.DEFAULT_SKIN_OWNER;
+        configured = configured == null ? "" : configured.trim();
+        return LEGACY_DEFAULT_SKIN_OWNER.equalsIgnoreCase(configured) ? "" : configured;
     }
 
     /**
-     * The Minecraft username whose skin the Commander wears.
+     * The optional Minecraft account whose skin the Commander wears.
      *
-     * <p>Defaults to whatever {@link #nullSkinName()} is, so setting one
-     * value changes every NPC, but the two can be set independently.</p>
+     * <p>Defaults to the explicitly configured ordinary-Null account; both may
+     * be empty, and the two can be set independently.</p>
      */
     public String commanderSkinName() {
         String override = System.getProperty("nullarmy.skin.commander");

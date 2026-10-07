@@ -46,11 +46,10 @@ import java.util.UUID;
  * </ol>
  *
  * <h2>No model, still useful</h2>
- * With no endpoint configured, {@link #deterministicStep(UUID)} runs the same
- * allowlist through local rules: heal whoever is hurt, give an idle squad
- * something to hold, assign roles that were never stored. Everything destructive
- * is out of that path by construction. {@code /null ai} says plainly that
- * model-backed coordination needs an endpoint.
+ * With no endpoint configured, an explicit {@code /null coordinate} order may
+ * run {@link #deterministicStep(UUID)} through local rules. Periodic ticks never
+ * perform group actions: healing, role changes and objectives only happen after
+ * a player order. Everything destructive remains outside the local path.
  *
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
  */
@@ -60,13 +59,24 @@ public final class SquadCoordinator implements Reloadable {
 
     /** How long a snapshot may be before it is clipped, in characters. */
     private static final int SNAPSHOT_LIMIT = 2400;
+    /** A destructive model proposal cannot remain executable indefinitely. */
+    private static final long CONFIRMATION_TTL_TICKS = 20L * 30L;
+
+    private static final class PendingConfirmation {
+        private final SquadAction action;
+        private final long expiresAtTick;
+
+        PendingConfirmation(SquadAction action, long expiresAtTick) {
+            this.action = action;
+            this.expiresAtTick = expiresAtTick;
+        }
+    }
 
     private final NullArmyPlugin plugin;
-    private final Map<UUID, SquadAction> awaitingConfirmation = new LinkedHashMap<>();
+    private final Map<UUID, PendingConfirmation> awaitingConfirmation = new LinkedHashMap<>();
     private final List<String> recentDecisions = new ArrayList<>();
 
     private PluginConfig config;
-    private long lastAutoTick = -1L;
 
     public SquadCoordinator(NullArmyPlugin plugin, PluginConfig config) {
         this.plugin = plugin;
@@ -252,10 +262,11 @@ public final class SquadCoordinator implements Reloadable {
             return "refused: " + decision.reason();
         }
         if (decision.needsConfirmation()) {
-            awaitingConfirmation.put(owner, action);
+            long expiresAt = plugin.currentTick() + CONFIRMATION_TTL_TICKS;
+            awaitingConfirmation.put(owner, new PendingConfirmation(action, expiresAt));
             remember("held for confirmation: " + action.kind().key());
-            return action.kind().key() + " needs your confirmation: run /null confirm to execute it,"
-                    + " or /null confirm no to drop it.";
+            return action.kind().key() + " needs your confirmation within 30 seconds: run /null confirm"
+                    + " to execute it, or /null confirm no to drop it.";
         }
         return run(owner, action);
     }
@@ -319,20 +330,52 @@ public final class SquadCoordinator implements Reloadable {
 
     /** Executes a held action after the owner said yes. */
     public String confirm(UUID owner, boolean yes) {
-        SquadAction action = awaitingConfirmation.remove(owner);
-        if (action == null) {
+        PendingConfirmation pending = awaitingConfirmation.remove(owner);
+        if (pending == null) {
             return "nothing was waiting for your confirmation.";
         }
+        if (plugin.currentTick() >= pending.expiresAtTick) {
+            remember("confirmation expired: " + pending.action.kind().key());
+            return "that confirmation expired. Nothing ran; ask the Commander again if you still want it.";
+        }
+        SquadAction action = pending.action;
         if (!yes) {
             remember("owner dropped " + action.kind().key());
             return "dropped " + action.kind().key() + ". Nothing ran.";
         }
+        // A confirmation is not a permission or policy snapshot. The owner may
+        // have lost a permission, a config gate may have changed, or shutdown
+        // may have started while the action was waiting, so run every live gate
+        // again immediately before dispatching the typed command.
+        ActionPolicy.Decision decision = ActionPolicy.check(action, view(owner));
+        if (!decision.allowed()) {
+            remember("confirmation refused " + action.kind().key() + ": " + decision.reason());
+            return "refused: " + decision.reason() + ". Nothing ran.";
+        }
         return run(owner, action);
     }
 
-    /** True when an action is waiting for this owner's yes. */
+    /** True while an unexpired action is waiting for this owner's yes. */
     public boolean hasPendingConfirmation(UUID owner) {
-        return owner != null && awaitingConfirmation.containsKey(owner);
+        if (owner == null) {
+            return false;
+        }
+        PendingConfirmation pending = awaitingConfirmation.get(owner);
+        if (pending == null) {
+            return false;
+        }
+        if (plugin.currentTick() >= pending.expiresAtTick) {
+            awaitingConfirmation.remove(owner, pending);
+            return false;
+        }
+        return true;
+    }
+
+    /** Drops any outstanding proposal when its owner leaves the server. */
+    public void clearPendingConfirmation(UUID owner) {
+        if (owner != null) {
+            awaitingConfirmation.remove(owner);
+        }
     }
 
     // ------------------------------------------------------- deterministic local
@@ -366,19 +409,32 @@ public final class SquadCoordinator implements Reloadable {
             }
         }
         if (hurt > 0) {
-            return execute(owner, SquadAction.of(SquadAction.Kind.HEAL, "",
+            return executeLocal(owner, SquadAction.of(SquadAction.Kind.HEAL, "",
                     hurt + " Null(s) are hurt"));
         }
         SquadManager.Squad squad = plugin.squads().find(owner);
         if (squad != null && squad.roles().isEmpty()) {
-            return execute(owner, SquadAction.of(SquadAction.Kind.ROLES, "",
+            return executeLocal(owner, SquadAction.of(SquadAction.Kind.ROLES, "",
                     "no roles are stored for this squad"));
         }
         if (squad != null && squad.objective() == SquadManager.Objective.NONE) {
-            return execute(owner, SquadAction.of(SquadAction.Kind.GUARD, "",
+            return executeLocal(owner, SquadAction.of(SquadAction.Kind.GUARD, "",
                     "the squad is idle, so it holds position"));
         }
-        return execute(owner, SquadAction.of(SquadAction.Kind.REPORT, "", "nothing needs changing"));
+        return executeLocal(owner, SquadAction.of(SquadAction.Kind.REPORT, "", "nothing needs changing"));
+    }
+
+    /** Executes the narrow local allowlist; only explicit owner-order callers may reach it. */
+    private String executeLocal(UUID owner, SquadAction action) {
+        if (owner == null || action == null) {
+            return "nothing to do";
+        }
+        ActionPolicy.Decision decision = ActionPolicy.checkLocal(action, view(owner));
+        if (!decision.allowed()) {
+            remember("refused local " + action.kind().key() + ": " + decision.reason());
+            return "refused: " + decision.reason();
+        }
+        return run(owner, action);
     }
 
     // ------------------------------------------------------------------- the model
@@ -412,69 +468,76 @@ public final class SquadCoordinator implements Reloadable {
                     @Override
                     public void ok(String text) {
                         SquadAction action = SquadAction.parse(text);
-                        String result = executeOnMainThread(owner, action);
-                        if (onDone != null) {
-                            onDone.accept(result);
-                        }
+                        executeOnMainThread(owner, action, result -> {
+                            if (onDone != null) {
+                                onDone.accept(result);
+                            }
+                        });
                     }
 
                     @Override
                     public void failed(String reason) {
-                        String fallback = executeOnMainThread(owner,
-                                SquadAction.refuse("the model could not answer: " + reason));
-                        if (onDone != null) {
-                            onDone.accept("The model did not answer (" + reason + "). "
-                                    + (fallback == null ? "" : fallback));
-                        }
+                        executeOnMainThread(owner, SquadAction.refuse("the model could not answer"), ignored -> {
+                            remember("model failed");
+                            if (onDone != null) {
+                                onDone.accept("The model did not answer (" + reason + "). No action ran.");
+                            }
+                        });
                     }
                 });
     }
 
-    /** Runs an action on the server thread and waits for nothing. */
-    private String executeOnMainThread(UUID owner, SquadAction action) {
-        final String[] out = new String[1];
-        try {
-            Bukkit.getScheduler().runTask(plugin, () -> out[0] = execute(owner, action));
-        } catch (Throwable t) {
-            out[0] = execute(owner, action);
+    /** Executes on the server thread and delivers the result only after it exists. */
+    private void executeOnMainThread(UUID owner, SquadAction action,
+                                    java.util.function.Consumer<String> onDone) {
+        Runnable task = () -> {
+            final String result;
+            try {
+                result = execute(owner, action);
+            } catch (Throwable failure) {
+                plugin.getLogger().warning("[NullArmy] coordination action failed ("
+                        + Guard.describe(failure) + ")");
+                if (onDone != null) {
+                    onDone.accept("coordination action failed; nothing further was run");
+                }
+                return;
+            }
+            if (onDone != null) {
+                onDone.accept(result);
+            }
+        };
+        if (Bukkit.isPrimaryThread()) {
+            task.run();
+            return;
         }
-        return out[0] == null ? "" : out[0];
+        try {
+            Bukkit.getScheduler().runTask(plugin, task);
+        } catch (Throwable schedulingFailure) {
+            // The callback often sends a Bukkit chat message: never run it on
+            // this asynchronous model thread as a fallback.
+            plugin.getLogger().warning("[NullArmy] could not schedule a coordination action on the server thread ("
+                    + schedulingFailure.getClass().getSimpleName() + "); nothing ran.");
+        }
     }
 
     // ------------------------------------------------------------------ automatic
 
-    /** Per-tick hook for optional automatic local coordination. */
+    /**
+     * Compatibility tick hook. Group actions are intentionally never automated:
+     * healing, role changes and objectives only happen after an explicit owner
+     * order, even if an older config still has {@code ai.auto-coordinate: true}.
+     */
     public void tick(long tickCounter) {
-        PluginConfig current = config;
-        if (current == null || !current.aiSquadCoordination() || !current.aiAutoCoordinate()) {
-            return;
-        }
-        int interval = current.aiCoordinateIntervalTicks();
-        if (lastAutoTick >= 0 && tickCounter - lastAutoTick < interval) {
-            return;
-        }
-        lastAutoTick = tickCounter;
-        if (plugin.shutdown() != null && plugin.shutdown().isRunning()) {
-            return;
-        }
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (player == null || !player.hasPermission("nullarmy.admin")) {
-                continue;
-            }
-            UUID owner = player.getUniqueId();
-            if (plugin.squads() == null || plugin.squads().membersOf(owner).isEmpty()) {
-                continue;
-            }
-            Guard.attempt(plugin.getLogger(), "automatic squad coordination", () -> {
-                String result = deterministicStep(owner);
-                if (result != null && !result.startsWith("refused") && !result.contains("status")
-                        && plugin.chatGate() != null) {
-                    // Chat silence: an unprompted coordination step is an event.
-                    plugin.chatGate().eventRaw("Commander coordinated " + player.getName() + "'s squad: " + result);
+        // Confirmation cleanup is bounded and runs once a second; stale proposals
+        // cannot stay resident just because their owner never types /null confirm.
+        if (tickCounter % 20L == 0L) {
+            awaitingConfirmation.entrySet().removeIf(entry -> {
+                if (tickCounter >= entry.getValue().expiresAtTick) {
+                    remember("confirmation expired: " + entry.getValue().action.kind().key());
+                    return true;
                 }
+                return false;
             });
-            // One owner per interval: coordination is a nudge, not a broadcast.
-            return;
         }
     }
 

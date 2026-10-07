@@ -69,7 +69,7 @@ public final class ChatBrain {
         public String content() { return content; }
     }
 
-    /** Result callback. Exactly one method is called once; callbacks run on the server thread while it is available. */
+    /** At most one result method is called; callbacks use the server thread while it is available. */
     public interface Reply {
         void ok(String text);
         void failed(String reason);
@@ -213,8 +213,8 @@ public final class ChatBrain {
      *
      * <p>Returns immediately. For a non-null callback, exactly one result is
      * delivered on the main thread whenever the server is available. If the
-     * plugin is already shutting down and the scheduler rejects tasks, the
-     * callback is completed inline rather than being lost.</p>
+     * plugin has stopped or main-thread scheduling is rejected, the callback is
+     * dropped rather than touching Bukkit from the HTTP worker thread.</p>
      *
      * @param persona  the system prompt describing who is speaking
      * @param history  previous turns, oldest first (trimmed by the caller)
@@ -241,7 +241,8 @@ public final class ChatBrain {
             // unregistered or leave the player waiting for local fallback.
             tryEndpoint(chain, 0, persona, history, userText, once, new ArrayList<>());
         } catch (Throwable t) {
-            plugin.getLogger().warning("[NullArmy] chat request failed to start: " + Guard.describe(t));
+            plugin.getLogger().warning("[NullArmy] chat request failed to start ("
+                    + t.getClass().getSimpleName() + ")");
             once.failed("the AI request could not be started");
         }
     }
@@ -257,7 +258,7 @@ public final class ChatBrain {
         EndpointConfig endpoint = chain.get(index);
         String body = requestBody(endpoint, persona, history, userText);
         if (body == null) {
-            failures.add(endpoint.id() + ": request could not be built");
+            failures.add(safeEndpointId(endpoint.id()) + ": request could not be built");
             tryEndpoint(chain, index + 1, persona, history, userText, reply, failures);
             return;
         }
@@ -271,7 +272,7 @@ public final class ChatBrain {
         try {
             RateLimiter endpointLimiter = endpointBudget(endpoint).limiter;
             if (!endpointLimiter.tryAcquire()) {
-                failures.add(endpoint.id() + ": calls-per-minute limit reached");
+                failures.add(safeEndpointId(endpoint.id()) + ": calls-per-minute limit reached");
                 fallbackToNext(chain, index, persona, history, userText, reply, failures);
                 return;
             }
@@ -283,7 +284,7 @@ public final class ChatBrain {
         } catch (Throwable t) {
             // Includes malformed custom URLs and local setup failures. Never log
             // the raw URL: it may contain credentials in a query string.
-            failures.add(endpoint.id() + ": invalid request configuration");
+            failures.add(safeEndpointId(endpoint.id()) + ": invalid request configuration");
             fallbackToNext(chain, index, persona, history, userText, reply, failures);
         }
     }
@@ -297,7 +298,7 @@ public final class ChatBrain {
                 Throwable root = rootCause(error);
                 if (root instanceof ResponseTooLargeException) {
                     ResponseTooLargeException tooLarge = (ResponseTooLargeException) root;
-                    failures.add(endpoint.id() + ": response exceeded max-json-bytes ("
+                    failures.add(safeEndpointId(endpoint.id()) + ": response exceeded max-json-bytes ("
                             + tooLarge.maxBytes + ")");
                     fallbackToNext(chain, index, persona, history, userText, reply, failures);
                     return;
@@ -307,12 +308,13 @@ public final class ChatBrain {
                             persona, history, userText, reply, failures), retriesUsed + 1);
                     return;
                 }
-                failures.add(endpoint.id() + ": request failed (" + root.getClass().getSimpleName() + ")");
+                failures.add(safeEndpointId(endpoint.id()) + ": request failed ("
+                        + root.getClass().getSimpleName() + ")");
                 fallbackToNext(chain, index, persona, history, userText, reply, failures);
                 return;
             }
             if (response == null) {
-                failures.add(endpoint.id() + ": empty HTTP response");
+                failures.add(safeEndpointId(endpoint.id()) + ": empty HTTP response");
                 fallbackToNext(chain, index, persona, history, userText, reply, failures);
                 return;
             }
@@ -323,21 +325,21 @@ public final class ChatBrain {
                             persona, history, userText, reply, failures), retriesUsed + 1);
                     return;
                 }
-                failures.add(endpoint.id() + ": HTTP " + status);
+                failures.add(safeEndpointId(endpoint.id()) + ": HTTP " + status);
                 fallbackToNext(chain, index, persona, history, userText, reply, failures);
                 return;
             }
             String text = extract(response.body());
             if (text == null || text.trim().isEmpty()) {
-                failures.add(endpoint.id() + ": response did not contain chat text");
+                failures.add(safeEndpointId(endpoint.id()) + ": response did not contain chat text");
                 fallbackToNext(chain, index, persona, history, userText, reply, failures);
                 return;
             }
             reply.ok(clean(text));
         } catch (Throwable t) {
-            plugin.getLogger().fine("[NullArmy] AI response processing failed for " + endpoint.id()
-                    + ": " + Guard.describe(t));
-            failures.add(endpoint.id() + ": response could not be processed");
+            plugin.getLogger().fine("[NullArmy] AI response processing failed for "
+                    + safeEndpointId(endpoint.id()) + " (" + t.getClass().getSimpleName() + ")");
+            failures.add(safeEndpointId(endpoint.id()) + ": response could not be processed");
             fallbackToNext(chain, index, persona, history, userText, reply, failures);
         }
     }
@@ -348,8 +350,8 @@ public final class ChatBrain {
         try {
             tryEndpoint(chain, index + 1, persona, history, userText, reply, failures);
         } catch (Throwable t) {
-            plugin.getLogger().warning("[NullArmy] could not continue the AI endpoint fallback chain: "
-                    + Guard.describe(t));
+            plugin.getLogger().warning("[NullArmy] could not continue the AI endpoint fallback chain ("
+                    + t.getClass().getSimpleName() + ")");
             fail(reply, "the configured AI endpoint chain could not be started");
         }
     }
@@ -368,14 +370,28 @@ public final class ChatBrain {
         if (uri == null || body == null) {
             throw new IllegalArgumentException("request URI and body must not be null");
         }
+        String scheme = uri.getScheme();
+        int port = uri.getPort();
+        if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))
+                || uri.getHost() == null || uri.getHost().isEmpty() || uri.getUserInfo() != null
+                || port < -1 || port == 0 || port > 65_535) {
+            throw new IllegalArgumentException("request URI must be an absolute credential-free HTTP URL");
+        }
+        if (body.length() > MAX_PROMPT_CHARS * 4) {
+            throw new IllegalArgumentException("request body exceeds the prompt size limit");
+        }
+        String key = apiKey == null ? "" : apiKey.trim();
+        if (!EndpointConfig.isValidApiKeyValue(key)) {
+            throw new IllegalArgumentException("API key is too long or contains invalid HTTP header characters");
+        }
         HttpRequest.Builder request = HttpRequest.newBuilder()
                 .uri(uri)
                 .timeout(Duration.ofMillis(Math.max(1L, Math.min(120_000L, timeoutMillis))))
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
-        if (apiKey != null && !apiKey.trim().isEmpty()) {
-            request.header("Authorization", "Bearer " + apiKey.trim());
+        if (!key.isEmpty()) {
+            request.header("Authorization", "Bearer " + key);
         }
         return request.build();
     }
@@ -388,6 +404,20 @@ public final class ChatBrain {
 
     private static int retryLimit(EndpointConfig endpoint) {
         return Math.min(MAX_ENDPOINT_RETRIES, Math.max(0, endpoint.maxRetries()));
+    }
+
+    /** Bounds and strips control/format codes from config-provided endpoint IDs in output. */
+    private static String safeEndpointId(String id) {
+        if (id == null || id.isEmpty()) {
+            return "endpoint";
+        }
+        StringBuilder clean = new StringBuilder(Math.min(80, id.length()));
+        for (int i = 0; i < id.length() && clean.length() < 80; i++) {
+            char c = id.charAt(i);
+            clean.append(c >= 0x20 && c != 0x7f && c != '\u00a7' ? c : ' ');
+        }
+        String label = clean.toString().trim();
+        return id.length() > clean.length() ? label + "…" : (label.isEmpty() ? "endpoint" : label);
     }
 
     private static boolean retryableStatus(int status) {
@@ -473,20 +503,34 @@ public final class ChatBrain {
         reply.failed(reason);
     }
 
-    /** Hops to the server thread; falls back to the caller when the server is gone. */
+    /** Hops to the server thread; never runs a Bukkit callback on an HTTP worker as fallback. */
     private void onMainThread(Runnable task) {
-        try {
-            if (plugin.isEnabled()) {
-                Bukkit.getScheduler().runTask(plugin, task);
-                return;
+        Runnable guarded = () -> {
+            try {
+                task.run();
+            } catch (Throwable t) {
+                plugin.getLogger().warning("[NullArmy] chat callback failed: " + Guard.describe(t));
             }
-        } catch (Throwable ignored) {
-            // Shutting down: run inline below.
+        };
+        boolean mainThread;
+        try {
+            mainThread = Bukkit.isPrimaryThread();
+        } catch (Throwable unavailable) {
+            mainThread = false;
+        }
+        if (mainThread) {
+            guarded.run();
+            return;
+        }
+        if (!plugin.isEnabled()) {
+            plugin.getLogger().fine("[NullArmy] chat callback was dropped after plugin shutdown.");
+            return;
         }
         try {
-            task.run();
-        } catch (Throwable t) {
-            plugin.getLogger().warning("[NullArmy] chat callback failed: " + Guard.describe(t));
+            Bukkit.getScheduler().runTask(plugin, guarded);
+        } catch (Throwable schedulingFailure) {
+            plugin.getLogger().fine("[NullArmy] chat callback was dropped because main-thread scheduling failed ("
+                    + schedulingFailure.getClass().getSimpleName() + ").");
         }
     }
 
@@ -518,7 +562,8 @@ public final class ChatBrain {
             }
             return json;
         } catch (Throwable t) {
-            plugin.getLogger().warning("[NullArmy] could not build the AI request: " + Guard.describe(t));
+            plugin.getLogger().warning("[NullArmy] could not build the AI request ("
+                    + t.getClass().getSimpleName() + ")");
             return null;
         }
     }
