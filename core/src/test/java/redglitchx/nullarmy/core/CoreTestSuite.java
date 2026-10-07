@@ -769,9 +769,9 @@ public final class CoreTestSuite {
                 "the shared endpoint sanitizer removes user-info, path, query and fragment");
         checkEquals("(invalid URL)", EndpointConfig.safeEndpointForDisplay("ftp://example.invalid/secret"),
                 "unsupported schemes are not presented as usable endpoints");
-        checkEquals("https://custom.example/v1/chat/completions?token=not-for-logs",
+        checkEquals("https://custom.example/proxy/v1/accounts/route-secret/chat/completions?token=query-secret",
                 secretUrl.chatCompletionsUri().toString(),
-                "URL user-info is never sent; credentials use the configured Authorization key instead");
+                "URL user-info is stripped while the configured endpoint path and query are preserved for routing");
         checkEquals("http://[::1]:1234/v1/chat/completions",
                 EndpointConfig.chatCompletionsUri("http://[::1]:1234/v1").toString(),
                 "IPv6 endpoint authorities remain valid");
