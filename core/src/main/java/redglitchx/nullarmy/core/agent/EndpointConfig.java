@@ -393,7 +393,7 @@ public final class EndpointConfig {
                 throw new IllegalArgumentException("endpoint must be an absolute http:// or https:// URL on endpoint '"
                         + safeLabel(id) + "'", invalidUrl);
             }
-            if (apiKeyRaw != null && !apiKeyRaw.isEmpty() && !usesEnvVar()
+            if (apiKeyRaw != null && !apiKeyRaw.isEmpty() && !apiKeyRaw.startsWith(ENV_PREFIX)
                     && !isValidApiKeyValue(apiKeyRaw)) {
                 throw new IllegalArgumentException("api-key is too long or contains invalid HTTP header characters"
                         + " on endpoint '" + safeLabel(id) + "'");
