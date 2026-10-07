@@ -727,6 +727,13 @@ final class SelfTestV3 {
         writePngInt(png, (int) crc.getValue());
     }
 
+    private static void writePngInt(byte[] out, int offset, int value) {
+        out[offset] = (byte) (value >>> 24);
+        out[offset + 1] = (byte) (value >>> 16);
+        out[offset + 2] = (byte) (value >>> 8);
+        out[offset + 3] = (byte) value;
+    }
+
     private static void writePngInt(ByteArrayOutputStream out, int value) {
         out.write(value >>> 24 & 0xff);
         out.write(value >>> 16 & 0xff);
