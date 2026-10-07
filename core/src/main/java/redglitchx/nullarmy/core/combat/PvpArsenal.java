@@ -218,6 +218,7 @@ public final class PvpArsenal {
             case COMBO_DOUBLE_SMASH:
             case WIND_BURST_RECOVERY:
             case DENSITY_BURST:
+            case BREACH_SHIELD_BREAK:
             case HOTBAR_SWAP_SMASH:
             case ELYTRA_DIVE_SMASH:
                 return true;

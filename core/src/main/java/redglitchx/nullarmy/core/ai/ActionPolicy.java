@@ -57,26 +57,16 @@ public final class ActionPolicy {
     }
 
     /**
-     * Decides whether an action may run.
+     * Decides whether a model-proposed action may run.
      *
      * @return a decision that always carries the real reason
      */
     public static Decision check(SquadAction action, View view) {
-        if (action == null || view == null) {
-            return deny("nothing to check");
-        }
-        if (view.pluginStopping()) {
-            return deny("the plugin is shutting down");
-        }
-        if (view.shutdownRunning()) {
-            return deny("a Totem Of Null shutdown is running; no Null may be created or ordered");
-        }
-        if (action.isRefusal()) {
-            return deny(action.reason().isEmpty() ? "the model declined" : action.reason());
+        Decision common = commonGate(action, view);
+        if (common != null) {
+            return common;
         }
         if (!view.aiUsable() && action.kind() != SquadAction.Kind.REPORT) {
-            // The deterministic fallback may still report; it must not pretend a
-            // model asked for anything.
             return deny("no AI endpoint is configured, so only the local report runs");
         }
         if (!view.hasSquad() && action.kind() != SquadAction.Kind.REPORT) {
@@ -142,6 +132,51 @@ public final class ActionPolicy {
             default:
                 return deny("that action is not allowlisted");
         }
+    }
+
+    /**
+     * Decides whether a locally selected action may run after an explicit owner
+     * order. This path deliberately has no model requirement, but its allowlist
+     * is narrower than {@link #check(SquadAction, View)}: only the reversible
+     * report, heal, roles and guard actions used by the deterministic fallback
+     * can pass. Callers must not use this for model output or periodic ticks.
+     */
+    public static Decision checkLocal(SquadAction action, View view) {
+        Decision common = commonGate(action, view);
+        if (common != null) {
+            return common;
+        }
+        if (!view.hasSquad() && action.kind() != SquadAction.Kind.REPORT) {
+            return deny("there is no squad to coordinate");
+        }
+        switch (action.kind()) {
+            case REPORT:
+                return allow();
+            case HEAL:
+                return permission("nullarmy.admin", view);
+            case ROLES:
+            case GUARD:
+                return permission("nullarmy.follow", view);
+            default:
+                return deny("that action is not available to the local coordinator");
+        }
+    }
+
+    /** Shared lifecycle and refusal checks; null means the action may continue. */
+    private static Decision commonGate(SquadAction action, View view) {
+        if (action == null || view == null) {
+            return deny("nothing to check");
+        }
+        if (view.pluginStopping()) {
+            return deny("the plugin is shutting down");
+        }
+        if (view.shutdownRunning()) {
+            return deny("a Totem Of Null shutdown is running; no Null may be created or ordered");
+        }
+        if (action.isRefusal()) {
+            return deny(action.reason().isEmpty() ? "the model declined" : action.reason());
+        }
+        return null;
     }
 
     private static boolean isFormation(String value) {

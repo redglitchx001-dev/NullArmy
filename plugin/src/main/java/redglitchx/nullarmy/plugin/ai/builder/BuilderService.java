@@ -225,7 +225,7 @@ public final class BuilderService implements Reloadable {
         long defaultTimeout = v3 == null ? 20000L : v3.builderTimeoutMs();
         if (spec.isEmpty()) {
             return new Endpoint("", v3 == null ? "" : v3.builderModel(),
-                    v3 == null ? "" : v3.builderApiKey(), "", 8192, defaultTimeout, "");
+                    "", "", 8192, defaultTimeout, "");
         }
         if (spec.regionMatches(true, 0, "id:", 0, 3)) {
             String id = spec.substring(3).trim();
@@ -257,7 +257,7 @@ public final class BuilderService implements Reloadable {
         try {
             redglitchx.nullarmy.core.agent.EndpointConfig.chatCompletionsUri(spec);
         } catch (IllegalArgumentException invalidUrl) {
-            return new Endpoint("", model, key, "", maxBytes, defaultTimeout,
+            return new Endpoint("", model, "", "", maxBytes, defaultTimeout,
                     "invalid HTTP URL; use an absolute http:// or https:// endpoint");
         }
         String keyProblem = v3 == null ? "" : v3.builderApiKeyProblem();
@@ -300,7 +300,8 @@ public final class BuilderService implements Reloadable {
 
     /**
      * P-07: {@code /null ai test [id]} - one real HTTP call, and the honest
-     * answer printed: the HTTP status and the model that answered.
+     * answer printed: the HTTP status and the configured model. Response bodies
+     * are never inspected for diagnostic text, so a provider cannot echo a key.
      */
     public void testEndpoint(String id, Consumer<String> report) {
         if (report == null) {
@@ -310,10 +311,10 @@ public final class BuilderService implements Reloadable {
         if (!endpoint.usable()) {
             String problem = endpoint.problem();
             if (!problem.isEmpty()) {
-                report.accept("Endpoint '" + (endpoint.id().isEmpty() ? "custom" : safeLabel(endpoint.id()))
+                reportEndpointTest(report, "Endpoint '" + (endpoint.id().isEmpty() ? "custom" : safeLabel(endpoint.id()))
                         + "' cannot be tested: " + problem + ".");
             } else {
-                report.accept(id == null || id.isEmpty()
+                reportEndpointTest(report, id == null || id.isEmpty()
                         ? "No endpoint is configured: set ai.builder.endpoint to a base URL or id:<name>."
                         : "No endpoint with the id '" + safeLabel(id) + "' is configured.");
             }
@@ -323,7 +324,7 @@ public final class BuilderService implements Reloadable {
         try {
             requestUri = redglitchx.nullarmy.core.agent.EndpointConfig.chatCompletionsUri(endpoint.url());
         } catch (IllegalArgumentException invalid) {
-            report.accept("endpoint '" + (endpoint.id().isEmpty() ? "custom" : safeLabel(endpoint.id()))
+            reportEndpointTest(report, "endpoint '" + (endpoint.id().isEmpty() ? "custom" : safeLabel(endpoint.id()))
                     + "' has an invalid HTTP URL; check ai.endpoints in config.yml");
             return;
         }
@@ -359,15 +360,17 @@ public final class BuilderService implements Reloadable {
                         } else if (response == null) {
                             line = "endpoint " + url + " -> no HTTP response";
                         } else {
-                            String model = safeModel(contentModel(response.body()));
+                            // Response bodies are untrusted and may echo request headers or
+                            // credentials. Diagnostics only show the configured model.
+                            String model = safeModel(endpoint.model());
                             line = "endpoint " + url + " -> HTTP " + response.statusCode()
-                                    + ", model " + (model.isEmpty() ? "(none reported)" : model)
+                                    + ", configured model " + (model.isEmpty() ? "(default)" : model)
                                     + " in " + millis + "ms";
                         }
                         reportEndpointTest(report, line);
                     });
         } catch (Throwable t) {
-            report.accept("endpoint " + (endpoint.id().isEmpty() ? "custom" : safeLabel(endpoint.id()))
+            reportEndpointTest(report, "endpoint " + (endpoint.id().isEmpty() ? "custom" : safeLabel(endpoint.id()))
                     + " -> the request could not be sent (" + t.getClass().getSimpleName() + ")");
         }
     }
@@ -375,14 +378,26 @@ public final class BuilderService implements Reloadable {
     private void reportEndpointTest(Consumer<String> report, String line) {
         Runnable task = () -> Guard.attempt(plugin.getLogger(),
                 "reporting an endpoint test", () -> report.accept(line));
+        boolean mainThread;
         try {
-            if (plugin.isEnabled()) {
-                Bukkit.getScheduler().runTask(plugin, task);
-            } else {
-                task.run();
-            }
-        } catch (Throwable schedulingFailure) {
+            mainThread = Bukkit.isPrimaryThread();
+        } catch (Throwable unavailable) {
+            mainThread = false;
+        }
+        if (mainThread) {
             task.run();
+            return;
+        }
+        if (!plugin.isEnabled()) {
+            plugin.getLogger().fine("[NullArmy] endpoint-test result was dropped after plugin shutdown.");
+            return;
+        }
+        try {
+            Bukkit.getScheduler().runTask(plugin, task);
+        } catch (Throwable schedulingFailure) {
+            // The callback may send a Bukkit message; never run it inline on the HTTP thread.
+            plugin.getLogger().fine("[NullArmy] endpoint-test result was dropped because main-thread"
+                    + " scheduling failed (" + schedulingFailure.getClass().getSimpleName() + ").");
         }
     }
 
@@ -490,42 +505,9 @@ public final class BuilderService implements Reloadable {
         return out.toString();
     }
 
-    /** Hides user-info and query values; custom endpoint URLs may contain secrets. */
+    /** Hides user-info, all path segments, query values and fragments in diagnostics. */
     private static String safeEndpoint(String raw) {
-        try {
-            java.net.URI uri = java.net.URI.create(raw);
-            String host = uri.getHost();
-            if (host == null) {
-                return "(invalid URL)";
-            }
-            if (host.indexOf(':') >= 0 && !host.startsWith("[")) {
-                host = "[" + host + "]";
-            }
-            StringBuilder out = new StringBuilder(uri.getScheme()).append("://").append(host);
-            if (uri.getPort() >= 0) {
-                out.append(':').append(uri.getPort());
-            }
-            if (uri.getRawPath() != null) {
-                out.append(uri.getRawPath());
-            }
-            if (uri.getRawQuery() != null) {
-                out.append("?…");
-            }
-            return out.toString();
-        } catch (Throwable ignored) {
-            return "(invalid URL)";
-        }
-    }
-
-    /** The model name an OpenAI-style reply reports, or empty. */
-    private static String contentModel(String body) {
-        try {
-            Map<String, Object> root = Json.asObject(Json.parse(body, 1024 * 1024));
-            Object model = root.get("model");
-            return model instanceof String ? (String) model : "";
-        } catch (Throwable ignored) {
-            return "";
-        }
+        return redglitchx.nullarmy.core.agent.EndpointConfig.safeEndpointForDisplay(raw);
     }
 
     /**

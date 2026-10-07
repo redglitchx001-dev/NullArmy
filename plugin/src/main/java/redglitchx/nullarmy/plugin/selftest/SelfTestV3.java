@@ -13,6 +13,7 @@ import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeInstance;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.command.CommandSender;
@@ -29,6 +30,7 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.PotionMeta;
 import org.bukkit.permissions.PermissionAttachment;
+import org.bukkit.potion.PotionType;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.Vector;
 
@@ -36,6 +38,7 @@ import redglitchx.nullarmy.core.combat.Ballistics;
 import redglitchx.nullarmy.core.construct.BuildStep;
 import redglitchx.nullarmy.core.config.YamlProblem;
 import redglitchx.nullarmy.core.flock.Separation;
+import redglitchx.nullarmy.core.kit.DefaultKit;
 import redglitchx.nullarmy.core.math.Vec3d;
 import redglitchx.nullarmy.core.portal.PortalFrame;
 import redglitchx.nullarmy.core.skin.SkinPayload;
@@ -50,17 +53,24 @@ import redglitchx.nullarmy.plugin.body.Mind;
 import redglitchx.nullarmy.plugin.body.NullLifecycleListener;
 import redglitchx.nullarmy.plugin.config.ConfigLoader;
 import redglitchx.nullarmy.plugin.config.ConfigMigration;
+import redglitchx.nullarmy.plugin.config.PluginConfig;
+import redglitchx.nullarmy.plugin.config.V3Settings;
 import redglitchx.nullarmy.plugin.item.SummonItems;
 import redglitchx.nullarmy.plugin.kit.KitItems;
 import redglitchx.nullarmy.plugin.loadout.LoadoutService;
 import redglitchx.nullarmy.plugin.portal.PortalBuilder;
+import redglitchx.nullarmy.plugin.skin.MojangSkinClient;
 import redglitchx.nullarmy.plugin.skin.SkinChain;
 import redglitchx.nullarmy.plugin.skin.SkinData;
+import redglitchx.nullarmy.plugin.skin.SkinResolver;
 import redglitchx.nullarmy.plugin.util.Guard;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashSet;
@@ -308,6 +318,8 @@ final class SelfTestV3 {
         steps.add(this::b09PlainCheck);
         steps.add(this::b10b11);
         steps.add(this::b10Reload);
+        steps.add(this::b10RuntimeReload); // S-128: changed runtime values enter effect and are restored
+        steps.add(this::b10CommanderNameWriter); // S-129: rename edits one safe scalar without reserializing YAML
         steps.add(this::b12Speed);
         steps.add(() -> t.gap(40));
         steps.add(() -> t.gap(40));
@@ -383,23 +395,32 @@ final class SelfTestV3 {
         File bad = new File(folder, "selftest-broken.yml");
         File badCopy = new File(folder, "selftest-migrate-broken.yml");
         File old = new File(folder, "selftest-migrate-old.yml");
+        File edited = new File(folder, "selftest-migrate-edited.yml");
         try {
             Files.write(bad.toPath(), broken.getBytes(StandardCharsets.UTF_8));
             Files.write(badCopy.toPath(), broken.getBytes(StandardCharsets.UTF_8));
-            Files.write(old.toPath(), "limits:\n  max-live-npcs: 32\n".getBytes(StandardCharsets.UTF_8));
+            Files.write(old.toPath(), ("limits:\n  max-live-npcs: 32\n"
+                    + "skins:\n  nulls: \"uH3WR2v0ti0uTHJ\" # old shipped default\n"
+                    + "ai:\n  auto-coordinate: true # old shipped default\n")
+                    .getBytes(StandardCharsets.UTF_8));
+            Files.write(edited.toPath(), ("skins:\n  nulls: OwnerSkin\n  commander: CommanderSkin\n"
+                    + "ai:\n  auto-coordinate: false\n")
+                    .getBytes(StandardCharsets.UTF_8));
             Object before = plugin.pluginConfig();
             YamlProblem problem = plugin.tryConfigFile(bad);
             check("S-30", "B-02", problem != null && problem.line() > 0 && problem.column() > 0,
                     "a malformed config is reported with line and column ("
                             + (problem == null ? "no problem reported" : problem.headline()) + ")");
-            boolean quoted = false;
+            boolean masked = false;
+            boolean caret = false;
             if (problem != null) {
                 for (String line : problem.snippet()) {
-                    quoted |= line.contains("lifetime-s") || line.contains("enabled");
+                    masked |= line.contains("[content hidden]");
+                    caret |= line.contains("^");
                 }
             }
-            check("S-31", "B-02", quoted && problem.snippet().size() >= 2,
-                    "the report quotes the offending lines with a caret");
+            check("S-31", "B-02", problem != null && masked && caret && problem.snippet().size() >= 2,
+                    "the report shows masked source context and a caret without exposing config values");
             check("S-32", "B-02", plugin.pluginConfig() == before, "the last good configuration stays in use");
             long length = badCopy.length();
             ConfigMigration.Report refused = ConfigMigration.migrateFile(plugin, badCopy, "selftest");
@@ -407,9 +428,30 @@ final class SelfTestV3 {
                     "migration never appends to a file that does not parse");
             ConfigMigration.Report report = ConfigMigration.migrateFile(plugin, old, "selftest");
             ConfigLoader.Outcome after = ConfigLoader.load(plugin, old);
+            YamlConfiguration unmigratedLegacyRuntimeConfig = new YamlConfiguration();
+            unmigratedLegacyRuntimeConfig.set("skins.nulls", "uH3WR2v0ti0uTHJ");
+            boolean legacySkinSuppressedAtRuntime = new PluginConfig(unmigratedLegacyRuntimeConfig)
+                    .nullSkinName().isEmpty();
+            boolean legacyDefaultsMigrated = report.migratedKeys().contains("skins.nulls")
+                    && report.migratedKeys().contains("ai.auto-coordinate")
+                    && "".equals(after.config().getString("skins.nulls"))
+                    && !after.config().getBoolean("ai.auto-coordinate")
+                    && legacySkinSuppressedAtRuntime;
             check("S-34", "B-02", report.error() == null && report.changed() && after.ok()
-                            && after.config().getInt("limits.max-live-npcs") == 32 && after.config().isSet("combat.crits"),
-                    "migration appends missing keys, keeps the owner's value and the result re-parses");
+                            && after.config().getInt("limits.max-live-npcs") == 32 && after.config().isSet("combat.crits")
+                            && legacyDefaultsMigrated,
+                    "migration appends missing keys, removes only the two obsolete shipped defaults, keeps owner caps"
+                            + ", suppresses the retired account skin if migration is unavailable, and re-parses ("
+                            + report.migratedKeys() + ")");
+            ConfigMigration.Report editedReport = ConfigMigration.migrateFile(plugin, edited, "selftest");
+            ConfigLoader.Outcome editedAfter = ConfigLoader.load(plugin, edited);
+            boolean customValuesKept = editedAfter.ok()
+                    && "OwnerSkin".equals(editedAfter.config().getString("skins.nulls"))
+                    && "CommanderSkin".equals(editedAfter.config().getString("skins.commander"))
+                    && !editedAfter.config().getBoolean("ai.auto-coordinate")
+                    && editedReport.migratedKeys().isEmpty();
+            check("S-119", "B-02", editedReport.error() == null && customValuesKept,
+                    "legacy migration leaves owner-edited skin accounts and coordination values untouched");
             List<String> lines = new ArrayList<>();
             CommandSender capture = Bukkit.createCommandSender(component ->
                     lines.add(PlainTextComponentSerializer.plainText().serialize(component.asComponent())));
@@ -419,10 +461,22 @@ final class SelfTestV3 {
                 shown |= line.contains("combat.crits = true");
             }
             check("S-35", "B-02", shown, "/null config prints effective values (" + lines.size() + " lines)");
+            YamlConfiguration plainChat = new YamlConfiguration();
+            YamlConfiguration taggedChat = new YamlConfiguration();
+            taggedChat.set("chat.plugin-prefix", true);
+            boolean prefixOptIn = !new V3Settings(plainChat, plugin.getLogger()).chatPluginPrefix()
+                    && new V3Settings(taggedChat, plugin.getLogger()).chatPluginPrefix();
+            String publicLine = PlainTextComponentSerializer.plainText().serialize(
+                    redglitchx.nullarmy.plugin.chat.ChatGate.formatCommanderLine("NullCommander", "ready"));
+            boolean commanderLineUntagged = "NullCommander: ready".equals(publicLine)
+                    && !publicLine.startsWith("[NullArmy]");
+            check("S-127", "B-02", prefixOptIn && commanderLineUntagged,
+                    "Commander public chat is Name: message with no plugin prefix by default, while private-prefix"
+                            + " output remains an explicit config opt-in");
         } catch (Throwable e) {
             check("S-30", "B-02", false, "the malformed-config check threw " + Guard.describe(e));
         } finally {
-            for (File f : new File[] {bad, badCopy, old}) {
+            for (File f : new File[] {bad, badCopy, old, edited}) {
                 f.delete();
             }
             File[] backups = folder.listFiles((dir, name) -> name.startsWith("selftest-") && name.contains(".bak-"));
@@ -438,16 +492,39 @@ final class SelfTestV3 {
 
     private void b03() {
         try {
+            boolean validSkinAccounts = SkinResolver.isValidAccountName("OwnerSkin")
+                    && SkinResolver.isValidAccountName("abcdefghijklmnop")
+                    && !SkinResolver.isValidAccountName("../config.yml")
+                    && !SkinResolver.isValidAccountName("name with spaces")
+                    && !SkinResolver.isValidAccountName("abcdefghijklmnopq");
+            check("S-122", "B-03", validSkinAccounts,
+                    "configured Mojang names allow only 1-16 ASCII letters, digits and underscores before cache paths are built");
+            MojangSkinClient mojang = new MojangSkinClient();
+            boolean invalidFetchRejected = mojang.fetch("../config.yml") == null
+                    && mojang.fetch("name?query") == null;
+            boolean syncLookupRejected = false;
+            try {
+                mojang.fetch("OwnerSkin");
+            } catch (IllegalStateException expected) {
+                syncLookupRejected = true;
+            }
+            check("S-124", "B-03", invalidFetchRejected && syncLookupRejected,
+                    "MojangSkinClient.fetch rejects invalid names before network access and refuses valid lookups"
+                            + " on the server thread");
             stub = StubHttp.start();
+            String proxySecret = "proxy-response-secret-6c21";
             stub.respond("/skin", 200, "{\"value\":\"" + VALUE_A + "\",\"signature\":\"" + SIG_A + "\"}");
-            stub.respond("/bad", 502, "<html><body>Bad Gateway from the upstream skin service</body></html>");
+            stub.respond("/bad", 502, "<html><body>Bad Gateway " + proxySecret + "</body></html>");
             SkinPayload good = plugin.skinChain().fetchProxy(stub.url("/skin"));
             check("S-36", "B-03", good.complete() && SIG_A.equals(good.signature()) && VALUE_A.equals(good.value()),
                     "skins.proxy-url JSON is read (value + signature)");
             SkinPayload bad = plugin.skinChain().fetchProxy(stub.url("/bad"));
             String status = plugin.skinChain().lastProxyStatus();
-            check("S-37", "B-03", bad.error() != null && status.contains("HTTP 502") && status.contains("Bad Gateway"),
-                    "a failing proxy is logged with its HTTP status and the start of its body (" + status + ")");
+            check("S-37", "B-03", bad.error() != null && status.contains("HTTP 502")
+                            && !status.contains("Bad Gateway") && !status.contains(proxySecret)
+                            && !bad.error().contains(proxySecret),
+                    "a failing proxy reports status only; its body and credential-like text stay hidden");
+            checkSkinPathAndImage();
             plugin.skinChain().install(SkinChain.Resolution.of(new SkinData(VALUE_A, SIG_A, SkinData.Source.PROXY),
                     "self test proxy A"));
             one = plugin.squads().spawnOne(owner("b03"), worldName, at(-6, 6), false);
@@ -455,6 +532,7 @@ final class SelfTestV3 {
             String[] texture = plugin.adapter().skinOf(one);
             check("S-38", "B-03", texture != null && SIG_A.equals(texture[1]) && VALUE_A.equals(texture[0]),
                     "the proxy's signature reaches the Null's GameProfile");
+            verifyConfiguredKitItems(one);
             probe = plugin.adapter().createViewerProbe(worldName, at(-8, 6));
             boolean paired = probe != null && plugin.adapter().pairProbe(probe, one);
             int removesBefore = count(plugin.adapter().probePackets(probe), "ClientboundRemoveEntitiesPacket");
@@ -478,6 +556,191 @@ final class SelfTestV3 {
             }
             dismissAll();
         }
+    }
+
+    /** Validates registry-backed kit items and the healing/combat potion selector on the live Paper API. */
+    private void verifyConfiguredKitItems(NullBody body) {
+        List<String> problems = new ArrayList<>();
+        DefaultKit.Item healingConfig = DefaultKit.DEFAULT.stream().filter(item -> item.slot() == 5)
+                .findFirst().orElse(null);
+        DefaultKit.Item strengthConfig = DefaultKit.DEFAULT.stream().filter(item -> item.slot() == 11)
+                .findFirst().orElse(null);
+        DefaultKit.Item regenerationConfig = DefaultKit.DEFAULT.stream().filter(item -> item.slot() == 12)
+                .findFirst().orElse(null);
+        DefaultKit.Item maceConfig = DefaultKit.DEFAULT.stream().filter(item -> item.slot() == 17)
+                .findFirst().orElse(null);
+        ItemStack healing = KitItems.toStack(healingConfig, problems);
+        ItemStack strength = KitItems.toStack(strengthConfig, problems);
+        ItemStack regeneration = KitItems.toStack(regenerationConfig, problems);
+        ItemStack mace = KitItems.toStack(maceConfig, problems);
+        PotionType healingType = healing != null && healing.getItemMeta() instanceof PotionMeta
+                ? ((PotionMeta) healing.getItemMeta()).getBasePotionType() : null;
+        PotionType strengthType = strength != null && strength.getItemMeta() instanceof PotionMeta
+                ? ((PotionMeta) strength.getItemMeta()).getBasePotionType() : null;
+        PotionType regenerationType = regeneration != null && regeneration.getItemMeta() instanceof PotionMeta
+                ? ((PotionMeta) regeneration.getItemMeta()).getBasePotionType() : null;
+        Player handle = body == null ? null : handle(body);
+        int healingSlot = -1;
+        int strengthSlot = -1;
+        int regenerationSlot = -1;
+        if (handle != null && healing != null && strength != null && regeneration != null) {
+            PlayerInventory inventory = handle.getInventory();
+            ItemStack old0 = inventory.getItem(0) == null ? null : inventory.getItem(0).clone();
+            ItemStack old1 = inventory.getItem(1) == null ? null : inventory.getItem(1).clone();
+            ItemStack old2 = inventory.getItem(2) == null ? null : inventory.getItem(2).clone();
+            try {
+                inventory.setItem(0, strength);
+                inventory.setItem(1, regeneration);
+                inventory.setItem(2, healing);
+                healingSlot = KitItems.potionSlot(inventory, "strong_healing", "healing");
+                strengthSlot = KitItems.potionSlot(inventory, "strong_strength", "strength");
+                regenerationSlot = KitItems.potionSlot(inventory, "strong_regeneration", "regeneration");
+            } finally {
+                inventory.setItem(0, old0);
+                inventory.setItem(1, old1);
+                inventory.setItem(2, old2);
+            }
+        }
+        boolean valid = problems.isEmpty()
+                && healingType != null && "strong_healing".equals(healingType.getKey().getKey())
+                && strengthType != null && "strong_strength".equals(strengthType.getKey().getKey())
+                && regenerationType != null && "strong_regeneration".equals(regenerationType.getKey().getKey())
+                && healingSlot == 2 && strengthSlot == 0 && regenerationSlot == 1
+                && KitItems.level(mace, "breach") == 4 && KitItems.level(mace, "wind_burst") == 3;
+        check("S-125", "B-03", valid,
+                "the Paper registry builds the Healing/Strength/Regeneration kit and the selector never mistakes combat potions for healing"
+                        + " (slots=" + healingSlot + "/" + strengthSlot + "/" + regenerationSlot
+                        + ", kit problems=" + problems + ")");
+    }
+
+    private void checkSkinPathAndImage() {
+        Path temporary = null;
+        try {
+            byte[] modern = pngSkin(64, 64);
+            byte[] legacy = pngSkin(64, 32);
+            byte[] wrongSize = pngSkin(32, 64);
+            byte[] corruptCrc = modern.clone();
+            corruptCrc[29] ^= 1;
+            byte[] truncated = java.util.Arrays.copyOf(modern, modern.length - 8);
+            boolean validImages = SkinChain.isSupportedSkinPng(modern)
+                    && SkinChain.isSupportedSkinPng(legacy)
+                    && !SkinChain.isSupportedSkinPng(wrongSize)
+                    && !SkinChain.isSupportedSkinPng(corruptCrc)
+                    && !SkinChain.isSupportedSkinPng(truncated)
+                    && !SkinChain.isSupportedSkinPng(new byte[2 * 1024 * 1024 + 1]);
+            check("S-118", "B-03", validImages,
+                    "only complete, CRC/zlib-valid 64x64 or legacy 64x32 skin PNGs pass bounded validation");
+
+            temporary = Files.createTempDirectory(plugin.getDataFolder().toPath(), "nullarmy-skin-path-");
+            Path skins = temporary.resolve("skins");
+            Files.createDirectories(skins);
+            Path image = skins.resolve("valid.png");
+            Files.write(image, modern);
+            Path resolved = SkinChain.resolveConfiguredPng(temporary, "skins/valid.png");
+            boolean safePaths = image.toRealPath().equals(resolved)
+                    && SkinChain.resolveConfiguredPng(temporary, "") == null
+                    && rejectsSkinPath(temporary, "skins/../config.yml")
+                    && rejectsSkinPath(temporary, temporary.resolve("outside.png").toString())
+                    && rejectsSkinPath(temporary, "skins\\valid.png");
+            check("S-120", "B-03", safePaths,
+                    "skins.png-path accepts a contained relative file, treats blank as disabled, and rejects traversal/absolute paths");
+
+            Path linkedData = temporary.resolve("linked-data");
+            Files.createDirectories(linkedData);
+            Path fileLink = skins.resolve("link.png");
+            boolean symlinkAvailable = false;
+            try {
+                Files.createSymbolicLink(fileLink, image);
+                Files.createSymbolicLink(linkedData.resolve("skins"), skins);
+                symlinkAvailable = true;
+            } catch (IOException | UnsupportedOperationException | SecurityException unsupported) {
+                Files.deleteIfExists(fileLink);
+                Files.deleteIfExists(linkedData.resolve("skins"));
+            }
+            if (symlinkAvailable) {
+                boolean linksRejected = rejectsSkinPath(temporary, "skins/link.png")
+                        && rejectsSkinPath(linkedData, "skins/valid.png");
+                check("S-121", "B-03", linksRejected,
+                        "both a PNG symlink and a symlinked skins directory are refused");
+            } else {
+                blocked("S-121", "B-03", "the filesystem does not permit creating symlinks here");
+            }
+        } catch (Throwable failure) {
+            check("S-118", "B-03", false,
+                    "the PNG/path validation check failed (" + failure.getClass().getSimpleName() + ")");
+        } finally {
+            if (temporary != null) {
+                try (java.util.stream.Stream<Path> paths = Files.walk(temporary)) {
+                    paths.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (IOException ignored) {
+                            // The temporary test tree is outside world data; a locked file is harmless.
+                        }
+                    });
+                } catch (IOException ignored) {
+                    // Best-effort cleanup after the assertions have already run.
+                }
+            }
+        }
+    }
+
+    private static boolean rejectsSkinPath(Path dataFolder, String path) {
+        try {
+            SkinChain.resolveConfiguredPng(dataFolder, path);
+            return false;
+        } catch (IOException | IllegalArgumentException rejected) {
+            return true;
+        }
+    }
+
+    private static byte[] pngSkin(int width, int height) throws IOException {
+        ByteArrayOutputStream png = new ByteArrayOutputStream();
+        png.write(new byte[] {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10});
+        byte[] header = new byte[13];
+        writePngInt(header, 0, width);
+        writePngInt(header, 4, height);
+        header[8] = 8; // bit depth
+        header[9] = 6; // RGBA
+        writePngChunk(png, "IHDR", header);
+
+        int rowBytes = width * 4;
+        byte[] raster = new byte[(rowBytes + 1) * height];
+        for (int row = 0; row < height; row++) {
+            raster[row * (rowBytes + 1)] = 0; // PNG filter: None
+        }
+        ByteArrayOutputStream compressed = new ByteArrayOutputStream();
+        try (java.util.zip.DeflaterOutputStream deflater = new java.util.zip.DeflaterOutputStream(compressed)) {
+            deflater.write(raster);
+        }
+        writePngChunk(png, "IDAT", compressed.toByteArray());
+        writePngChunk(png, "IEND", new byte[0]);
+        return png.toByteArray();
+    }
+
+    private static void writePngChunk(ByteArrayOutputStream png, String type, byte[] data) {
+        byte[] typeBytes = type.getBytes(StandardCharsets.US_ASCII);
+        writePngInt(png, data.length);
+        png.write(typeBytes, 0, typeBytes.length);
+        png.write(data, 0, data.length);
+        java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+        crc.update(typeBytes);
+        crc.update(data);
+        writePngInt(png, (int) crc.getValue());
+    }
+
+    private static void writePngInt(byte[] out, int offset, int value) {
+        out[offset] = (byte) (value >>> 24);
+        out[offset + 1] = (byte) (value >>> 16);
+        out[offset + 2] = (byte) (value >>> 8);
+        out[offset + 3] = (byte) value;
+    }
+
+    private static void writePngInt(ByteArrayOutputStream out, int value) {
+        out.write(value >>> 24 & 0xff);
+        out.write(value >>> 16 & 0xff);
+        out.write(value >>> 8 & 0xff);
+        out.write(value & 0xff);
     }
 
     private static int count(List<String> packets, String name) {
@@ -966,6 +1229,116 @@ final class SelfTestV3 {
         check("S-63", "B-10", reloaded && wears && persisted, "the edited loadout survives /null reload and is saved"
                 + " in nulls.yml");
         dismissAll();
+    }
+
+    /** Exercises changed settings through the same reload hooks without touching the owner's config file. */
+    private void b10RuntimeReload() {
+        PluginConfig original = plugin.pluginConfig();
+        if (original == null || original.file() == null || plugin.brain() == null || plugin.chat() == null) {
+            blocked("S-128", "B-02", "the live config or a reloadable subsystem is unavailable");
+            return;
+        }
+        boolean oldAutoBridge = plugin.brain().settings().autoBridge();
+        boolean oldChatPrefix = plugin.chat().pluginPrefixEnabled();
+        boolean wantedAutoBridge = !oldAutoBridge;
+        boolean wantedChatPrefix = !oldChatPrefix;
+        boolean applied = false;
+        boolean restored = false;
+        String detail = "runtime reload hook was not reached";
+        try {
+            YamlConfiguration changed = new YamlConfiguration();
+            changed.setDefaults(ConfigLoader.shipped(plugin));
+            changed.loadFromString(original.file().saveToString());
+            changed.set("behaviour.auto-bridge", wantedAutoBridge);
+            changed.set("chat.plugin-prefix", wantedChatPrefix);
+            PluginConfig candidate = new PluginConfig(changed, plugin.getLogger());
+            // These are the actual Reloadable hooks used by /null reload.
+            plugin.brain().onConfigReloaded(candidate);
+            plugin.chat().onConfigReloaded(candidate);
+            applied = plugin.brain().settings().autoBridge() == wantedAutoBridge
+                    && plugin.chat().pluginPrefixEnabled() == wantedChatPrefix;
+            detail = "auto-bridge=" + plugin.brain().settings().autoBridge()
+                    + " (wanted " + wantedAutoBridge + "), chat-prefix=" + plugin.chat().pluginPrefixEnabled()
+                    + " (wanted " + wantedChatPrefix + ")";
+        } catch (Throwable e) {
+            detail = "runtime reload hook check threw " + Guard.describe(e);
+        } finally {
+            try {
+                plugin.brain().onConfigReloaded(original);
+                plugin.chat().onConfigReloaded(original);
+                restored = plugin.brain().settings().autoBridge() == oldAutoBridge
+                        && plugin.chat().pluginPrefixEnabled() == oldChatPrefix;
+            } catch (Throwable e) {
+                restored = false;
+                detail += "; in-memory restore failed: " + Guard.describe(e);
+            }
+        }
+        check("S-128", "B-02", applied && restored,
+                "changed auto-bridge and chat-prefix values take effect through the real runtime reload hooks,"
+                        + " then the previous settings are restored in memory (" + detail + ", restored=" + restored
+                        + "); S-63 separately exercises /null reload itself");
+    }
+
+    /** The rename writer preserves comments and refuses to touch malformed config text. */
+    private void b10CommanderNameWriter() {
+        Path directory = null;
+        boolean updatedSafely = false;
+        boolean invalidUntouched = false;
+        String detail = "temporary config was not created";
+        try {
+            directory = Files.createTempDirectory(plugin.getDataFolder().toPath(), "nullarmy-commander-name-");
+            Path validFile = directory.resolve("config.yml");
+            String original = "# owner comment stays\ncommander:\n"
+                    + "  # section note stays\n  name: NullCommander # inline note stays\n"
+                    + "other.owner-setting: keep-this-value\n";
+            Files.writeString(validFile, original, StandardCharsets.UTF_8);
+            boolean written = ConfigMigration.updateCommanderName(plugin, validFile.toFile(), "VoidMarshal");
+            String changed = Files.readString(validFile, StandardCharsets.UTF_8);
+            ConfigLoader.Outcome parsed = ConfigLoader.load(plugin, validFile.toFile());
+            boolean nameApplied = parsed.ok()
+                    && "VoidMarshal".equals(parsed.config().getString("commander.name", ""));
+            boolean commentsAndOtherKeysPreserved = changed.contains("# owner comment stays")
+                    && changed.contains("# section note stays") && changed.contains("# inline note stays")
+                    && changed.contains("other.owner-setting: keep-this-value");
+            boolean backupPresent;
+            try (java.util.stream.Stream<Path> files = Files.list(directory)) {
+                backupPresent = files.anyMatch(path -> path.getFileName().toString().startsWith("config.yml.bak-"));
+            }
+
+            Path invalidFile = directory.resolve("invalid.yml");
+            String invalid = "commander:\n  name: [unterminated\n";
+            Files.writeString(invalidFile, invalid, StandardCharsets.UTF_8);
+            boolean rejected = !ConfigMigration.updateCommanderName(plugin, invalidFile.toFile(), "VoidMarshal");
+            invalidUntouched = rejected && invalid.equals(Files.readString(invalidFile, StandardCharsets.UTF_8));
+            updatedSafely = written && nameApplied && commentsAndOtherKeysPreserved && backupPresent;
+            detail = "updated=" + written + ", parsed=" + nameApplied + ", comments/other values preserved="
+                    + commentsAndOtherKeysPreserved + ", backup=" + backupPresent
+                    + ", malformed config untouched=" + invalidUntouched;
+        } catch (Throwable e) {
+            detail = "rename-writer check threw " + Guard.describe(e);
+        } finally {
+            if (directory != null) {
+                try (java.util.stream.Stream<Path> files = Files.list(directory)) {
+                    files.forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (IOException ignored) {
+                            // The enclosing temporary directory is also removed below.
+                        }
+                    });
+                } catch (IOException ignored) {
+                    // Best-effort cleanup only; no owner file is inside this directory.
+                }
+                try {
+                    Files.deleteIfExists(directory);
+                } catch (IOException ignored) {
+                    // Best-effort cleanup only; this was created by the self test.
+                }
+            }
+        }
+        check("S-129", "P-12", updatedSafely && invalidUntouched,
+                "Commander rename updates only the name scalar, preserves comments and other settings, creates a"
+                        + " backup, and leaves malformed config untouched (" + detail + ")");
     }
 
     // ------------------------------------------------------------------- B-12

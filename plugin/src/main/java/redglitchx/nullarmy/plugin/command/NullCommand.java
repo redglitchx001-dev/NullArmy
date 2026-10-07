@@ -1517,8 +1517,18 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
                 }
             }
         } else {
-            sender.sendMessage(PREFIX + "Reload failed - the old settings are still in use."
-                    + " The reason is in the server log.");
+            sender.sendMessage(PREFIX + "Reload failed - the old settings are still in use.");
+            redglitchx.nullarmy.core.config.YamlProblem problem = plugin.lastConfigProblem();
+            if (problem != null) {
+                sender.sendMessage(PREFIX + "  " + problem.headline() + " (configuration values hidden).");
+            } else {
+                redglitchx.nullarmy.plugin.config.ConfigMigration.Report migration = plugin.lastMigration();
+                if (migration != null && migration.error() != null) {
+                    sender.sendMessage(PREFIX + "  " + migration.describe());
+                } else {
+                    sender.sendMessage(PREFIX + "  See the server log for a safe diagnostic; no config contents are printed.");
+                }
+            }
         }
         return true;
     }
@@ -1625,8 +1635,8 @@ public final class NullCommand implements CommandExecutor, TabCompleter, Reloada
     private void describeCoordination(CommandSender sender) {
         sender.sendMessage(PREFIX + "Squad coordination: " + (config.aiSquadCoordination()
                 ? "on" : "off (ai.squad-coordination is false)")
-                + ", automatic local steps: " + (config.aiAutoCoordinate() ? "on" : "off")
-                + " every " + (config.aiCoordinateIntervalTicks() / 20) + "s.");
+                + ", automatic local steps: disabled (owner orders only; legacy ai.auto-coordinate="
+                + config.aiAutoCoordinate() + " has no effect).");
         sender.sendMessage(PREFIX + "  allowlisted actions: "
                 + String.join(", ", redglitchx.nullarmy.core.ai.SquadAction.allowlist()));
         sender.sendMessage(PREFIX + "  a model can never run a console command, grant a"

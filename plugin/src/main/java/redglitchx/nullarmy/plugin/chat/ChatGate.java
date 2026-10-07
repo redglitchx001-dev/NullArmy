@@ -78,9 +78,7 @@ public final class ChatGate {
             return;
         }
         String name = commanderName == null || commanderName.isEmpty() ? "NullCommander" : commanderName;
-        Component line = Component.text(name, NamedTextColor.WHITE)
-                .append(Component.text(": ", NamedTextColor.GRAY))
-                .append(Component.text(text.trim(), NamedTextColor.WHITE));
+        Component line = formatCommanderLine(name, text);
         commanderLines.incrementAndGet();
         broadcasts.incrementAndGet();
         lastCommanderLine = text.trim();
@@ -94,6 +92,15 @@ public final class ChatGate {
         if (logger != null) {
             logger.info("[NullArmy] <" + name + "> " + text.trim());
         }
+    }
+
+    /** Formats the Commander's public line; the plugin prefix is intentionally absent. */
+    public static Component formatCommanderLine(String commanderName, String text) {
+        String name = commanderName == null || commanderName.isEmpty() ? "NullCommander" : commanderName;
+        String message = text == null ? "" : text.trim();
+        return Component.text(name, NamedTextColor.WHITE)
+                .append(Component.text(": ", NamedTextColor.GRAY))
+                .append(Component.text(message, NamedTextColor.WHITE));
     }
 
     // ------------------------------------------------------------------ events

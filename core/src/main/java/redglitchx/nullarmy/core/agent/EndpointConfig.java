@@ -103,7 +103,7 @@ public final class EndpointConfig {
         String host = base.getHost();
         int port = base.getPort();
         if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))
-                || host == null || host.isEmpty() || port == 0 || port > 65_535) {
+                || host == null || host.isEmpty() || port < -1 || port == 0 || port > 65_535) {
             throw new IllegalArgumentException("endpoint URL must be an absolute http:// or https:// URL");
         }
         String path = base.getRawPath();
@@ -184,17 +184,41 @@ public final class EndpointConfig {
         }
         if (usesEnvVar()) {
             String name = apiKeyEnvName();
-            if (!name.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+            if (name == null || !name.matches("[A-Za-z_][A-Za-z0-9_]*")) {
                 return null;
             }
             try {
                 String value = System.getenv(name);
-                return value == null || value.trim().isEmpty() ? null : value.trim();
+                if (value == null || value.trim().isEmpty()) {
+                    return null;
+                }
+                value = value.trim();
+                return isValidApiKeyValue(value) ? value : null;
             } catch (IllegalArgumentException | SecurityException invalidEnvironmentAccess) {
                 return null;
             }
         }
         return apiKeyRaw;
+    }
+
+    /**
+     * Checks the size and character set accepted by JDK HTTP header values.
+     * This is also applied to keys resolved from the process environment.
+     */
+    public static boolean isValidApiKeyValue(String value) {
+        if (value == null) {
+            return true;
+        }
+        if (value.length() > 8192) {
+            return false;
+        }
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (Character.isISOControl(c) || c > 0xff) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** True when this endpoint is enabled and its key (if any) actually resolves. */
@@ -208,29 +232,39 @@ public final class EndpointConfig {
         return resolveApiKey() != null;
     }
 
-    /** Removes URL user-info and query values before a URL is shown to an operator. */
+    /**
+     * Redacts user-info, every path segment, query values and fragments before a
+     * URL is shown to an operator. Custom deployments sometimes put credentials
+     * in any of those locations, so diagnostics intentionally show only the
+     * HTTP origin and whether a path/query was present.
+     */
     public static String safeEndpointForDisplay(String raw) {
         if (raw != null && raw.regionMatches(true, 0, "id:", 0, 3)) {
             return "id:" + safeLabel(raw.substring(3));
         }
         try {
             URI uri = URI.create(raw == null ? "" : raw.trim());
-            if (uri.getScheme() == null || uri.getHost() == null) {
+            String scheme = uri.getScheme();
+            String host = uri.getHost();
+            int port = uri.getPort();
+            if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))
+                    || host == null || host.isEmpty() || port < -1 || port == 0 || port > 65_535) {
                 return "(invalid URL)";
             }
-            String host = uri.getHost();
             if (host.indexOf(':') >= 0 && !host.startsWith("[")) {
                 host = "[" + host + "]";
             }
-            StringBuilder out = new StringBuilder(uri.getScheme()).append("://").append(host);
-            if (uri.getPort() >= 0) {
-                out.append(':').append(uri.getPort());
+            StringBuilder out = new StringBuilder(scheme.toLowerCase(Locale.ROOT))
+                    .append("://").append(host);
+            if (port > 0) {
+                out.append(':').append(port);
             }
-            if (uri.getRawPath() != null) {
-                out.append(uri.getRawPath());
+            String path = uri.getRawPath();
+            if (path != null && !path.isEmpty() && !"/".equals(path)) {
+                out.append(" [path redacted]");
             }
             if (uri.getRawQuery() != null) {
-                out.append("?…");
+                out.append(" [query redacted]");
             }
             return out.toString();
         } catch (IllegalArgumentException invalid) {
@@ -249,34 +283,23 @@ public final class EndpointConfig {
         return text.length() > clean.length() ? label + "…" : label;
     }
 
-    /**
-     * Diagnostic line. <b>Never contains the key value or URL credentials/query values.</b>
-     *
-     * <p>Example: {@code openai [gpt-4o-mini] https://api.openai.com/v1 env:OPENAI_API_KEY resolves=true}</p>
-     */
+    /** Diagnostic line. Never contains the API key or any URL path/query values. */
     public String describe() {
         String keyPart;
         if (apiKeyRaw == null || apiKeyRaw.isEmpty()) {
             keyPart = "no-key";
         } else if (usesEnvVar()) {
-            keyPart = ENV_PREFIX + apiKeyEnvName() + " resolves=" + (resolveApiKey() != null);
+            keyPart = ENV_PREFIX + safeLabel(apiKeyEnvName()) + " resolves=" + (resolveApiKey() != null);
         } else {
-            keyPart = "inline(" + mask(apiKeyRaw) + ")";
+            keyPart = "inline(hidden)";
         }
-        return id + " [" + modelId + "] " + safeEndpointForDisplay(endpoint) + " " + keyPart;
+        return safeLabel(id) + " [" + safeLabel(modelId) + "] "
+                + safeEndpointForDisplay(endpoint) + " " + keyPart;
     }
 
-    /**
-     * Shows only the first 3 and last 2 characters of a literal key.
-     *
-     * <p>Public so {@code CoreTestSuite} can assert the masking shape directly;
-     * it never exposes more of the key than {@link #describe()} does.</p>
-     */
+    /** Returns a fixed redaction marker for any non-empty literal key. */
     public static String mask(String key) {
-        if (key == null || key.length() <= 5) {
-            return "*****";
-        }
-        return key.substring(0, 3) + "..." + key.substring(key.length() - 2);
+        return "*****";
     }
 
     @Override
@@ -368,7 +391,12 @@ public final class EndpointConfig {
                 chatCompletionsUri(url);
             } catch (IllegalArgumentException invalidUrl) {
                 throw new IllegalArgumentException("endpoint must be an absolute http:// or https:// URL on endpoint '"
-                        + id + "'", invalidUrl);
+                        + safeLabel(id) + "'", invalidUrl);
+            }
+            if (apiKeyRaw != null && !apiKeyRaw.isEmpty() && !apiKeyRaw.startsWith(ENV_PREFIX)
+                    && !isValidApiKeyValue(apiKeyRaw)) {
+                throw new IllegalArgumentException("api-key is too long or contains invalid HTTP header characters"
+                        + " on endpoint '" + safeLabel(id) + "'");
             }
             if (timeoutMillis <= 0) {
                 throw new IllegalArgumentException("timeout-millis must be > 0 on endpoint '" + id + "'");

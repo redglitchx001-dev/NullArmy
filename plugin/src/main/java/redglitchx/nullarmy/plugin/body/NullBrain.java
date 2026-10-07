@@ -26,6 +26,7 @@ import redglitchx.nullarmy.plugin.SquadManager;
 import redglitchx.nullarmy.plugin.config.PluginConfig;
 import redglitchx.nullarmy.plugin.config.Reloadable;
 import redglitchx.nullarmy.plugin.config.V3Settings;
+import redglitchx.nullarmy.plugin.kit.KitItems;
 import redglitchx.nullarmy.plugin.util.Guard;
 
 import java.util.ArrayList;
@@ -92,6 +93,8 @@ public final class NullBrain implements Reloadable {
     }
 
     private static final int UNSTACK_INTERVAL = 10;
+    /** Hard ceiling for one explicitly confirmed teardown order. */
+    private static final int MAX_DESTROY_BLOCKS = 9;
 
     private final NullArmyPlugin plugin;
     private final Map<UUID, Mind> minds = new HashMap<>();
@@ -870,7 +873,12 @@ public final class NullBrain implements Reloadable {
      * {@code BlockPlaceEvent}, sneaking at the edge exactly like a player.</p>
      */
     private void autoBridge(NullBody body, Mind mind, Player handle, String world, Vec3d pos, Intent intent) {
-        if (v3 == null || !v3.autoBridge() || handle == null) {
+        // Placing blocks is never an incidental side effect of following or
+        // walking. It is reachable only while carrying an explicit BRIDGE order;
+        // BlockPlaceEvent and the runtime auto-bridge switch remain additional
+        // gates for that directed action.
+        if (mind.order == null || mind.order.verb != Mind.Verb.BRIDGE
+                || v3 == null || !v3.autoBridge() || handle == null) {
             return;
         }
         if (now < mind.nextBridgeTick) {
@@ -958,7 +966,15 @@ public final class NullBrain implements Reloadable {
      * for the looters.</p>
      */
     private Intent destroyStep(NullBody body, Mind mind, Player handle, String world, Vec3d pos, Mind.Order order) {
-        if (handle == null || order.point == null) {
+        PluginConfig current = plugin.pluginConfig();
+        if (current == null || !current.griefingEnabled() || order.issuer == null
+                || order.worldName == null || !order.worldName.equals(world)) {
+            // Config may have changed after confirmation, or a portal may have
+            // moved the worker. Revalidate policy and world on every execution tick.
+            mind.order = null;
+            return Intent.stop();
+        }
+        if (handle == null || order.point == null || order.remaining <= 0) {
             mind.order = null;
             return null;
         }
@@ -970,24 +986,22 @@ public final class NullBrain implements Reloadable {
         if (now < mind.nextBridgeTick) {
             return Intent.stop();
         }
-        int radius = Math.max(1, Math.min(8, order.radius));
+        // The caller supplies the exact ray-traced target as point.y - 1. The
+        // patch is a single horizontal layer, not an unbounded column downward.
+        int radius = 1;
         int cx = (int) Math.floor(order.point.x());
-        int cy = (int) Math.floor(order.point.y());
+        int blockY = (int) Math.floor(order.point.y()) + 1;
         int cz = (int) Math.floor(order.point.z());
-        if (cy <= w.getMinHeight()) {
+        if (blockY < w.getMinHeight() || blockY >= w.getMaxHeight()) {
             mind.order = null;
             return null;
         }
-        int reach = 2;
         Block chosen = null;
         double bestDistance = Double.MAX_VALUE;
-        for (int dx = -reach; dx <= reach; dx++) {
-            for (int dz = -reach; dz <= reach; dz++) {
-                Block block = w.getBlockAt(cx + dx, cy + 1, cz + dz);
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                Block block = w.getBlockAt(cx + dx, blockY, cz + dz);
                 if (block.getType().isAir() || !block.getType().isSolid()) {
-                    continue;
-                }
-                if (Math.abs(dx) > radius || Math.abs(dz) > radius) {
                     continue;
                 }
                 double d = Math.hypot(block.getX() + 0.5D - pos.x(), block.getZ() + 0.5D - pos.z());
@@ -998,9 +1012,8 @@ public final class NullBrain implements Reloadable {
             }
         }
         if (chosen == null) {
-            // This level is gone: drop to the next one down and carry on.
-            order.point = new Vec3d(order.point.x(), order.point.y() - 1.0D, order.point.z());
-            mind.nextBridgeTick = now + 4L;
+            // The explicitly targeted layer is clear; never search below it.
+            mind.order = null;
             return Intent.stop();
         }
         if (bestDistance > 4.2D) {
@@ -1011,6 +1024,14 @@ public final class NullBrain implements Reloadable {
         intent.look = new Vec3d(chosen.getX() + 0.5D, chosen.getY() + 0.5D, chosen.getZ() + 0.5D);
         if (Bodies.breakOne(handle, chosen)) {
             blocksDestroyed++;
+            order.remaining--;
+            if (order.remaining <= 0) {
+                mind.order = null;
+            }
+        } else {
+            // A protection plugin refused the real BlockBreakEvent; do not keep
+            // hammering the denied block or move on to a larger target.
+            mind.order = null;
         }
         mind.nextBridgeTick = now + 10L;
         return intent;
@@ -1238,7 +1259,8 @@ public final class NullBrain implements Reloadable {
                 mind.holdCell = null;
             }
             if (verb == Mind.Verb.DESTROY) {
-                created.radius = Math.max(1, count);
+                created.radius = 1;
+                created.remaining = MAX_DESTROY_BLOCKS;
             }
             if (verb == Mind.Verb.STOP) {
                 if (plugin.builder() != null) {
@@ -1337,9 +1359,29 @@ public final class NullBrain implements Reloadable {
         return answer;
     }
 
-    /** P-09: teardown of a marked area. Only ever called after policy + confirm. */
-    public String destroy(List<NullBody> targets, Vec3d centre, int radius, UUID issuer) {
-        return order(targets, Mind.Verb.DESTROY, centre, null, issuer, Math.max(1, radius));
+    /** P-09: bounded teardown; the caller must first check griefing policy and obtain owner confirmation. */
+    public String destroy(List<NullBody> targets, Vec3d centre, int radius, UUID issuer, String worldName) {
+        PluginConfig current = plugin.pluginConfig();
+        if (current == null || !current.griefingEnabled()) {
+            return "teardown is disabled by policy.griefing-enabled";
+        }
+        if (issuer == null || centre == null || targets == null || targets.isEmpty() || targets.get(0) == null
+                || worldName == null || worldName.trim().isEmpty()) {
+            return "teardown needs an owner, a selected block, its world and a live Null";
+        }
+        // A single worker limits one confirmed order to at most nine blocks.
+        NullBody worker = targets.get(0);
+        SquadManager.Squad squad = plugin.squads() == null ? null : plugin.squads().find(issuer);
+        if (squad == null || !squad.worldName().equals(worldName) || !squad.members().contains(worker)) {
+            return "teardown target is not in the owner's current squad and world";
+        }
+        String answer = order(java.util.Collections.singletonList(worker), Mind.Verb.DESTROY,
+                centre, null, issuer, 1);
+        Mind mind = mind(worker);
+        if (mind != null && mind.order != null && mind.order.verb == Mind.Verb.DESTROY) {
+            mind.order.worldName = worldName;
+        }
+        return answer;
     }
 
     /** L-03: one salute. */
@@ -1645,9 +1687,11 @@ public final class NullBrain implements Reloadable {
     }
 
     /**
-     * Eats a golden apple (or drinks healing) when health drops below
+     * Eats a golden apple (or drinks a healing potion) when health drops below
      * {@code nulls.eat-below-health}: the item is really selected and really
-     * consumed through vanilla's item-use countdown.
+     * consumed through vanilla's item-use countdown. Strength and Regeneration
+     * are intentionally handled as combat buffs, never mistaken for instant
+     * healing.
      */
     boolean maybeEat(NullBody body, Mind mind, Player handle) {
         if (handle == null || mind.eating() || now < mind.nextEatAllowed || v3 == null) {
@@ -1658,15 +1702,17 @@ public final class NullBrain implements Reloadable {
             return false;
         }
         PlayerInventory inv = handle.getInventory();
-        int slot = -1;
-        for (Material food : new Material[] {Material.GOLDEN_APPLE, Material.ENCHANTED_GOLDEN_APPLE, Material.POTION}) {
-            slot = Bodies.find(inv, food);
-            if (slot >= 0) {
-                break;
-            }
+        int slot = Bodies.find(inv, Material.GOLDEN_APPLE);
+        if (slot < 0) {
+            slot = Bodies.find(inv, Material.ENCHANTED_GOLDEN_APPLE);
         }
         if (slot < 0) {
-            mind.nextEatAllowed = now + 200;
+            slot = KitItems.potionSlot(inv, "strong_healing", "healing");
+        }
+        if (slot < 0) {
+            if (!mind.combatPursuit) {
+                mind.nextEatAllowed = now + 200;
+            }
             return false;
         }
         if (handle.isHandRaised()) {

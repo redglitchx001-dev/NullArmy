@@ -291,6 +291,10 @@ public final class V3Commands {
             return true;
         }
         String verbWord = args[2].toLowerCase(Locale.ROOT);
+        if (!VERBS.contains(verbWord)) {
+            say(sender, "Unknown or protected order '" + args[2] + "'. Orders: " + String.join(", ", VERBS));
+            return true;
+        }
         Mind.Verb verb;
         try {
             verb = Mind.Verb.valueOf(verbWord.toUpperCase(Locale.ROOT));
@@ -460,30 +464,6 @@ public final class V3Commands {
                 say(sender, plugin.brain().hunt(targets, target.getUniqueId(), issuer, chasers));
                 return true;
             }
-            case DESTROY: {
-                // P-09: teardown. Refused here too unless griefing is enabled.
-                if (plugin.pluginConfig() == null || !plugin.pluginConfig().griefingEnabled()) {
-                    say(sender, "Tearing blocks down is off: set policy.griefing-enabled to true"
-                            + " in config.yml first.");
-                    plugin.getLogger().info("[NullArmy] destroy refused for " + sender.getName()
-                            + ": policy.griefing-enabled is false.");
-                    return true;
-                }
-                if (player == null) {
-                    say(sender, "Tearing down needs a player position.");
-                    return true;
-                }
-                int radius = 2;
-                if (rest.length > 0) {
-                    try {
-                        radius = Math.max(1, Math.min(8, Integer.parseInt(rest[0])));
-                    } catch (NumberFormatException ignored) {
-                        radius = 2;
-                    }
-                }
-                say(sender, plugin.brain().destroy(targets, here(player), radius, issuer));
-                return true;
-            }
             default:
                 say(sender, "That order is not available.");
                 return true;
@@ -495,8 +475,8 @@ public final class V3Commands {
     /**
      * {@code /null name <new>}: renames the Commander live (P-12).
      *
-     * <p>The name is the one anybody can call him by in chat, and it is saved
-     * into {@code commander.yml} so it survives a restart.</p>
+     * <p>The name is the one anybody can call him by in chat; only that scalar
+     * is updated in {@code config.yml}, with the owner's other YAML untouched.</p>
      */
     private boolean name(CommandSender sender, String[] args) {
         if (!need(sender, "nullarmy.admin")) {

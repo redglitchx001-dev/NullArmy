@@ -35,7 +35,6 @@ import java.io.IOException;
 import java.util.UUID;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.logging.Level;
 
 /**
  * The Null Commander: one named Null that spawns from a portal, wears the
@@ -68,7 +67,6 @@ public final class CommanderManager implements Listener, Reloadable {
     private final File file;
 
     private NullBody commander;
-    private SkinData skin;
     private String name = DEFAULT_NAME;
     /** P-04/P-09/P-12: the one player the Commander obeys. */
     private UUID ownerId;
@@ -79,21 +77,11 @@ public final class CommanderManager implements Listener, Reloadable {
         this.file = new File(plugin.getDataFolder(), FILE_NAME);
     }
 
-    /** Reads the saved name and loadout. Safe to call when the file is absent. */
+    /** Reads the configured name and saved loadout. Safe to call when the loadout file is absent. */
     public void load() {
-        name = plugin.getConfig().getString("commander.name", DEFAULT_NAME);
-        if (name == null || name.trim().isEmpty()) {
+        name = normalizedName(plugin.getConfig().getString("commander.name", DEFAULT_NAME));
+        if (name == null) {
             name = DEFAULT_NAME;
-        }
-        // The Commander is presented exactly like a normal player: no colours, no
-        // symbols, no decoration in the name itself. The brand prefix belongs to
-        // the plugin's chat lines, not to the name.
-        name = name.replaceAll("[^A-Za-z0-9_]", "");
-        if (name.isEmpty()) {
-            name = DEFAULT_NAME;
-        }
-        if (name.length() > 16) {
-            name = name.substring(0, 16);
         }
         if (!file.isFile()) {
             return;
@@ -107,6 +95,15 @@ public final class CommanderManager implements Listener, Reloadable {
         }
     }
 
+    /** A plain Minecraft profile name, or null when the input has no valid characters. */
+    private static String normalizedName(String wanted) {
+        String clean = wanted == null ? "" : wanted.replaceAll("[^A-Za-z0-9_]", "");
+        if (clean.isEmpty()) {
+            return null;
+        }
+        return clean.length() > 16 ? clean.substring(0, 16) : clean;
+    }
+
     /**
      * Warms the skin cache in the background so the first spawn already has it.
      *
@@ -116,29 +113,27 @@ public final class CommanderManager implements Listener, Reloadable {
     public void preloadSkin() {
         // Warm both skins: the Commander's, and the one ordinary Nulls share.
         // A failure is cosmetic and is reported, never fatal.
-        preloadOne(plugin.pluginConfig().commanderSkinName(), true);
+        preloadOne(plugin.pluginConfig().commanderSkinName());
         String nullSkin = plugin.pluginConfig().nullSkinName();
         if (!nullSkin.equalsIgnoreCase(plugin.pluginConfig().commanderSkinName())) {
-            preloadOne(nullSkin, false);
+            preloadOne(nullSkin);
         }
     }
 
-    private void preloadOne(String username, boolean forCommander) {
+    private void preloadOne(String username) {
         if (username == null || username.trim().isEmpty()) {
             return;
         }
         skins.resolveAsync(username, data -> {
             if (data != null && data.complete()) {
-                if (forCommander) {
-                    this.skin = data;
-                }
                 plugin.getLogger().info("[NullArmy] Skin ready for '" + username
                         + "' from " + data.source() + ".");
             } else {
                 plugin.getLogger().warning("[NullArmy] Could not resolve the skin for '"
                         + username + "'. Those NPCs will use the default skin."
-                        + " Set skins.nulls / skins.commander in config.yml, or pass"
-                        + " -Dnullarmy.skin.null=Name. The plugin still works -"
+                        + " Set skins.nulls / skins.commander in config.yml, or use the matching"
+                        + " -Dnullarmy.skin.null=Name / -Dnullarmy.skin.commander=Name override."
+                        + " The plugin still works -"
                         + " a missing skin is cosmetic only.");
             }
         });
@@ -149,50 +144,36 @@ public final class CommanderManager implements Listener, Reloadable {
         return plugin.pluginConfig().commanderSkinName();
     }
 
-    public SkinData skin() { return skin; }
+    public SkinData skin() {
+        return plugin.skinChain() == null ? null : plugin.skinChain().current(true);
+    }
     public String commanderName() { return name; }
 
     /**
-     * P-12: renames the Commander live.
-     *
-     * <p>Everybody may talk to him by name; only the owner is obeyed. The name
-     * is written back into {@code config.yml} so the rename survives a restart,
-     * and it takes effect for chat addressing immediately.</p>
+     * P-12: renames the Commander live without asking Bukkit to rewrite the
+     * owner's entire config file. The single name scalar is changed only after
+     * strict validation and a restorable backup; malformed or ambiguous YAML
+     * leaves both the file and the running name untouched.
      */
     public String rename(String wanted) {
-        String clean = wanted == null ? "" : wanted.replaceAll("[^A-Za-z0-9_]", "");
-        if (clean.isEmpty()) {
+        String clean = normalizedName(wanted);
+        if (clean == null) {
             return "That name has no letters or numbers a Minecraft name can hold.";
-        }
-        if (clean.length() > 16) {
-            clean = clean.substring(0, 16);
         }
         String previous = name;
         if (clean.equalsIgnoreCase(previous)) {
             return "The Commander is already called " + clean + ".";
         }
+        if (!redglitchx.nullarmy.plugin.config.ConfigMigration.updateCommanderName(
+                plugin, plugin.configFile(), clean)) {
+            return "The Commander was not renamed: config.yml could not be updated safely. "
+                    + "No settings were changed.";
+        }
+        // Rebuild the typed runtime settings so /null reload and a rename share
+        // the same path and every registered config hook sees the new value.
+        plugin.reloadPluginConfig();
         name = clean;
-        try {
-            plugin.getConfig().set("commander.name", clean);
-            plugin.saveConfig();
-        } catch (Throwable t) {
-            plugin.getLogger().warning("[NullArmy] commander.name could not be written to config.yml: "
-                    + Guard.describe(t));
-        }
         plugin.getLogger().info("[NullArmy] the Commander is now called " + clean + " (was " + previous + ")");
-        // Also recorded in commander.yml, so a bare save never resurrects the old name.
-        try {
-            File folder = plugin.getDataFolder();
-            if (folder != null && (folder.isDirectory() || folder.mkdirs())) {
-                File file = new File(folder, FILE_NAME);
-                org.bukkit.configuration.file.YamlConfiguration yaml =
-                        org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(file);
-                yaml.set("name", clean);
-                yaml.save(file);
-            }
-        } catch (Throwable t) {
-            plugin.getLogger().fine("[NullArmy] commander.yml name note skipped: " + Guard.describe(t));
-        }
         if (plugin.chatGate() != null) {
             plugin.chatGate().event("commander.renamed", "from", previous, "to", clean);
         }
@@ -237,14 +218,17 @@ public final class CommanderManager implements Listener, Reloadable {
     }
 
     /**
-     * A config reload does not change anything the Commander is already
-     * wearing: the loadout lives in {@code commander.yml} and is edited through
-     * the GUI, never in {@code config.yml}. The hook exists so {@code /null
-     * reload} can tell every subsystem in one pass without special cases.
+     * Applies the runtime Commander name. The current body keeps its existing
+     * profile name until the next summon; chat addressing changes immediately.
+     * The owner-edited loadout remains isolated in {@code commander.yml}.
      */
     @Override
     public void onConfigReloaded(PluginConfig config) {
-        // Intentionally empty: see the note above.
+        if (config == null || config.file() == null) {
+            return;
+        }
+        String freshName = normalizedName(config.file().getString("commander.name", DEFAULT_NAME));
+        name = freshName == null ? DEFAULT_NAME : freshName;
     }
 
     public boolean isSpawned() {
@@ -276,9 +260,8 @@ public final class CommanderManager implements Listener, Reloadable {
         if (owner == null) {
             return false;
         }
-        ownerId = owner.getUniqueId();
-        // Creating an NPC is main-thread work only (spec 2.4); refuse politely
-        // rather than corrupting the world from another thread.
+        // Creating or cleaning an NPC is main-thread work only (spec 2.4); do
+        // not mutate the active owner's identity before this guard.
         if (!Bukkit.isPrimaryThread()) {
             owner.sendMessage(PREFIX + "The Commander must be summoned from the server thread.");
             return false;
@@ -291,6 +274,20 @@ public final class CommanderManager implements Listener, Reloadable {
         if (isSpawned()) {
             owner.sendMessage(PREFIX + "The Commander is already here. Use /null dismiss first.");
             return false;
+        }
+        // A naturally dead Commander can remain referenced until the next
+        // command. Remove that stale ServerPlayer before registering a replacement.
+        if (commander != null) {
+            NullBody stale = commander;
+            if (!Guard.attempt(plugin.getLogger(), "cleaning up the dead Commander", stale::destroy)) {
+                owner.sendMessage(PREFIX + "The previous Commander could not be cleaned up safely;"
+                        + " check the server log before trying again.");
+                return false;
+            }
+            if (commander == stale) {
+                commander = null;
+            }
+            ownerId = null;
         }
         // Same latched guard the squads use: if NMS spawning has already failed
         // once this session, do not try it again with a live server on the line.
@@ -333,8 +330,9 @@ public final class CommanderManager implements Listener, Reloadable {
         }
         final boolean arrivedThroughDoorway = doorway;
 
-        String value = (skin != null && skin.complete()) ? skin.value() : "";
-        String signature = (skin != null && skin.complete()) ? skin.signature() : "";
+        SkinData resolvedSkin = plugin.skinChain() == null ? null : plugin.skinChain().current(true);
+        String value = (resolvedSkin != null && resolvedSkin.complete()) ? resolvedSkin.value() : "";
+        String signature = (resolvedSkin != null && resolvedSkin.complete()) ? resolvedSkin.signature() : "";
 
         try {
             commander = adapter.spawnNull(new VersionAdapter.SpawnRequest(
@@ -369,6 +367,10 @@ public final class CommanderManager implements Listener, Reloadable {
             plugin.getLogger().severe("[NullArmy] Commander registration failed: " + problem);
             return false;
         }
+
+        // Ownership becomes live only after the adapter has fully registered,
+        // tracked and validated the body.
+        ownerId = owner.getUniqueId();
 
         // The portal effects are the last, cosmetic part of the entrance: they may
         // fail without losing the Commander that already exists and was verified.
@@ -439,6 +441,7 @@ public final class CommanderManager implements Listener, Reloadable {
             plugin.brain().combat().stopFlight(body, redglitchx.nullarmy.plugin.body.Bodies.player(body));
         }
         commander = null;
+        ownerId = null;
         if (body == null) {
             return false;
         }

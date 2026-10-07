@@ -1,12 +1,19 @@
 package redglitchx.nullarmy.plugin.skin;
 
+import org.bukkit.Bukkit;
 import org.bukkit.plugin.Plugin;
 
+import redglitchx.nullarmy.plugin.NullArmyPlugin;
+
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,11 +26,10 @@ import java.util.logging.Level;
 /**
  * Resolves the skin every Null and the Commander must wear.
  *
- * <h2>Why one username for everything</h2>
- * <p>The owner asked that <b>every</b> skin come from a single Minecraft
- * account. That is what {@link #DEFAULT_SKIN_OWNER} is: one lookup, cached
- * once, reused for every NPC - so a hundred Nulls cost one HTTP request, not
- * a hundred, and they all look identical.</p>
+ * <h2>Explicit identity only</h2>
+ * <p>Account skins are optional and must be configured by the server owner.
+ * With no configured account, no other player's skin is fetched and the
+ * generated profile uses Minecraft's normal default skin.</p>
  *
  * <h2>Lookup order</h2>
  * <ol>
@@ -48,14 +54,9 @@ import java.util.logging.Level;
  */
 public final class SkinResolver {
 
-    /**
-     * The Minecraft username whose skin every Null and the Commander wears.
-     * Change it here, or set {@code nullarmy.skin.owner} as a system property.
-     */
-    public static final String DEFAULT_SKIN_OWNER = "uH3WR2v0ti0uTHJ";
-
     private static final String CACHE_DIR = "skins";
     private static final long MAX_CACHE_ENTRIES = 64;
+    private static final int MAX_CACHE_FILE_BYTES = 64 * 1024;
 
     private final Plugin plugin;
     private final MojangSkinClient client;
@@ -73,11 +74,18 @@ public final class SkinResolver {
         this.cacheDir = plugin.getDataFolder().toPath().resolve(CACHE_DIR);
     }
 
-    /** The username whose skin is used for every NPC. */
+    /** Explicitly configured account whose skin is used, or an empty string. */
     public String skinOwner() {
-        String override = System.getProperty("nullarmy.skin.owner");
-        return (override == null || override.trim().isEmpty())
-                ? DEFAULT_SKIN_OWNER : override.trim();
+        String override = System.getProperty("nullarmy.skin.null");
+        if (override != null && !override.trim().isEmpty()) {
+            return override.trim();
+        }
+        if (plugin instanceof NullArmyPlugin) {
+            redglitchx.nullarmy.plugin.config.PluginConfig config =
+                    ((NullArmyPlugin) plugin).pluginConfig();
+            return config == null ? "" : config.nullSkinName();
+        }
+        return "";
     }
 
     /**
@@ -88,6 +96,9 @@ public final class SkinResolver {
      */
     public SkinData resolveCached(String username) {
         String key = key(username);
+        if (key.isEmpty()) {
+            return null;
+        }
         SkinData hit = cache.get(key);
         if (hit != null) {
             return hit;
@@ -112,10 +123,17 @@ public final class SkinResolver {
      * once, possibly with {@code null}.</p>
      */
     public void resolveAsync(String username, Consumer<SkinData> callback) {
+        if (callback == null) {
+            return;
+        }
         String key = key(username);
+        if (key.isEmpty()) {
+            deliver(callback, null);
+            return;
+        }
         SkinData known = resolveCached(key);
         if (known != null) {
-            callback.accept(known);
+            deliver(callback, known);
             return;
         }
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
@@ -124,15 +142,23 @@ public final class SkinResolver {
                 fetched = client.fetch(key);
             } catch (RuntimeException e) {
                 plugin.getLogger().log(Level.WARNING,
-                        "[NullArmy] Skin lookup failed for '" + key + "': " + e.getMessage());
+                        "[NullArmy] Skin lookup failed (" + e.getClass().getSimpleName() + ")");
             }
             if (fetched != null && fetched.complete()) {
                 remember(key, fetched);
                 writeDiskCache(key, fetched);
             }
-            SkinData result = fetched;
-            plugin.getServer().getScheduler().runTask(plugin, () -> callback.accept(result));
+            deliver(callback, fetched);
         });
+    }
+
+    private void deliver(Consumer<SkinData> callback, SkinData data) {
+        Runnable task = () -> callback.accept(data);
+        if (Bukkit.isPrimaryThread()) {
+            task.run();
+        } else {
+            plugin.getServer().getScheduler().runTask(plugin, task);
+        }
     }
 
     /**
@@ -150,10 +176,12 @@ public final class SkinResolver {
         int cleared = cache.size();
         cache.clear();
         try {
-            if (Files.isDirectory(cacheDir)) {
+            if (!Files.isSymbolicLink(cacheDir)
+                    && Files.isDirectory(cacheDir, LinkOption.NOFOLLOW_LINKS)) {
                 try (java.util.stream.Stream<Path> files = Files.list(cacheDir)) {
                     for (Path file : files.toList()) {
-                        if (!Files.isRegularFile(file)
+                        if (Files.isSymbolicLink(file)
+                                || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
                                 || !file.getFileName().toString().endsWith(".skin")) {
                             continue;
                         }
@@ -169,7 +197,8 @@ public final class SkinResolver {
             }
         } catch (IOException | RuntimeException e) {
             plugin.getLogger().log(Level.WARNING,
-                    "[NullArmy] Could not clear the skin cache directory: " + e.getMessage());
+                    "[NullArmy] Could not clear the skin cache directory ("
+                            + e.getClass().getSimpleName() + ")");
         }
         return cleared;
     }
@@ -177,7 +206,8 @@ public final class SkinResolver {
     /** Human-readable lookup trail, for {@code /null status}. Never contains keys. */
     public List<String> diagnostics() {
         List<String> out = new ArrayList<>();
-        out.add("skin owner: " + skinOwner());
+        String owner = skinOwner();
+        out.add("skin owner: " + (owner.isEmpty() ? "(not configured; default Minecraft skin)" : owner));
         out.add("cached skins: " + cache.size());
         for (Map.Entry<String, SkinData> e : cache.entrySet()) {
             out.add("  " + e.getKey() + " from " + e.getValue().source()
@@ -205,26 +235,67 @@ public final class SkinResolver {
 
     private SkinData readDiskCache(String key) {
         Path file = cacheFile(key);
-        if (!Files.isRegularFile(file)) {
-            return null;
-        }
         try {
-            List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
-            SkinData data = parseTwoLines(lines, SkinData.Source.DISK_CACHE);
+            if (Files.isSymbolicLink(cacheDir) || Files.isSymbolicLink(file)
+                    || !Files.isDirectory(cacheDir, LinkOption.NOFOLLOW_LINKS)
+                    || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
+                    || Files.size(file) > MAX_CACHE_FILE_BYTES) {
+                return null;
+            }
+            final byte[] bytes;
+            try (InputStream in = Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS)) {
+                bytes = readBounded(in, MAX_CACHE_FILE_BYTES);
+            }
+            if (bytes == null) {
+                return null;
+            }
+            String text = new String(bytes, StandardCharsets.UTF_8);
+            SkinData data = parseTwoLines(List.of(text.split("\\R", -1)), SkinData.Source.DISK_CACHE);
             return (data != null && data.complete()) ? data : null;
-        } catch (IOException e) {
+        } catch (IOException | SecurityException e) {
             return null;
         }
     }
 
     private void writeDiskCache(String key, SkinData data) {
+        if (!isValidAccountName(key) || data == null || !data.complete()) {
+            return;
+        }
+        Path file = cacheFile(key);
+        Path temporary = null;
         try {
+            if (Files.isSymbolicLink(cacheDir)) {
+                return;
+            }
             Files.createDirectories(cacheDir);
-            String body = data.value() + "\n" + data.signature() + "\n";
-            Files.write(cacheFile(key), body.getBytes(StandardCharsets.UTF_8));
-        } catch (IOException e) {
-            plugin.getLogger().log(Level.WARNING,
-                    "[NullArmy] Could not cache the skin for '" + key + "': " + e.getMessage());
+            if (Files.isSymbolicLink(cacheDir)
+                    || !Files.isDirectory(cacheDir, LinkOption.NOFOLLOW_LINKS)
+                    || Files.isSymbolicLink(file)) {
+                return;
+            }
+            byte[] body = (data.value() + "\n" + data.signature() + "\n").getBytes(StandardCharsets.UTF_8);
+            if (body.length > MAX_CACHE_FILE_BYTES) {
+                return;
+            }
+            temporary = Files.createTempFile(cacheDir, "skin-", ".tmp");
+            Files.write(temporary, body);
+            try {
+                Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException unsupported) {
+                Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
+            }
+            temporary = null;
+        } catch (IOException | SecurityException e) {
+            plugin.getLogger().log(Level.FINE,
+                    "[NullArmy] Could not persist a skin cache entry (" + e.getClass().getSimpleName() + ")");
+        } finally {
+            if (temporary != null) {
+                try {
+                    Files.deleteIfExists(temporary);
+                } catch (IOException ignored) {
+                    // The cache is only an optimization.
+                }
+            }
         }
     }
 
@@ -233,18 +304,32 @@ public final class SkinResolver {
      * ships the skin permanently - no network, no first-run delay.
      */
     private SkinData readBundled(String key) {
+        if (!isValidAccountName(key)) {
+            return null;
+        }
         String resource = CACHE_DIR + "/" + key + ".skin";
         try (InputStream in = plugin.getResource(resource)) {
             if (in == null) {
                 return null;
             }
-            byte[] bytes = in.readAllBytes();
+            byte[] bytes = readBounded(in, MAX_CACHE_FILE_BYTES);
+            if (bytes == null) {
+                return null;
+            }
             String text = new String(bytes, StandardCharsets.UTF_8);
-            SkinData data = parseTwoLines(List.of(text.split("\\R")), SkinData.Source.BUNDLED);
+            SkinData data = parseTwoLines(List.of(text.split("\\R", -1)), SkinData.Source.BUNDLED);
             return (data != null && data.complete()) ? data : null;
         } catch (IOException e) {
             return null;
         }
+    }
+
+    /**
+     * Mojang account names are path components only after strict validation;
+     * rejecting invalid values here prevents cache and jar-resource traversal.
+     */
+    public static boolean isValidAccountName(String username) {
+        return username != null && username.matches("[A-Za-z0-9_]{1,16}");
     }
 
     /** Two lines: the base64 value, then the signature. */
@@ -261,7 +346,42 @@ public final class SkinResolver {
     }
 
     static String key(String username) {
-        return username == null ? "" : username.toLowerCase(Locale.ROOT);
+        String name = username == null ? "" : username.trim();
+        return isValidAccountName(name) ? name.toLowerCase(Locale.ROOT) : "";
+    }
+
+    /** Reads at most {@code limit} bytes and handles streams that return zero. */
+    private static byte[] readBounded(InputStream in, int limit) throws IOException {
+        if (in == null || limit < 0) {
+            return null;
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream(Math.min(limit, 8192));
+        byte[] buffer = new byte[8192];
+        int total = 0;
+        while (true) {
+            int read = in.read(buffer);
+            if (read < 0) {
+                break;
+            }
+            if (read == 0) {
+                int single = in.read();
+                if (single < 0) {
+                    break;
+                }
+                if (total >= limit) {
+                    return null;
+                }
+                out.write(single);
+                total++;
+                continue;
+            }
+            if (read > limit - total) {
+                return null;
+            }
+            out.write(buffer, 0, read);
+            total += read;
+        }
+        return out.toByteArray();
     }
 
     /** Snapshot of the cache, for tests and diagnostics. */

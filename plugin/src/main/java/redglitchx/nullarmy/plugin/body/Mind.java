@@ -38,8 +38,10 @@ public final class Mind {
     /** One explicit order. */
     public static final class Order {
         public final Verb verb;
-        /** The order's point. Mutable: a teardown walks down through a marked area. */
+        /** The order's target point; only teardown orders adjust this point. */
         public Vec3d point;
+        /** Exact world for a confirmed teardown target; prevents same-coordinate cross-world work. */
+        public String worldName;
         public final UUID entity;
         public final UUID issuer;
         public final long issuedTick;
@@ -57,8 +59,8 @@ public final class Mind {
         /** Second point of a patrol (L-03). */
         public Vec3d pointB;
 
-        /** Radius of a destroy order, in blocks (P-09). */
-        public int radius = 2;
+        /** Bounded horizontal radius for a destroy order; the command path fixes this at one. */
+        public int radius = 1;
 
         /** True when this body is one of the chasers of a hunt (L-07). */
         public boolean chaser;

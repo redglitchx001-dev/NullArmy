@@ -63,8 +63,8 @@ public final class SkinPayload {
                     return found;
                 }
                 return failure("the JSON has no value/signature pair (expected {\"value\":...,\"signature\":...})");
-            } catch (RuntimeException bad) {
-                return failure("the JSON could not be read: " + bad.getMessage());
+            } catch (RuntimeException ignored) {
+                return failure("the JSON could not be read");
             }
         }
         String[] lines = text.split("\\r?\\n");
@@ -75,7 +75,7 @@ public final class SkinPayload {
             return new SkinPayload(text, "", "the proxy returned an unsigned texture value; clients only"
                     + " show signed textures");
         }
-        return failure("the body is neither JSON nor base64: " + preview(text, 80));
+        return failure("the response is neither JSON nor base64");
     }
 
     private static SkinPayload fromObject(Map<String, Object> obj, int depth) {
@@ -117,12 +117,4 @@ public final class SkinPayload {
         return text != null && text.length() >= 16 && text.matches("[A-Za-z0-9+/=_-]+");
     }
 
-    /** The first {@code max} characters of a body, on one line, for the log. */
-    public static String preview(String body, int max) {
-        if (body == null) {
-            return "";
-        }
-        String flat = body.replace('\r', ' ').replace('\n', ' ').trim();
-        return flat.length() <= max ? flat : flat.substring(0, max) + "...";
-    }
 }

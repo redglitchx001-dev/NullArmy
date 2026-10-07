@@ -23,9 +23,10 @@ import java.nio.file.Files;
  * the whole shipped file to the broken one, every restart.</p>
  *
  * <p>Here the text is parsed once, strictly; a failure becomes a
- * {@link YamlProblem} (file, line, column, the offending lines with a caret)
- * that the caller reports to the console <b>and</b> to whoever ran the command,
- * while the last configuration that parsed stays in use.</p>
+ * {@link YamlProblem} (file, line, column, a caret-only location; source text is
+ * hidden because it may contain credentials) that the caller reports to the
+ * console <b>and</b> to whoever ran the command, while the last configuration
+ * that parsed stays in use.</p>
  *
  * <p>Copyright (c) RedGlitchX. All rights reserved.</p>
  */
